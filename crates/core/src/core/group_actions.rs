@@ -23,7 +23,10 @@ struct ActionCtx {
     signing_key_version: String,
     conversation_id: String,
     signing_key: crate::crypto::keys::XChatPrivateKey,
-    /// The version every action of this prepare signs at.
+    /// The send format this call's signatures follow, read once.
+    send_version: crate::pipeline::SendVersion,
+    /// The version this call's group and conversation actions sign at; a key
+    /// change it carries signs at `ChatCore::key_change_signature_version`.
     signature_version: i32,
 }
 
@@ -37,7 +40,7 @@ enum GroupMetadata {
 impl GroupMetadata {
     /// The change event for `encrypted` under `key_version`. A change that
     /// only re-encrypts the value for a key rotation is marked
-    /// `for_key_rotation`, so X clients don't show it as a change and the
+    /// `for_key_rotation`, so recipients don't show it as a change; this
     /// SDK's decrypt drops it.
     fn detail(
         self,
@@ -80,12 +83,17 @@ impl ChatCore {
         let conversation_id =
             crate::pipeline::canonical_conversation_id(conversation_id, &sender_id).into_owned();
         let signing_key = self.get_signing_private_key()?;
+        let send_version = self.send_version();
         Ok(ActionCtx {
             sender_id,
             signing_key_version,
             conversation_id,
             signing_key,
-            signature_version: self.action_signature_version(CURRENT_SIGNATURE_VERSION),
+            send_version,
+            signature_version: super::signing::action_signature_version(
+                send_version,
+                CURRENT_SIGNATURE_VERSION,
+            ),
         })
     }
 

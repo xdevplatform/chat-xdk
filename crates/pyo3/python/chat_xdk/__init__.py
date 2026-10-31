@@ -109,13 +109,15 @@ class ScreenCaptureChange(str, Enum):
 
 
 # Feature switches (GET /2/chat/features). A chat reads them when it is
-# created: the native core decides what to fetch, when to retry and what an
-# answer means, and this module performs the GET, and each retry, on a daemon
-# thread. Nothing here is API.
+# created and when its identity is set, and again while it lives: the native
+# core decides what to fetch, when to fetch it again and what an answer
+# means, and this module performs each GET on a daemon thread. Nothing here
+# is API.
 
 
 def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Start a chat's feature GET; the core calls this from the constructor."""
+    """Start a feature GET on a daemon thread; the native module calls this
+    when a chat is created and when ``set_identity`` gives it a new URL."""
     _threading.Thread(
         target=_perform_feature_fetch,
         args=(fetch_id, url, timeout, max_bytes),
@@ -125,25 +127,25 @@ def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Perform the GET, then each retry the core returns after its delay,
-    until none is left or the process exits."""
+    """Perform the GET, then each GET the core returns, a refresh or a
+    retry, after its delay, until none is left or the process exits."""
     while True:
         try:
             status, body = _get_features(url, timeout, max_bytes)
         except Exception:
             status, body = 0, b""
-        retry = _native._feature_complete(fetch_id, status, body)
-        if retry is None:
+        following = _native._feature_complete(fetch_id, status, body)
+        if following is None:
             return
-        fetch_id, url, timeout, max_bytes, delay = retry
+        fetch_id, url, timeout, max_bytes, delay = following
         if _exit_requested.wait(delay):
             return
 
 
 # The sockets of the GETs under way, by thread. At exit they are cut short and
 # waited for: a daemon thread still inside OpenSSL when the process exits races
-# OpenSSL's own cleanup, which can crash the process. A thread waiting to
-# retry ends instead of starting another GET.
+# OpenSSL's own cleanup, which can crash the process. A thread waiting for
+# its next GET ends instead of starting it.
 _requests = {}
 _requests_lock = _threading.Lock()
 _exiting = False

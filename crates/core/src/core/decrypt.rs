@@ -80,11 +80,11 @@ impl ChatCore {
     /// enforcement.
     ///
     /// A key change is rejected only when its sequence number is at or above
-    /// the configured threshold, its signature version carries a verifiable
-    /// plaintext-key payload, and its signature does not verify. Below the
-    /// threshold, or for earlier signature versions whose payload cannot be
-    /// reproduced, the key is left adopted. Does nothing while `floor` is at
-    /// the maximum.
+    /// the configured threshold, its signature version is missing or carries
+    /// a verifiable plaintext-key payload, and its signature does not verify.
+    /// Below the threshold, or for earlier signature versions whose payload
+    /// cannot be reproduced, the key is left adopted. Does nothing while
+    /// `floor` is at the maximum.
     pub(super) fn enforce_ckey_signatures(
         &self,
         events: &[&str],

@@ -107,17 +107,21 @@
 //!
 //! ## Send format
 //!
-//! Encrypted sends are v0, the format 0.5.x sends, until the X API's
-//! `v1_send` feature switch turns on, then v1 (per-message keys). The
-//! language bindings read the switches themselves when a chat is created;
-//! this crate never makes the request. GET [`FEATURES_ENDPOINT`] when you
-//! create a chat, retrying a request that fails, and hand the answer to
-//! [`ChatCore::set_feature_switches`] (or [`Chat::set_feature_switches`]);
-//! without an answer every switch is off. Every chat reads v1 sends.
+//! Encrypted sends are v0, the format 0.5.x sends, while the X API's
+//! `v1_send` feature switch is off, and v1 (per-message keys) while it is on.
+//! The language bindings read the switches themselves, when a chat is
+//! created and when its identity is set, and again every
+//! [`FEATURES_REFRESH_MS`]; this crate never makes the request. Once you
+//! have set the identity, GET [`ChatCore::feature_switches_url`], retrying a
+//! request that fails and repeating it every [`FEATURES_REFRESH_MS`], and
+//! hand each answer to [`ChatCore::set_feature_switches`] (or
+//! [`Chat::set_feature_switches`]); without an answer every switch is off.
+//! Every chat reads v1 sends.
 //!
 //! ```rust,ignore
 //! let core = ChatCore::new();
-//! let response = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS)?; // your HTTP client
+//! core.set_identity(&SetIdentityParams::new(user_id, signing_key_version))?;
+//! let response = http_get(&core.feature_switches_url(), FEATURES_TIMEOUT_MS)?; // your HTTP client
 //! core.set_feature_switches(response.status, &response.body);
 //! ```
 //!
@@ -192,7 +196,9 @@ pub mod keys;
 pub use chat::Chat;
 pub use core::ChatCore;
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
-pub use features::{FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_TIMEOUT_MS};
+pub use features::{
+    FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_REFRESH_MS, FEATURES_TIMEOUT_MS,
+};
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,

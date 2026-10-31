@@ -18,10 +18,10 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Reads a chat's feature switches ({@code GET /2/chat/features}) when the chat is created. The
- * native core decides what to fetch, when to retry and what an answer means; this class performs
- * the GET, and each retry the core hands back, with {@link HttpClient} and hands the status and
- * body back. Nothing here is API.
+ * Reads a chat's feature switches ({@code GET /2/chat/features}) when the chat is created, when
+ * its identity is set, and again after each answer. The native core decides what to fetch, when to
+ * fetch it again and what an answer means; this class performs each GET it hands out with
+ * {@link HttpClient} and reports the status and body to it. Nothing here is API.
  */
 final class FeatureFetch {
     // The read is anonymous: the client has no cookie handler, so it stores and sends no cookies,
@@ -33,8 +33,8 @@ final class FeatureFetch {
     private FeatureFetch() {}
 
     /**
-     * Start {@code chat}'s read of the feature switches: nothing to do when it takes the answer of
-     * a GET already in flight.
+     * Start {@code chat}'s reads of the feature switches for its identity: perform the GET the
+     * core hands out, if any, and then each GET the core hands back.
      */
     static void start(Chat chat) {
         schedule(chat.startFeatures());
@@ -80,7 +80,8 @@ final class FeatureFetch {
 
     /**
      * Start the GET; when it ends, or at its timeout, its status and body go back to the core, and
-     * the retry the core returns, if any, is scheduled. Status 0 when no complete response arrived.
+     * the refresh or retry the core returns, if any, is scheduled. Status 0 when no complete
+     * response arrived.
      */
     private static void perform(long id, String url, long timeoutMs, int maxBytes) {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))

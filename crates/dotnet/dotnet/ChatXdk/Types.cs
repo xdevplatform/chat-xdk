@@ -493,7 +493,9 @@ namespace ChatXdk
         /// <summary>
         /// Base64 SHA-256 of the media file's plaintext bytes, which recipients can check the
         /// decrypted file against. The message carries and signs it, and the message is built
-        /// before its files are encrypted, so the caller hashes the file.
+        /// before its files are encrypted, so the caller hashes the file. One that is not the
+        /// base64 of 32 bytes fails the send with a <see cref="ChatXdkException"/> of kind
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
         [JsonPropertyName("plaintext_sha256")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -860,8 +862,8 @@ namespace ChatXdk
         /// <summary>
         /// Signed message ID of the message being replied to; derived from
         /// <see cref="ReplyToEvent"/> when null. A reply built without
-        /// <see cref="ReplyToEvent"/> needs it: recipients mark a v1 reply that
-        /// names no original invalid. With <see cref="ReplyToEvent"/>, one other
+        /// <see cref="ReplyToEvent"/> needs it: recipients treat a v1 reply that
+        /// names no original as invalid. With <see cref="ReplyToEvent"/>, one other
         /// than the id the event carries fails with a <see cref="ChatXdkException"/>
         /// of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
         /// </summary>
@@ -942,7 +944,8 @@ namespace ChatXdk
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
         /// <param name="targetEvent">
         /// Base64 raw event being edited. Pass null or "" only when supplying
-        /// <see cref="ConversationId"/> and <see cref="TargetMessageSequenceId"/> directly instead.
+        /// <see cref="ConversationId"/>, <see cref="TargetMessageSequenceId"/> and, for a v1 edit,
+        /// <see cref="TargetMessageId"/> directly instead.
         /// </param>
         /// <param name="updatedText">The replacement message text.</param>
         public EncryptEditParams(string? targetEvent, string updatedText)
@@ -951,7 +954,10 @@ namespace ChatXdk
             UpdatedText = updatedText;
         }
 
-        /// <summary>Base64 raw event being edited; the conversation id and target sequence id are derived from it.</summary>
+        /// <summary>
+        /// Base64 raw event being edited; the conversation id, the target sequence id and, for a
+        /// v1 edit, the target message id are derived from it.
+        /// </summary>
         public string? TargetEvent { get; }
         /// <summary>The replacement message text.</summary>
         public string UpdatedText { get; }

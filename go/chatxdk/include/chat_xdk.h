@@ -9,9 +9,9 @@
 #include <stdlib.h>
 
 /**
- * The URL of the X API's feature switches, `GET /2/chat/features`, for
- * `chat_xdk_set_feature_switches`. Request it without credentials or query
- * parameters.
+ * The X API's feature-switch endpoint, `GET /2/chat/features`. Request the
+ * URL `chat_xdk_feature_switches_url` returns, which adds the chat's sender's
+ * bucket, without credentials.
  */
 #define CHAT_XDK_FEATURES_ENDPOINT "https://api.x.com/2/chat/features"
 
@@ -33,6 +33,12 @@
  * one byte more, so a longer body is seen and rejected.
  */
 #define CHAT_XDK_FEATURES_MAX_BODY 65536
+
+/**
+ * How long after an answer to request the feature switches again, and the
+ * longest wait before retrying a request that failed, in milliseconds.
+ */
+#define CHAT_XDK_FEATURES_REFRESH_MS 300000
 
 /**
  * Opaque handle to a Chat SDK instance.
@@ -246,17 +252,28 @@ struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle, const ch
 struct FfiResult chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
 
 /**
+ * The URL of this chat's feature switches, in `data`:
+ * `CHAT_XDK_FEATURES_ENDPOINT` with `?bucket=` and the last four digits of
+ * the user id `chat_xdk_set_identity` set, so every chat of one sender gets
+ * the same answer wherever it runs; the bare endpoint before an identity is
+ * set.
+ */
+struct FfiResult chat_xdk_feature_switches_url(const struct ChatHandle *handle);
+
+/**
  * Set this chat's feature switches from the answer to the GET of
- * `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
+ * `chat_xdk_feature_switches_url` you made: its HTTP status, 0 when no
  * response arrived, and `body_len` bytes of its body, read to the end or to
  * one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
- * `body_len` is 0. Make the request when you create the chat, within
- * [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
- * `v1_send` on, then v1. A status other than 200, or a body longer than
+ * `body_len` is 0. Make the request without credentials once you have set
+ * the identity, within [`CHAT_XDK_FEATURES_TIMEOUT_MS`], and again every
+ * [`CHAT_XDK_FEATURES_REFRESH_MS`]. Sends are v0 until an answer turns
+ * `v1_send` on, then v1, and v0 again if a later answer turns it off. Each
+ * answer that is a 200 with a `{"features": {...}}` object replaces the one
+ * before. A status other than 200, or a body longer than
  * [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
- * object, turns no switch on, and the chat takes a later answer, from a
- * request you retried. The first answer that is a 200 with a
- * `{"features": {...}}` object holds for the chat's lifetime.
+ * object, changes nothing: retry the request 1 s later, then after twice
+ * the previous wait, never more than [`CHAT_XDK_FEATURES_REFRESH_MS`] apart.
  */
 struct FfiResult chat_xdk_set_feature_switches(const struct ChatHandle *handle,
                                                int32_t status,
@@ -368,9 +385,10 @@ struct FfiResult chat_xdk_encrypt_message(const struct ChatHandle *handle, const
  * `reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
  * `reply_to_text`, `reply_to_entities`, and `reply_to_attachments`
  * overrides remain for callers that no longer hold the raw event; such a
- * reply needs `reply_to_message_id`, as recipients mark a v1 reply that
- * names no original invalid. With `reply_to_event`, a `reply_to_message_id`
- * other than the id the event carries fails with an invalid-input error.
+ * reply needs `reply_to_message_id`, as recipients treat a v1 reply that
+ * names no original as invalid. With `reply_to_event`, a
+ * `reply_to_message_id` other than the id the event carries fails with an
+ * invalid-input error.
  *
  * Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
  * and files work as for `chat_xdk_encrypt_message`.

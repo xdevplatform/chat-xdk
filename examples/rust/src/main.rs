@@ -91,13 +91,7 @@ fn run(core: ChatCore, env: &HashMap<String, String>) -> Result<(), String> {
     use std::time::Duration;
 
     use chatbot_rs::bot::Bot;
-    use chatbot_rs::x_api::{get_feature_switches, ChatApi, HttpChatApi};
-
-    // The X API's feature switches decide whether sends are v0 or v1; the
-    // SDK reads them from the answer once, so fetch them as the chat starts.
-    if let Some((status, body)) = get_feature_switches() {
-        core.set_feature_switches(status, &body);
-    }
+    use chatbot_rs::x_api::{ChatApi, HttpChatApi};
 
     let access_token = env_or(env, "X_ACCESS_TOKEN").unwrap_or_default();
     let conversation_id = env_or(env, "CHAT_CONVERSATION_ID").unwrap_or_default();

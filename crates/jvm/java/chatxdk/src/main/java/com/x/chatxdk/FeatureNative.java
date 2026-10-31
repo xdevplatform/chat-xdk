@@ -15,7 +15,8 @@ interface FeatureNative extends Library {
 
     FfiResult.ByValue chat_xdk_internal_feature_complete(long id, int status, byte[] body, long bodyLen);
 
-    FfiResult.ByValue chat_xdk_internal_feature_configure(Pointer handle, Pointer endpoint, long timeoutMs);
+    FfiResult.ByValue chat_xdk_internal_feature_configure(
+            Pointer handle, Pointer endpoint, long timeoutMs, long refreshMs);
 
     FfiResult.ByValue chat_xdk_internal_feature_set_default_endpoint(Pointer endpoint);
 }

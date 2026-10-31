@@ -16,11 +16,10 @@ pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 /// Signature version of v0 sends, and of every signed action while sends
 /// are v0 (conversation-key changes, group and conversation changes,
 /// deletes and read receipts), apart from a member add that carries a
-/// description, which signs at [`MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION`],
-/// and a key change in a conversation where the chat signed or verified one
-/// at a higher version, which signs at that version.
-/// While sends are v1, sends and signed actions all sign at
-/// [`MESSAGE_SIGNATURE_VERSION`].
+/// description, which signs at version 8. While sends are v1, sends and
+/// signed actions sign at version 10. Either way, a key change in a
+/// conversation where the chat signed or verified one at a higher version
+/// signs at that version.
 pub const SIGNATURE_VERSION: &str = "7";
 
 /// Signature version of a group member add that carries a description while
@@ -29,7 +28,8 @@ pub const SIGNATURE_VERSION: &str = "7";
 pub(crate) const MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION: i32 = 8;
 
 /// Signature version of v1 sends, and of every signed action while sends are
-/// v1: the first version whose payload signs `contents_encryption_version`,
+/// v1 apart from a key change raised above it (see [`SIGNATURE_VERSION`]):
+/// the first version whose payload signs `contents_encryption_version`,
 /// so the choice of key for the contents is covered by the signature. v0
 /// sends sign at [`SIGNATURE_VERSION`].
 pub(crate) const MESSAGE_SIGNATURE_VERSION: i32 = 10;

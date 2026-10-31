@@ -56,21 +56,23 @@ impl ChatCore {
         Ok(KeyFactory::verify(&public_key, signature, data)?)
     }
 
-    /// The signature version of a signed action: `legacy` while sends are
-    /// v0, and the version v1 sends sign at while they are v1, so every
-    /// event a chat signs takes one version at a time.
+    /// The signature version of a signed action under the current send
+    /// format; see [`action_signature_version`].
     pub(crate) fn action_signature_version(&self, legacy: i32) -> i32 {
-        match self.send_version() {
-            crate::pipeline::SendVersion::V0 => legacy,
-            crate::pipeline::SendVersion::V1 => crate::signatures::MESSAGE_SIGNATURE_VERSION,
-        }
+        action_signature_version(self.send_version(), legacy)
     }
 
-    /// The signature version of a new key change in `conversation_id`:
-    /// [`Self::action_signature_version`], raised to the highest version of a
-    /// key change this instance signed or verified in that conversation.
-    pub(crate) fn key_change_signature_version(&self, conversation_id: &str) -> i32 {
-        let version = self.action_signature_version(crate::signatures::CURRENT_SIGNATURE_VERSION);
+    /// The signature version of a new key change in `conversation_id` signed
+    /// under `send_version`: [`action_signature_version`], raised to the
+    /// highest version of a key change this instance signed or verified in
+    /// that conversation.
+    pub(crate) fn key_change_signature_version(
+        &self,
+        conversation_id: &str,
+        send_version: crate::pipeline::SendVersion,
+    ) -> i32 {
+        let version =
+            action_signature_version(send_version, crate::signatures::CURRENT_SIGNATURE_VERSION);
         let floors = self
             .key_change_signature_floor
             .read()
@@ -148,5 +150,20 @@ impl ChatCore {
             detail,
             ckey_b64.as_deref().map(String::as_str),
         )
+    }
+}
+
+/// The signature version of a signed action under `send_version`: `legacy`,
+/// the action's own version, while sends are v0, and
+/// [`crate::signatures::MESSAGE_SIGNATURE_VERSION`] while they are v1. A
+/// call that signs several actions reads the send format once, so a feature
+/// refresh between its signatures can't split them across formats.
+pub(crate) fn action_signature_version(
+    send_version: crate::pipeline::SendVersion,
+    legacy: i32,
+) -> i32 {
+    match send_version {
+        crate::pipeline::SendVersion::V0 => legacy,
+        crate::pipeline::SendVersion::V1 => crate::signatures::MESSAGE_SIGNATURE_VERSION,
     }
 }

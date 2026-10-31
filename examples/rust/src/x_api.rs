@@ -36,10 +36,13 @@ pub trait ChatApi {
         conversation_id: &str,
         body: &crate::chat_core::SendBody,
     ) -> Result<(), String>;
+    /// The answer to `GET url`, the chat's feature-switch URL, read as the
+    /// SDK asks: its status and body. `None` when no response arrived.
+    fn get_feature_switches(&self, url: &str) -> Option<(u16, Vec<u8>)>;
 }
 
 #[cfg(feature = "http")]
-pub use http_impl::{get_feature_switches, HttpChatApi, RegisterError};
+pub use http_impl::{HttpChatApi, RegisterError};
 
 #[cfg(feature = "http")]
 mod http_impl {
@@ -79,34 +82,6 @@ mod http_impl {
             Value::Number(n) => n.to_string(),
             _ => String::new(),
         }
-    }
-
-    /// The answer to `GET /2/chat/features`, its status and body, read as the
-    /// SDK asks: without credentials or query parameters, within its timeout,
-    /// and at most one byte past its size limit. `None` when no response
-    /// arrived; every switch then stays off.
-    pub fn get_feature_switches() -> Option<(u16, Vec<u8>)> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_millis(
-                chat_xdk_core::FEATURES_TIMEOUT_MS,
-            ))
-            .build();
-        let response = match agent
-            .get(chat_xdk_core::FEATURES_ENDPOINT)
-            .set("Accept", "application/json")
-            .call()
-        {
-            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
-            Err(_) => return None,
-        };
-        let status = response.status();
-        let mut body = Vec::new();
-        response
-            .into_reader()
-            .take(chat_xdk_core::FEATURES_MAX_BODY as u64 + 1)
-            .read_to_end(&mut body)
-            .ok()?;
-        Some((status, body))
     }
 
     /// X Chat API client over HTTPS (ureq).
@@ -438,6 +413,30 @@ mod http_impl {
                 .send_json(serde_json::to_value(body).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             Ok(())
+        }
+
+        // The read carries no credentials, follows no redirect, ends within
+        // the SDK's timeout and takes at most one byte past its size limit,
+        // so a longer body is seen and rejected.
+        fn get_feature_switches(&self, url: &str) -> Option<(u16, Vec<u8>)> {
+            let agent = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_millis(
+                    chat_xdk_core::FEATURES_TIMEOUT_MS,
+                ))
+                .redirects(0)
+                .build();
+            let response = match agent.get(url).set("Accept", "application/json").call() {
+                Ok(response) | Err(ureq::Error::Status(_, response)) => response,
+                Err(_) => return None,
+            };
+            let status = response.status();
+            let mut body = Vec::new();
+            response
+                .into_reader()
+                .take(chat_xdk_core::FEATURES_MAX_BODY as u64 + 1)
+                .read_to_end(&mut body)
+                .ok()?;
+            Some((status, body))
         }
     }
 }

@@ -434,7 +434,7 @@ export interface EncryptReplyParams {
   /**
    * The signed messageId of the message being replied to; derived from
    * replyToEvent when omitted. A reply built without replyToEvent needs it:
-   * recipients mark a v1 reply that names no original invalid. With
+   * recipients treat a v1 reply that names no original as invalid. With
    * replyToEvent, one other than the id the event carries fails with a
    * `ChatXdkError` of kind `invalidInput`.
    */
@@ -505,7 +505,10 @@ export interface EncryptEditParams {
   updatedText: string;
   /** Rich-text entities for the replacement text; omitting clears any entities the original carried. */
   entities?: EntityTuple[] | null;
-  /** Base64 of the raw event being edited; the conversation id and target sequence id are derived from it. */
+  /**
+   * Base64 of the raw event being edited; the conversation id, the target
+   * sequence id and, for a v1 edit, the target message id are derived from it.
+   */
   targetEvent?: string | null;
   /** ID of the conversation the edit belongs to; derived from targetEvent when omitted. */
   conversationId?: string | null;
@@ -1320,7 +1323,8 @@ interface ChatCrypto {
   /**
    * Set the session identity: the owner's user id and signing-key version,
    * used as defaults wherever a params object omits `senderId` /
-   * `signingKeyVersion`.
+   * `signingKeyVersion`. The chat then reads its feature switches for this
+   * sender's bucket, the last four digits of the user id.
    */
   setIdentity(params: SetIdentityParams): void;
 

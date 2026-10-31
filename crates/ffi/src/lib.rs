@@ -48,6 +48,10 @@ pub const CHAT_XDK_FEATURES_TIMEOUT_MS: u64 = 2000;
 /// one byte more, so a longer body is seen and rejected.
 pub const CHAT_XDK_FEATURES_MAX_BODY: usize = 65536;
 
+/// How long after an answer to request the feature switches again, and the
+/// longest wait before retrying a request that failed, in milliseconds.
+pub const CHAT_XDK_FEATURES_REFRESH_MS: u64 = 300000;
+
 // FFI result type
 
 /// Result type returned by FFI functions.
@@ -600,17 +604,34 @@ pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i3
     })
 }
 
+/// The URL of this chat's feature switches, in `data`:
+/// `CHAT_XDK_FEATURES_ENDPOINT` with `?bucket=` and the last four digits of
+/// the user id `chat_xdk_set_identity` set, so every chat of one sender gets
+/// the same answer wherever it runs; the bare endpoint before an identity is
+/// set.
+#[no_mangle]
+pub extern "C" fn chat_xdk_feature_switches_url(handle: *const ChatHandle) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        ok_data(&unsafe { &*handle }.inner.feature_switches_url())
+    })
+}
+
 /// Set this chat's feature switches from the answer to the GET of
-/// `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
+/// `chat_xdk_feature_switches_url` you made: its HTTP status, 0 when no
 /// response arrived, and `body_len` bytes of its body, read to the end or to
 /// one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
-/// `body_len` is 0. Make the request when you create the chat, within
-/// [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
-/// `v1_send` on, then v1. A status other than 200, or a body longer than
+/// `body_len` is 0. Make the request without credentials once you have set
+/// the identity, within [`CHAT_XDK_FEATURES_TIMEOUT_MS`], and again every
+/// [`CHAT_XDK_FEATURES_REFRESH_MS`]. Sends are v0 until an answer turns
+/// `v1_send` on, then v1, and v0 again if a later answer turns it off. Each
+/// answer that is a 200 with a `{"features": {...}}` object replaces the one
+/// before. A status other than 200, or a body longer than
 /// [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
-/// object, turns no switch on, and the chat takes a later answer, from a
-/// request you retried. The first answer that is a 200 with a
-/// `{"features": {...}}` object holds for the chat's lifetime.
+/// object, changes nothing: retry the request 1 s later, then after twice
+/// the previous wait, never more than [`CHAT_XDK_FEATURES_REFRESH_MS`] apart.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_feature_switches(
     handle: *const ChatHandle,
@@ -632,11 +653,13 @@ pub extern "C" fn chat_xdk_set_feature_switches(
 
 /// Internal, for this repository's bindings; not part of the API.
 ///
-/// Start this chat's read of the feature switches. Returns in `data` the GET
-/// to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
-/// "max_bytes": …, "delay_ms": …}`, `delay_ms` being how long to wait before
-/// starting it. Both fields are NULL when the chat takes the answer of a GET
-/// already in flight, or has started its read already.
+/// Start this chat's reads of the feature switches for its identity: call it
+/// when the chat is created and after each `chat_xdk_set_identity`. Returns
+/// in `data` the GET to perform, as JSON: `{"id": …, "url": "…",
+/// "timeout_ms": …, "max_bytes": …, "delay_ms": …}`, `delay_ms` being how
+/// long to wait before starting it. Both fields are NULL when the chat
+/// already reads its identity's URL or takes the answer of a GET already in
+/// flight.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> FfiResult {
     catch_ffi(|| {
@@ -658,9 +681,9 @@ pub extern "C" fn chat_xdk_internal_feature_start(handle: *const ChatHandle) -> 
 /// Report the result of the feature-switch GET `id`: its HTTP status, 0 when
 /// no response arrived, and `body_len` bytes of its body, read to the end or
 /// to one byte past the GET's `max_bytes`. `body` may be NULL when
-/// `body_len` is 0. Returns in `data` the retry to perform, in the JSON
-/// shape `chat_xdk_internal_feature_start` returns, when the result turned
-/// no switch on and the read is retried; both fields are NULL otherwise.
+/// `body_len` is 0. Returns in `data` the next GET to perform, a refresh or
+/// a retry, in the JSON shape `chat_xdk_internal_feature_start` returns,
+/// while a chat still waits for one; both fields are NULL otherwise.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_complete(
     id: u64,
@@ -675,7 +698,7 @@ pub extern "C" fn chat_xdk_internal_feature_complete(
             unsafe { std::slice::from_raw_parts(body, body_len) }
         };
         match bindings::complete_fetch(id, u16::try_from(status).unwrap_or(0), body) {
-            Some(retry) => match serde_json::to_string(&retry) {
+            Some(next) => match serde_json::to_string(&next) {
                 Ok(json) => ok_data(&json),
                 Err(e) => internal_error(e),
             },
@@ -687,12 +710,14 @@ pub extern "C" fn chat_xdk_internal_feature_complete(
 /// Internal, for this repository's tests; not part of the API.
 ///
 /// Read this chat's feature switches from `endpoint`, within `timeout_ms`
-/// milliseconds, when its read starts.
+/// milliseconds, again `refresh_ms` milliseconds after each answer and never
+/// more than `refresh_ms` apart while retrying, from the next read it starts.
 #[no_mangle]
 pub extern "C" fn chat_xdk_internal_feature_configure(
     handle: *const ChatHandle,
     endpoint: *const c_char,
     timeout_ms: u64,
+    refresh_ms: u64,
 ) -> FfiResult {
     catch_ffi(|| {
         if handle.is_null() {
@@ -701,7 +726,7 @@ pub extern "C" fn chat_xdk_internal_feature_configure(
         let endpoint = try_str!(endpoint);
         unsafe { &*handle }
             .inner
-            .configure_features(endpoint, timeout_ms);
+            .configure_features(endpoint, timeout_ms, refresh_ms);
         ok_void()
     })
 }

@@ -140,15 +140,20 @@ once it runs a 0.7 release too, so plan the rollout below before you deploy.
 
 ### Upgrade readers first
 
-0.7.2 sends each message, reply, reaction and edit in one of two formats.
-v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+0.7.2 sends each message, reply, reaction and edit in one of two formats. v0
+is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
 feature switch is on for it, and v0 otherwise (see [The feature-switch
 request](#the-feature-switch-request)). While a chat sends v1, its key
 changes, group changes, deletes and read receipts sign at version 10 too, as
 X clients' do; while it sends v0 they sign at version 7, as in 0.5.x, apart
-from a member add that carries a description, which signs at version 8.
+from a member add that carries a description, which signs at version 8. A
+conversation-key change never signs below the highest version of a key
+change the chat has signed or verified in that conversation, so while it
+sends v0 it can sign one above 7, which 0.5.x readers can't verify. The chat
+holds that floor in memory, so after a restart decrypt a conversation's key
+changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
 every app that reads your conversations to 0.7.2 before:
@@ -167,32 +172,37 @@ v1.
 
 The language bindings read the X API's feature switches with one anonymous
 request, `GET https://api.x.com/2/chat/features`, when a chat is created,
-and retry it when it fails. The C ABI never makes the request: a chat sends
-v0 until you make it and hand the answer to `chat_xdk_set_feature_switches`.
-Make the request when you create the chat, as the header's constants say:
-GET `CHAT_XDK_FEATURES_ENDPOINT` without credentials or query parameters,
-within `CHAT_XDK_FEATURES_TIMEOUT_MS` milliseconds, reading at most one
-byte past `CHAT_XDK_FEATURES_MAX_BODY`. Pass its status, 0 when no response
-arrived, and the bytes of the body you read:
+again once `chat_xdk_set_identity` gives it a sender, and again every 5
+minutes, and retry it when it fails. The C ABI never makes the request: a
+chat sends v0 until you make it and hand the answer to
+`chat_xdk_set_feature_switches`. Make the request once you have called
+`chat_xdk_set_identity`, as the header's constants say: GET the URL
+`chat_xdk_feature_switches_url` returns, `CHAT_XDK_FEATURES_ENDPOINT` with
+the sender's bucket, the last four digits of the user id, without
+credentials, within `CHAT_XDK_FEATURES_TIMEOUT_MS` milliseconds, reading at
+most one byte past `CHAT_XDK_FEATURES_MAX_BODY`. Pass its status, 0 when no
+response arrived, and the bytes of the body you read:
 
 ```c
 // 0.7.2
+char *url = take(chat_xdk_feature_switches_url(chat));
 uint8_t *body = NULL;
 size_t body_len = 0;
-int32_t status = http_get(CHAT_XDK_FEATURES_ENDPOINT, CHAT_XDK_FEATURES_TIMEOUT_MS,
-                          CHAT_XDK_FEATURES_MAX_BODY + 1, &body, &body_len);
+int32_t status = http_get(url, CHAT_XDK_FEATURES_TIMEOUT_MS, CHAT_XDK_FEATURES_MAX_BODY + 1,
+                          &body, &body_len);
 take(chat_xdk_set_feature_switches(chat, status, body, body_len));
 free(body);
+chat_xdk_free_string(url);
 ```
 
-A chat keeps the first answer whose status is 200 and whose body is a
-`{"features": {...}}` object no larger than `CHAT_XDK_FEATURES_MAX_BODY`,
-for its lifetime: a later call changes nothing. Any other answer leaves
-every switch off and the chat open to a later call, so retry a request that
-fails, as the bindings retry theirs: 1 second later, then after twice the
-previous wait, at most 5 minutes apart and 10 times. A chat whose requests
-all fail keeps sending v0. Without the call there's no code
-to change, and the chat sends v0.
+Make it again every `CHAT_XDK_FEATURES_REFRESH_MS` milliseconds (5
+minutes), so a change at the X API reaches the running chat. Each answer
+whose status is 200 and whose body is a `{"features": {...}}` object no
+larger than `CHAT_XDK_FEATURES_MAX_BODY` replaces the one before. Any other
+answer changes nothing, so retry a request that fails, as the bindings retry
+theirs: 1 second later, then after twice the previous wait, at most 5
+minutes apart. A chat that never gets an answer keeps sending v0. Without
+the call there's no code to change, and the chat sends v0.
 
 ### Check the ABI version
 
@@ -250,9 +260,9 @@ reports those. [Verify](#5-verify) gives the search as one command.
 | `reply_to_sender_id` as a JSON number | A JSON string | [User ids](#user-ids-and-key-versions-are-strings-of-digits) |
 | `error` as a string | `error` as a document: `kind`, `message`, `guesses_remaining` | [Errors](#errors-carry-their-kind) |
 
-The 0.7.2 header adds `chat_xdk_abi_version`, `chat_xdk_set_feature_switches`
-and the prepare calls for group changes and read receipts; the
-[requests](#the-requests) table lists the prepare calls.
+The 0.7.2 header adds `chat_xdk_abi_version`, `chat_xdk_feature_switches_url`,
+`chat_xdk_set_feature_switches` and the prepare calls for group changes and
+read receipts; the [requests](#the-requests) table lists the prepare calls.
 
 ## 2. Compile-time changes
 
@@ -793,9 +803,13 @@ char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
 
 // 0.7.2
 // {"conversation_id": "1001:1002", "text": "pong", "reply_to_sequence_id": "7", "reply_to_sender_id": "4201",
-//  "reply_to_text": "ping"}
+//  "reply_to_text": "ping", "reply_to_message_id": "0b4f7c2e-5a1d-4e8b-9c3f-6d2a1b8e7f90"}
 char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
 ```
+
+A reply built from these fields also names the quoted message's
+`message_id` as `reply_to_message_id` (see [A reply preview quotes its
+message exactly](#a-reply-preview-quotes-its-message-exactly)).
 
 ### Entities, files, URL cards and posts are checked
 
@@ -875,6 +889,12 @@ take](#decrypted-events-use-the-names-the-calls-take) shows, and use
 `target_message_id` only to match a v1 edit to the `message_id` you
 deduplicate on.
 
+An edit you build names the edited message the same way: set the edit
+document's `target_message_id` to its signed `message_id`, which a v1 edit
+built from the conversation id and the target sequence id needs. With
+`target_event`, the SDK takes the id from the event, and a
+`target_message_id` other than it fails with an `invalid_input` error.
+
 ### A reply preview quotes its message exactly
 
 A received reply that embeds the message it quotes has its preview checked
@@ -888,7 +908,9 @@ preview from `reply_to_event`, and from `reply_to_edit_event` when the
 message was edited, so pass them when you hold them. In v1, X clients check
 a reply against the message it names and mark a reply that names none
 invalid, so a reply built from the explicit preview fields names the quoted
-message's `message_id` as `reply_to_message_id`.
+message's `message_id` as `reply_to_message_id`. With `reply_to_event`, the
+SDK takes the id from the event, and a `reply_to_message_id` other than it
+fails with an `invalid_input` error.
 
 A reply carries no key change. Recipients open the quoted message with their
 own conversation keys, or with the message key a reply carries for a v1
@@ -1550,11 +1572,11 @@ grep -rn "target_message_id" --include='*.c' --include='*.h' --include='*.cc' --
 ```
 
 Every `target_message_id` the second search finds should read a v1 edit's
-signed message id; rename the rest to `target_message_sequence_id`. Each
-`chat_xdk_encrypt_stream` and `chat_xdk_decrypt_stream` the first finds is a
-message's file or a file under a key you hold, and [Encrypt a file under a
-key you hold](#encrypt-a-file-under-a-key-you-hold) says which call each
-moves to.
+signed message id or set it on an edit you build; rename the rest to
+`target_message_sequence_id`. Each `chat_xdk_encrypt_stream` and
+`chat_xdk_decrypt_stream` the first finds is a message's file or a file
+under a key you hold, and [Encrypt a file under a key you
+hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
 
 ### Run a round trip
 

@@ -107,15 +107,20 @@ before you deploy.
 
 ### Upgrade readers first
 
-0.7.2 sends each message, reply, reaction and edit in one of two formats.
-v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+0.7.2 sends each message, reply, reaction and edit in one of two formats. v0
+is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
 feature switch is on for it, and v0 otherwise (see [The feature-switch
 request](#the-feature-switch-request)). While a chat sends v1, its key
 changes, group changes, deletes and read receipts sign at version 10 too, as
 X clients' do; while it sends v0 they sign at version 7, as in 0.5.x, apart
-from a member add that carries a description, which signs at version 8.
+from a member add that carries a description, which signs at version 8. A
+conversation-key change never signs below the highest version of a key
+change the chat has signed or verified in that conversation, so while it
+sends v0 it can sign one above 7, which 0.5.x readers can't verify. The chat
+holds that floor in memory, so after a restart decrypt a conversation's key
+changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
 every app that reads your conversations to 0.7.2 before:
@@ -133,23 +138,25 @@ There's no code to change: to see which format a send used, read
 Chats read the X API's feature switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, which runs in the background:
 
-- a chat reads them when it is created, and keeps the first answer for its
-  lifetime; chats created while a request is in flight, or waiting to be
-  retried, share it;
-- it carries no credentials and no query parameters, and never delays or
+- a chat reads them when it is created, again once `set_identity` gives it
+  a sender, and again 5 minutes after each answer, so a switch that changes
+  reaches running chats; each answer replaces the one before;
+- with a sender set, the request carries its bucket, the last four digits
+  of the user id (`?bucket=1234`), so every chat of one sender gets the same
+  answer; chats that read the same URL share one request;
+- it carries no credentials and no other user data, and never delays or
   fails a call;
-- every switch is off until an answer arrives, so a chat's first sends can
-  be v0;
+- every switch is off until an answer for the chat's URL arrives, so a
+  chat's first sends can be v0;
 - a request that fails is retried in the background while a chat waits for
   its answer: 1 second later, then after twice the previous wait, at most 5
-  minutes apart and 10 times; if every attempt fails or is blocked, every
-  switch stays off for the chat's lifetime and its sends stay v0;
-- a switch that changes reaches the chats created after it.
+  minutes apart; a failure keeps the answer a chat already has, and if every
+  attempt fails or is blocked, every switch stays off and its sends stay v0.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. The request and its retries run on a
-daemon thread, and one still under way or waiting at exit is cut short, so
-they never keep the process alive. There's no code to change.
+switch, or block it to keep them v0. The requests run on a daemon thread,
+and one still under way or waiting at exit is cut short, so they never keep
+the process alive. There's no code to change.
 
 ## 1. Symbol index
 
@@ -802,8 +809,13 @@ reply = chat.encrypt_reply(
 # 0.7.2
 reply = chat.encrypt_reply(EncryptReplyParams(
     conversation_id, "pong", reply_to_sequence_id="7", reply_to_sender_id="4201", reply_to_text="ping",
+    reply_to_message_id="0b4f7c2e-5a1d-4e8b-9c3f-6d2a1b8e7f90",
 ))
 ```
+
+A reply built from these fields also names the quoted message's
+`message_id` as `reply_to_message_id` (see [A reply preview quotes its
+message exactly](#a-reply-preview-quotes-its-message-exactly)).
 
 ### Key versions are integers written as strings
 
@@ -895,6 +907,12 @@ take](#decrypted-events-use-the-names-the-calls-take) shows, and use
 `target_message_id` only to match a v1 edit to the `message_id` you
 deduplicate on.
 
+An edit you build names the edited message the same way: set
+`EncryptEditParams`'s `target_message_id` to its signed `message_id`, which
+a v1 edit built from the conversation id and the target sequence id needs.
+With `target_event`, the SDK takes the id from the event, and a
+`target_message_id` other than it raises `InvalidInputError`.
+
 ### A reply preview quotes its message exactly
 
 A received reply that embeds the message it quotes has its preview checked
@@ -906,9 +924,10 @@ exactly the quoted message's, or its edit's when the reply embeds the edit.
 message's. `encrypt_reply` builds such a preview from `reply_to_event`, and
 from `reply_to_edit_event` when the message was edited, so pass them when
 you hold them. In v1, X clients check a reply against the message it names
-and mark a reply that names none invalid, so a reply built from the
-explicit preview fields names the quoted message's `message_id` as
-`reply_to_message_id`.
+and mark a reply that names none invalid, so a reply built from the explicit
+preview fields names the quoted message's `message_id` as
+`reply_to_message_id`. With `reply_to_event`, the SDK takes the id from the
+event, and a `reply_to_message_id` other than it raises `InvalidInputError`.
 
 A reply carries no key change. Recipients open the quoted message with their
 own conversation keys, or with the message key a reply carries for a v1
@@ -1606,11 +1625,11 @@ grep -rn "target_message_id" --include='*.py' .
 ```
 
 Every `target_message_id` the second search finds should read a v1 edit's
-signed message id; rename the rest to `target_message_sequence_id`. The
-first search's `"public_key"` matches registration code too, which keeps the
-name: change only the public key inputs. Each `encrypt_stream` and
-`decrypt_stream` it finds is a message's file or a file under a key you
-hold, and [Encrypt a file under a key you
+signed message id or set it on an edit you build; rename the rest to
+`target_message_sequence_id`. The first search's `"public_key"` matches
+registration code too, which keeps the name: change only the public key
+inputs. Each `encrypt_stream` and `decrypt_stream` it finds is a message's
+file or a file under a key you hold, and [Encrypt a file under a key you
 hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
 
 ### Run a round trip

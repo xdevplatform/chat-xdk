@@ -809,10 +809,10 @@ async function main() {
   }));
   assert.ok(signs(chat, deleteForSelfSig, `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`));
 
-  // 4c5. Group actions: a removal signs version 11 and rotates the key for
-  // the members who stay, the title and description changes sign the value
-  // encrypted under the conversation key, the avatar change signs the media
-  // URL as is, and the other prepares sign one version-7 payload.
+  // 4c5. Group actions: a removal rotates the key for the members who stay,
+  // the title and description changes sign the value encrypted under the
+  // conversation key, the avatar change signs the media URL as is, and every
+  // action signs a version-7 payload.
   const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
   const remaining = [{ userId: "111", identityPublicKey: keys.identity, publicKeyVersion: "1" }];

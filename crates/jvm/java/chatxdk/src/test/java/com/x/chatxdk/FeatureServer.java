@@ -18,8 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * A local GET /2/chat/features that records each request's query string and headers. Its
  * {@link #REDIRECT_TARGET} path answers that v1_send is on, for the tests that check a redirect to it
- * is not followed. A request for another path, such as a retry of a server that had this port
- * before, gets a 404 and is not recorded.
+ * is not followed. A request for another path, such as a retried read meant for an earlier server
+ * on this port, gets a 404 and is not recorded.
  */
 final class FeatureServer implements AutoCloseable {
 
@@ -173,7 +173,7 @@ final class FeatureServer implements AutoCloseable {
         if (v1Server == null) {
             v1Server = new FeatureServer();
         }
-        return new Chat(null, v1Server.endpoint, Duration.ofSeconds(2));
+        return new Chat(null, v1Server.endpoint, Duration.ofSeconds(2), Duration.ofMinutes(5));
     }
 
     /** Send from {@code chat}, which has keys, until a send is v1. */

@@ -27,9 +27,12 @@ impl ChatCore {
     /// under the new key and marked as key-rotation re-encryptions, which
     /// recipients' decrypt drops; then the conversation-key change.
     ///
-    /// Every action signs at the version the chat's other actions sign at: 7
-    /// while sends are v0 and 10 while they are v1. Neither version covers
-    /// the removal's key version, which signature version 11 first signs.
+    /// The removal and the title and description changes sign at the version
+    /// the chat's other actions sign at: 7 while sends are v0 and 10 while
+    /// they are v1. The key change signs at that version, or at the highest
+    /// version of a key change the chat signed or verified in this
+    /// conversation when that is higher. Neither 7 nor 10 covers the
+    /// removal's key version, which signature version 11 first signs.
     ///
     /// The result does not include a ratchet tree (`base64_encoded_key_rotation`)
     /// or a rewrapped pin-key bundle (`rotated_pmk_bundle`).
@@ -99,6 +102,7 @@ impl ChatCore {
             conversation_key_version,
             &ckey,
             &participant_keys,
+            ctx.send_version,
         )?);
 
         Ok(PreparedConversationChange {

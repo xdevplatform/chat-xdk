@@ -38,10 +38,15 @@ pub struct EncryptMessageParams {
     /// encrypt the files afterwards with ``Chat.encrypt_file`` or
     /// ``Chat.file_encryptor``. Upload each file for one message only:
     /// reusing another message's uploads can give this message that
-    /// message's id. A file with an empty ``filename``, a ``filesize_bytes``
-    /// of 0 or less, or a negative ``width`` or ``height``, a ``"url"`` card
-    /// with an empty ``url``, and a ``"post"`` with neither ``rest_id`` nor
-    /// ``post_url`` raise ``InvalidInputError``.
+    /// message's id. A ``"media"`` attachment's optional
+    /// ``"plaintext_sha256"`` is the base64 SHA-256 of the file's plaintext
+    /// bytes, which the message carries and signs; the message is built
+    /// before its files are encrypted, so hash the file yourself. A file with
+    /// an empty ``filename``, a ``filesize_bytes`` of 0 or less, or a
+    /// negative ``width`` or ``height``, a ``plaintext_sha256`` that is not
+    /// the base64 of 32 bytes, a ``"url"`` card with an empty ``url``, and a
+    /// ``"post"`` with neither ``rest_id`` nor ``post_url`` raise
+    /// ``InvalidInputError``.
     pub(crate) attachments: Option<Py<PyAny>>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.
@@ -142,9 +147,9 @@ pub struct EncryptReplyParams {
     pub(crate) reply_to_sequence_id: Option<String>,
     /// Signed message id of the message being replied to; derived from
     /// ``reply_to_event`` when ``None``. A reply built without
-    /// ``reply_to_event`` needs it: recipients mark a v1 reply that names no
-    /// original invalid. With ``reply_to_event``, one other than the id the
-    /// event carries raises ``InvalidInputError``.
+    /// ``reply_to_event`` needs it: recipients treat a v1 reply that names no
+    /// original as invalid. With ``reply_to_event``, one other than the id
+    /// the event carries raises ``InvalidInputError``.
     pub(crate) reply_to_message_id: Option<String>,
     /// User ID of the message's sender, as digits; derived from
     /// ``reply_to_event`` when ``None``.

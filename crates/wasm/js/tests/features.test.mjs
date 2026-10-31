@@ -26,19 +26,25 @@ function b64ToBytes(b64) {
   return Uint8Array.from(Buffer.from(b64, "base64"));
 }
 
-/** A keyed ChatWithJuicebox that reads its feature switches from `endpoint`. */
-function newChat(v, endpoint, { timeoutMs = 2000 } = {}) {
+/**
+ * A keyed ChatWithJuicebox that reads its feature switches from `endpoint`
+ * within `timeoutMs`, again `refreshMs` after each answer. With a `userId` it
+ * sets that session identity, so it reads its sender's bucket.
+ */
+function newChat(v, endpoint, { timeoutMs = 2000, refreshMs = 300_000, userId } = {}) {
   const inner = new Chat();
-  inner.__configureFeatures(endpoint, timeoutMs);
+  inner.__configureFeatures(endpoint, timeoutMs, refreshMs);
   inner.importKeys({ keys: b64ToBytes(v.private_keys_concat_b64) });
   const chat = new ChatWithJuicebox(inner, null, undefined, null, null, null);
-  chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
+  if (userId !== undefined) chat.setIdentity({ userId, signingKeyVersion: "1" });
   return chat;
 }
 
 /** The signature version of a send: "7" for v0, "10" for v1. */
 function send(chat, v) {
   return chat.encryptMessage({
+    senderId: "111",
+    signingKeyVersion: "1",
     conversationId: "conv-1",
     conversationKey: b64ToBytes(v.conversation_key_b64),
     conversationKeyVersion: "1",
@@ -84,16 +90,38 @@ async function featureSwitchesAreNotPublicApi() {
   }
 }
 
-async function aNewChatReadsTheSwitchesOnce(v, server) {
+async function aChatReadsItsSendersBucketOnceItsIdentityIsSet(v, server) {
   const chat = newChat(v, server.endpoint);
   await waitFor("the request", () => server.queries.length === 1);
-  assert.equal(server.queries[0], "", "the request carries no query");
+  assert.equal(server.queries[0], "", "no identity: no bucket");
   await waitFor("v1", () => send(chat, v) === "10");
-  chat.generateKeypairs();
-  chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
+  chat.setIdentity({ userId: "1234561001", signingKeyVersion: "1" });
+  await waitFor("the bucket's request", () => server.queries.length === 2);
+  assert.equal(server.queries[1], "bucket=1001", "the user id's last four digits");
+  await waitFor("v1 for the bucket", () => send(chat, v) === "10");
+  chat.setIdentity({ userId: "9991001", signingKeyVersion: "1" });
   for (let i = 0; i < 5; i++) send(chat, v);
   await sleep(300);
-  assert.equal(server.queries.length, 1, server.queries.join());
+  assert.equal(server.queries.length, 2, "the same bucket: no new read");
+  chat.free();
+}
+
+async function chatsOfOneSenderShareTheirBucketsRead(v, server) {
+  server.delayMs = 500;
+  const chats = ["1001", "51001", "2002"].map((userId) => newChat(v, server.endpoint, { userId }));
+  await waitFor("v1 everywhere", () => chats.every((chat) => send(chat, v) === "10"));
+  const bucketed = server.queries.filter((query) => query !== "").sort();
+  assert.deepEqual(bucketed, ["bucket=1001", "bucket=2002"], server.queries.join());
+  for (const chat of chats) chat.free();
+}
+
+async function aRefreshReachesARunningChat(v, server) {
+  const chat = newChat(v, server.endpoint, { refreshMs: 300 });
+  await waitFor("v1", () => send(chat, v) === "10");
+  server.body = '{"features":{}}';
+  await waitFor("v0 after the refresh", () => send(chat, v) === "7");
+  server.body = '{"features":{"v1_send":true}}';
+  await waitFor("v1 again", () => send(chat, v) === "10");
   chat.free();
 }
 
@@ -128,20 +156,21 @@ async function chatsCreatedWhileARequestIsInFlightShareIt(v, server) {
   assert.equal(server.queries.length, 1, server.queries.join());
 
   const later = newChat(v, server.endpoint);
-  await waitFor("the later chat to ask for itself", () => server.queries.length === 2);
-  await waitFor("v1 for the later chat", () => send(later, v) === "10");
+  assert.equal(send(later, v), "10", "a later chat takes the latest answer at once");
+  await sleep(200);
+  assert.equal(server.queries.length, 1, server.queries.join());
   for (const chat of [...chats, later]) chat.free();
 }
 
-async function theAnswerHoldsForTheChatsLifetime(v, server) {
+async function theAnswerHoldsUntilTheNextRefresh(v, server) {
   const chat = newChat(v, server.endpoint);
   await waitFor("v1", () => send(chat, v) === "10");
   server.body = '{"features":{}}';
   const other = newChat(v, server.endpoint);
-  await waitFor("the second request", () => server.queries.length === 2);
-  await sleep(200);
-  assert.equal(send(other, v), "7", "the second chat reads its own answer");
-  assert.equal(send(chat, v), "10", "the first chat's answer holds");
+  await sleep(300);
+  assert.equal(server.queries.length, 1, server.queries.join());
+  assert.equal(send(other, v), "10", "the later chat takes the latest answer");
+  assert.equal(send(chat, v), "10", "the answer holds until the refresh");
   chat.free();
   other.free();
 }
@@ -211,8 +240,8 @@ async function aRequestEndsSafelyForAFreedChat(v, server) {
 }
 
 /**
- * A Node process whose read is still in flight exits once its own work is
- * done: at once where Node's http module is at hand, and within the read's
+ * A Node process whose reads are still in flight exits once its own work is
+ * done: at once where Node's http module is at hand, and within a read's
  * timeout where fetch() performs it.
  */
 async function aReadInFlightNeverKeepsNodeRunning(server) {
@@ -225,7 +254,7 @@ async function aReadInFlightNeverKeepsNodeRunning(server) {
     await new Promise((resolve) => setTimeout(resolve, 300));
   `);
   assert.equal(code, 0);
-  assert.equal(server.queries.length, 1, "the chat's read was in flight");
+  assert.deepEqual([...server.queries].sort(), ["", "bucket=111"], "the chat's reads were in flight");
   const limitMs = typeof process.getBuiltinModule === "function" ? 5000 : 7000;
   assert.ok(elapsed < limitMs, `the process exited after ${elapsed} ms`);
 }
@@ -308,13 +337,10 @@ async function theReadSendsNoCookiesOrCredentials(v) {
     const server = await featureServer();
     server.setCookie = "session=from-the-first-answer; Path=/";
     try {
-      const first = newChat(v, server.endpoint);
-      await waitFor(`the first answer (${path})`, () => send(first, v) === "10");
-      first.free();
-      const second = newChat(v, server.endpoint);
-      await waitFor(`the second request (${path})`, () => server.queries.length === 2);
-      await waitFor(`the second answer (${path})`, () => send(second, v) === "10");
-      second.free();
+      const chat = newChat(v, server.endpoint, { refreshMs: 200 });
+      await waitFor(`the first answer (${path})`, () => send(chat, v) === "10");
+      await waitFor(`a refresh after the cookie (${path})`, () => server.queries.length >= 2);
+      chat.free();
       for (const headers of server.headers) {
         assert.equal(headers.cookie, undefined, `the read sends no cookie (${path})`);
         assert.equal(headers.authorization, undefined, `the read sends no credentials (${path})`);
@@ -350,11 +376,13 @@ async function main() {
 
   const tests = [
     () => featureSwitchesAreNotPublicApi(),
-    (server) => aNewChatReadsTheSwitchesOnce(v, server),
+    (server) => aChatReadsItsSendersBucketOnceItsIdentityIsSet(v, server),
+    (server) => chatsOfOneSenderShareTheirBucketsRead(v, server),
+    (server) => aRefreshReachesARunningChat(v, server),
     (server) => createChatReadsTheSwitches(v, server),
     (server) => aSendNeverWaitsForTheRequest(v, server),
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
-    (server) => theAnswerHoldsForTheChatsLifetime(v, server),
+    (server) => theAnswerHoldsUntilTheNextRefresh(v, server),
     () => anyFailureLeavesSendsOnV0(v),
     (server) => aFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On(v, server),
     () => theFetchReadCapsTheBodyWhileItStreams(v),

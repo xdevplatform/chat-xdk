@@ -360,7 +360,7 @@ type QuickReplyOption struct {
 // so recipients can validate the preview. The explicit ReplyTo* field
 // overrides remain for callers that no longer hold the raw event. A reply
 // built from them needs ReplyToMessageID, the signed message_id of the
-// message it quotes: recipients mark a v1 reply that names no original
+// message it quotes: recipients treat a v1 reply that names no original as
 // invalid. With ReplyToEvent, a ReplyToMessageID other than the id the event
 // carries fails with an error of kind ErrorKindInvalidInput.
 //

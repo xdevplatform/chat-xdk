@@ -378,7 +378,10 @@ export class ChatWithJuicebox {
 
   setRejectUnverified(reject) { return this.#inner.setRejectUnverified(reject); }
   generateKeypairs() { return this.#inner.generateKeypairs(); }
-  setIdentity(params) { return this.#inner.setIdentity(params); }
+  setIdentity(params) {
+    this.#inner.setIdentity(params);
+    startFeatureFetch(this.#inner);
+  }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
   importKeys(params) { return this.#inner.importKeys(params); }
@@ -443,18 +446,18 @@ export class ChatWithJuicebox {
 }
 
 // Feature switches (GET /2/chat/features). A chat reads them when it is
-// created: the wasm core decides what to fetch, when to retry and what an
-// answer means, and this module performs the GET and each retry. Nothing here
-// is API.
+// created and when its identity is set, and again while it lives: the wasm
+// core decides what to fetch, when to fetch it again and what an answer
+// means, and this module performs each GET. Nothing here is API.
 
-/** Start the read of `wasmChat`'s feature switches. */
+/** Start the reads of `wasmChat`'s feature switches for its identity. */
 function startFeatureFetch(wasmChat) {
   performFeatureFetch(wasmChat.__featureStart());
 }
 
 /**
  * Perform `request`, a GET the core hands out, after its delay, then the
- * retry its result returns, until none does.
+ * refresh or retry its result returns, until none does.
  */
 function performFeatureFetch(request) {
   if (request === undefined) return;
@@ -463,7 +466,7 @@ function performFeatureFetch(request) {
     .then(({ status, body }) => performFeatureFetch(__featureComplete(request.id, status, body)));
 }
 
-/** In Node, keep a request's timer from holding the process open. */
+/** In Node, keep a timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;

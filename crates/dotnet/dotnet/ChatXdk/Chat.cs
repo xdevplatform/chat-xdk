@@ -68,7 +68,7 @@ namespace ChatXdk
         /// <see cref="Unlock"/>, <see cref="ChangePin"/> and <see cref="Delete"/> throw a
         /// <see cref="ChatXdkException"/> of kind <see cref="ChatXdkErrorKind.InvalidState"/>.
         /// </summary>
-        public Chat() : this(null, null, TimeSpan.Zero)
+        public Chat() : this(null, null, TimeSpan.Zero, TimeSpan.Zero)
         {
         }
 
@@ -83,17 +83,19 @@ namespace ChatXdk
         /// or is empty or blank (kind <see cref="ChatXdkErrorKind.InvalidState"/>, the error a chat
         /// without a config gives its Juicebox calls).
         /// </exception>
-        public Chat(string juiceboxConfigJson) : this(juiceboxConfigJson, null, TimeSpan.Zero)
+        public Chat(string juiceboxConfigJson) : this(juiceboxConfigJson, null, TimeSpan.Zero, TimeSpan.Zero)
         {
             ArgumentNullException.ThrowIfNull(juiceboxConfigJson);
         }
 
         /// <summary>
         /// For this repository's tests: a chat that reads its feature switches from
-        /// <paramref name="featureEndpoint"/> within <paramref name="featureTimeout"/>, or
-        /// from the default endpoint when it is null.
+        /// <paramref name="featureEndpoint"/> within <paramref name="featureTimeout"/>, again
+        /// <paramref name="featureRefresh"/> after each answer, or from the default endpoint
+        /// when <paramref name="featureEndpoint"/> is null.
         /// </summary>
-        internal Chat(string? juiceboxConfigJson, string? featureEndpoint, TimeSpan featureTimeout)
+        internal Chat(
+            string? juiceboxConfigJson, string? featureEndpoint, TimeSpan featureTimeout, TimeSpan featureRefresh)
         {
             ChatHandle* handle = null;
             var configBytes = juiceboxConfigJson == null ? null : Utf8Z(juiceboxConfigJson);
@@ -101,7 +103,7 @@ namespace ChatXdk
                 ConsumeResult(NativeMethods.chat_xdk_new(configPtr, &handle));
             _handle = handle;
             if (featureEndpoint != null)
-                ConfigureFeatures(featureEndpoint, featureTimeout);
+                ConfigureFeatures(featureEndpoint, featureTimeout, featureRefresh);
             FeatureFetch.Start(this);
         }
 
@@ -242,7 +244,8 @@ namespace ChatXdk
         /// is left null. A resolved default and an explicitly passed value produce
         /// byte-identical signed output for the same logical inputs. The signing-key
         /// version is the <c>public_key_version</c> returned when the keys were
-        /// registered.
+        /// registered. The chat then reads its feature switches for this sender's
+        /// bucket, the last four digits of the user id.
         /// </summary>
         public void SetIdentity(SetIdentityParams parameters)
         {
@@ -257,6 +260,7 @@ namespace ChatXdk
             fixed (byte* jsonPtr = jsonBytes)
                 ConsumeResult(NativeMethods.chat_xdk_set_identity(_handle, jsonPtr));
             GC.KeepAlive(this);
+            FeatureFetch.Start(this);
         }
 
         /// <summary>
@@ -288,18 +292,18 @@ namespace ChatXdk
             GC.KeepAlive(this);
         }
 
-        private void ConfigureFeatures(string endpoint, TimeSpan timeout)
+        private void ConfigureFeatures(string endpoint, TimeSpan timeout, TimeSpan refresh)
         {
             var endpointBytes = Utf8Z(endpoint);
             fixed (byte* endpointPtr = endpointBytes)
                 ConsumeResult(NativeMethods.chat_xdk_internal_feature_configure(
-                    _handle, endpointPtr, (ulong)timeout.TotalMilliseconds));
+                    _handle, endpointPtr, (ulong)timeout.TotalMilliseconds, (ulong)refresh.TotalMilliseconds));
             GC.KeepAlive(this);
         }
 
         /// <summary>
-        /// Start this chat's read of the feature switches: the GET to perform as JSON, or an
-        /// empty string when the chat takes the answer of a GET already in flight.
+        /// Start this chat's reads of the feature switches for its identity: the GET to perform
+        /// as JSON, or an empty string when there is none to perform.
         /// </summary>
         internal string StartFeatures()
         {

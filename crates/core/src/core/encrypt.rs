@@ -184,7 +184,6 @@ impl ChatCore {
             &signing_key_version,
         )
         .send_version(send_version);
-        // A v1 reaction notifies in a one-to-one conversation only.
         if send_version == crate::pipeline::SendVersion::V1 {
             api_params.should_notify =
                 Some(crate::pipeline::is_one_to_one(&conversation_id, &sender_id));
@@ -226,7 +225,6 @@ impl ChatCore {
             &signing_key_version,
         )
         .send_version(send_version);
-        // Removing a v1 reaction notifies no one.
         if send_version == crate::pipeline::SendVersion::V1 {
             api_params.should_notify = Some(false);
         }
@@ -273,8 +271,8 @@ impl ChatCore {
                 .and_then(|b64| Self::parse_event_b64(b64).ok())
                 .and_then(|event| event.message_id),
         )?;
-        // Only v1 edits name the message they edit; v0 edits are built as
-        // 0.5.x built them.
+        // Only v1 edits name the message they edit; a v0 edit carries no
+        // target message id.
         let send_version = self.send_version();
         let target_message_id =
             target_message_id.filter(|_| send_version == crate::pipeline::SendVersion::V1);
@@ -296,7 +294,6 @@ impl ChatCore {
             &signing_key_version,
         )
         .send_version(send_version);
-        // A v1 edit asks for no notification.
         if send_version == crate::pipeline::SendVersion::V1 {
             api_params.should_notify = Some(false);
         }
@@ -340,8 +337,6 @@ impl ChatCore {
         } else {
             crate::thrift::event::DeleteMessageAction::DELETE_FOR_SELF
         };
-        // The `MessageDeleteEvent` the API validates and relays: the sequence
-        // ids and the delete action.
         let detail = crate::thrift::event::MessageEventDetail::MessageDeleteEvent(
             crate::thrift::event::MessageDeleteEvent {
                 sequence_ids: Some(params.sequence_ids.clone()),
@@ -393,7 +388,6 @@ impl ChatCore {
             crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
         let seen_at_msec = params.seen_at_msec.unwrap_or_else(now_msec);
 
-        // The `MarkConversationReadEvent`: the read point and its time.
         let detail = crate::thrift::event::MessageEventDetail::MarkConversationReadEvent(
             crate::thrift::event::MarkConversationReadEvent {
                 seen_until_sequence_id: Some(params.seen_until_sequence_id.clone()),
@@ -680,10 +674,11 @@ impl ChatCore {
             .map(|entities| crate::pipeline::build_thrift_entities(entities, None))
             .transpose()?
             .map(|v| v.into_iter().map(|b| *b).collect::<Vec<_>>());
-        // The attachment-combination guard deliberately does not apply here:
-        // a reply preview mirrors an already-sent original (which receivers
-        // validate against the embedded raw event), so rejecting it would
-        // block replying to messages from clients that sent such lists.
+        // Only the attachments' plaintext hashes are checked here. The
+        // attachment-combination guard deliberately does not apply: a reply
+        // preview mirrors an already-sent original (which receivers validate
+        // against the embedded raw event), so rejecting it would block
+        // replying to messages that carry such lists.
         if let Some(attachments) = params.reply_to_attachments.as_deref() {
             crate::pipeline::validate_plaintext_sha256s(attachments)?;
         }
@@ -853,8 +848,9 @@ impl ChatCore {
             raw.message_id.clone(),
         )?;
 
-        // The key changes opened the original here; recipients open it with
-        // their own keys, so none is embedded.
+        // The preview embeds no key change: the ones `reply_to_ckces` carries
+        // open the original only for this sender, and recipients open it with
+        // their own keys.
         let preview = crate::thrift::product::ReplyingToPreview::new(
             sender_id,
             message_text,
@@ -1008,9 +1004,9 @@ impl ChatCore {
                 },
             ),
         };
-        // The preview's text is the start of the quoted text, so only their
-        // first characters are compared; its entities are the quoted
-        // message's own, and must be them exactly.
+        // A preview carries only the start of the quoted text, so the texts
+        // are compared on their first `PREVIEW_TEXT_UNITS` UTF-16 code units;
+        // the preview's entities must equal the quoted message's exactly.
         if preview_text(preview.message_text.as_deref()) != preview_text(quoted_text)
             || !entities_match
         {
@@ -1059,8 +1055,8 @@ fn same_message_id(
 }
 
 /// How much of the quoted text a reply preview's text is compared on: the
-/// first 140 UTF-16 code units, so a pair that straddles the limit is cut in
-/// half.
+/// first 140 UTF-16 code units, so a surrogate pair that straddles the
+/// limit is cut in half.
 const PREVIEW_TEXT_UNITS: usize = 140;
 
 /// The start of `text` a reply preview's text is compared on; an absent text

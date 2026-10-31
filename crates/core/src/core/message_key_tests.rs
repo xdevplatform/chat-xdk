@@ -621,8 +621,8 @@ fn old_key_change(participant: &Party, key: &XChatConversationKey) -> ThriftEven
 fn a_quoted_original_opens_with_the_receivers_keys_never_an_embedded_key_change() {
     let author = Party::new(AUTHOR);
     let replier = Party::new(REPLIER);
-    // The receiver is a participant of the old key change, so it could open
-    // it.
+    // The receiver is a participant of the embedded key change, so it could
+    // decrypt that key change if it read it.
     let receiver_party = Party::new("1003");
     let old_key = key(3);
     let new_key = key(4);

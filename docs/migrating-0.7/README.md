@@ -31,8 +31,8 @@ why each change was made.
 
 One step applies across bindings: upgrade every app that reads your
 conversations before any sender can send v1, the format with per-message
-keys, and before you remove group members or add them with a description,
-because 0.5.x rejects those signatures. Each guide explains it under
+keys, and before you add group members with a description, because 0.5.x
+rejects those signatures. Each guide explains it under
 "Upgrade readers first".
 
 The [CHANGELOG](../../CHANGELOG.md) lists every change by release, and

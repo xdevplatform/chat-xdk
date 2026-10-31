@@ -42,8 +42,8 @@ class FeatureServer:
     """A local GET /2/chat/features that records each request's query string
     and headers. Set ``location`` to answer with a redirect there; requests
     that reach ``REDIRECT_TARGET`` are counted in ``followed``. A request for
-    another path, such as a retry of a server that had this port before, gets
-    a 404 and is not recorded."""
+    another path, such as a retried read meant for an earlier server on this
+    port, gets a 404 and is not recorded."""
 
     def __init__(self, body='{"features":{"v1_send":true}}'):
         self.status = 200
@@ -108,12 +108,12 @@ class FeatureServer:
         self.httpd.server_close()
 
 
-def reading(url, timeout=2.0):
+def reading(url, timeout=2.0, refresh=300.0):
     """A chat that reads its feature switches from ``url``, within
-    ``timeout`` seconds."""
+    ``timeout`` seconds, again ``refresh`` seconds after each answer."""
     from chat_xdk import Chat
 
-    return Chat._reading_features_from(url, timeout)
+    return Chat._reading_features_from(url, timeout, refresh)
 
 
 _v1_server = None

@@ -209,8 +209,14 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
     }
-    /// Set this chat's feature switches from the answer to `GET
-    /// /2/chat/features`; see [`crate::ChatCore::set_feature_switches`].
+    /// The URL of this chat's feature switches; see
+    /// [`crate::ChatCore::feature_switches_url`].
+    pub fn feature_switches_url(&self) -> String {
+        self.inner.feature_switches_url()
+    }
+    /// Set this chat's feature switches from the answer to `GET`
+    /// [`Self::feature_switches_url`]; see
+    /// [`crate::ChatCore::set_feature_switches`].
     pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
         self.inner.set_feature_switches(status, body);
     }
@@ -1723,7 +1729,15 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
         let sig = chat
             .inner
-            .sign_key_change("1", "910003", "conv-1", "2", &ckey, &[])
+            .sign_key_change(
+                "1",
+                "910003",
+                "conv-1",
+                "2",
+                &ckey,
+                &[],
+                crate::pipeline::SendVersion::V0,
+            )
             .unwrap();
 
         assert!(!sig.message_event_signature.signature.is_empty());

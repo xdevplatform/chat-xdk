@@ -20,6 +20,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 | 2 | **update_config** | `update_config(&self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 | 3a | **set_feature_switches** | `set_feature_switches(&self, status: u16, body: &[u8])` | — | — | — | — | — |
+| 3b | **feature_switches_url** | `feature_switches_url(&self) → String` | — | — | — | — | — |
 
 A chat takes its Juicebox config when it's created, in every binding, and
 `update_config` sets or replaces it: on first boot, when the account has no
@@ -40,19 +41,23 @@ error in every binding, and so does Rust's
 
 Rust's `set_feature_switches`, and the C ABI's
 `chat_xdk_set_feature_switches(chat, status, body, body_len)`, hand a chat
-the answer to `GET /2/chat/features` (`FEATURES_ENDPOINT`,
-`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`), which the bindings read
-themselves when a chat is created (see
-[ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)): make the request when
-you create the chat, without credentials or query parameters, within
-`FEATURES_TIMEOUT_MS` (`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one
-byte past `FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), and pass its
-status, 0 when no response arrived, and body. Sends stay v0 until an answer
-turns `v1_send` on. A chat keeps the first answer that is a 200 with a
-features object no longer than the limit for its lifetime; any other status
-or body leaves every switch off and the chat open to a later answer, so
-retry a request that fails, as the bindings do: 1 second later, then after
-twice the previous wait, at most 5 minutes apart and 10 times.
+the answer to `GET /2/chat/features`, which the bindings read themselves
+(see [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)). Request the URL
+`feature_switches_url` (`chat_xdk_feature_switches_url`) returns once you
+have called `set_identity`: `FEATURES_ENDPOINT`
+(`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`) with the sender's bucket, the
+last four digits of the user id, so every chat of one sender gets the same
+answer. Make the request without credentials, within `FEATURES_TIMEOUT_MS`
+(`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one byte past
+`FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), pass its status, 0 when
+no response arrived, and body, and request it again every
+`FEATURES_REFRESH_MS` (`CHAT_XDK_FEATURES_REFRESH_MS`, 5 minutes) so a
+change reaches the running chat. Sends are v0 until an answer turns
+`v1_send` on, then v1, and v0 again if a later answer turns it off. Each
+answer that is a 200 with a features object no longer than the limit
+replaces the one before; any other status or body changes nothing, so retry
+a request that fails, as the bindings do: 1 second later, then after twice
+the previous wait, at most 5 minutes apart.
 
 The config JSON accepted by the constructor and `update_config` supports
 three shapes, checked in this order:
@@ -137,7 +142,9 @@ Every method with optional `sender_id` / `signing_key_version` fields — the
 from it. An explicit per-call value always overrides, and an omitted value and
 its explicit equivalent produce byte-identical signed output for the same
 logical inputs. Calling a signing method with neither a per-call value nor a
-session identity is an error.
+session identity is an error. After `set_identity`, the bindings read the
+feature switches again for the sender's bucket, the last four digits of the
+user id (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)).
 
 `decrypt_events`
 reports as `latest_version` (the version to encrypt with) the newest key
@@ -612,7 +619,9 @@ GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_
 ```
 
 The key change is the same `ConversationKeyChangeEvent` payload
-`prepare_conversation_key_change` signs, at the removal's version.
+`prepare_conversation_key_change` signs, at the removal's version, or higher
+when the chat has signed or verified a key change at a higher version in
+that conversation.
 
 The result does not carry a ratchet tree (`base64_encoded_key_rotation`) or
 a rewrapped pin-key bundle (`rotated_pmk_bundle`).
@@ -1309,20 +1318,20 @@ with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
 Python, Go, .NET and JVM bindings read in the background when a chat is
-created, retrying a read that fails (see [ARCHITECTURE.md — Feature
+created, again once `set_identity` gives it a sender, and again every 5
+minutes, retrying a read that fails (see [ARCHITECTURE.md — Feature
 Switches](ARCHITECTURE.md#feature-switches)). Every switch is off until an
 answer arrives, so a chat whose switch is on sends v0 first and v1 from then
-on. Files encrypted from a v0 build of a message don't open with a v1 build
-of it, so encrypt each file from the payload you send. **The Rust crate and
-the C ABI never fetch it:** a Rust app or a C caller makes the request and
-hands a chat the answer, with `set_feature_switches` or
-`chat_xdk_set_feature_switches` (see [Constructor &
-Config](#constructor--config)), and a chat without one sends
-v0. They read v1 sends like every binding. The fetch logs nothing; to see
-which format a send used, read the payload's
-`signature_info.signature_version`: `"7"` for v0, `"10"` for v1. A 0.5.x
-reader rejects a v1 send as a signature verification failure, so in its logs
-v1 sends look like forged messages.
+on, until a later answer turns it off. Files encrypted from a v0 build of a
+message don't open with a v1 build of it, so encrypt each file from the
+payload you send. **The Rust crate and the C ABI never fetch it:** a Rust
+app or a C caller makes the request and hands a chat the answer, with
+`set_feature_switches` or `chat_xdk_set_feature_switches` (see [Constructor
+& Config](#constructor--config)), and a chat without one sends v0. They read
+v1 sends like every binding. The fetch logs nothing; to see which format a
+send used, read the payload's `signature_info.signature_version`: `"7"` for
+v0, `"10"` for v1. A 0.5.x reader rejects a v1 send as a signature
+verification failure, so in its logs v1 sends look like forged messages.
 
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
@@ -1367,9 +1376,9 @@ so recipients can open it. The explicit preview fields —
 overrides for callers that no longer hold the raw event. A reply built from
 them must set `reply_to_message_id`, the original's signed message id
 (`replyToMessageId` in JS, `ReplyToMessageID` in Go, `replyToMessageId` on
-the JVM, `ReplyToMessageId` in .NET): X clients mark a v1 reply that embeds
-no per-message-key original and names no original invalid, and validate one
-that names it against their own copy of the original. With `reply_to_event`,
+the JVM, `ReplyToMessageId` in .NET): recipients treat a v1 reply that
+names no original as invalid, and validate one that names it against their
+own copy of the original. With `reply_to_event`,
 the id comes from the event, and a `reply_to_message_id` other than it fails
 with an invalid-input error: recipients reject a preview whose id is not
 its embedded original's.

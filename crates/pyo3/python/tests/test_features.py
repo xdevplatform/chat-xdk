@@ -46,13 +46,18 @@ class TestFeatureSwitches(unittest.TestCase):
     def tearDown(self):
         self.server.close()
 
-    def _chat(self, timeout=2.0, url=None):
+    def _chat(self, timeout=2.0, url=None, refresh=300.0, user_id=None):
+        """A chat with keys that reads ``url`` (the test server's by default)
+        within ``timeout`` seconds, again ``refresh`` seconds after each
+        answer. With ``user_id`` it sets that session identity, so it reads
+        its sender's bucket."""
         from chat_xdk import ImportKeysParams, SetIdentityParams
         from features_support import reading
 
-        chat = reading(url or self.server.url, timeout)
+        chat = reading(url or self.server.url, timeout, refresh)
         chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
-        chat.set_identity(SetIdentityParams("1001", "1"))
+        if user_id is not None:
+            chat.set_identity(SetIdentityParams(user_id, "1"))
         return chat
 
     def _send(self, chat):
@@ -63,6 +68,8 @@ class TestFeatureSwitches(unittest.TestCase):
             EncryptMessageParams(
                 "conv-1",
                 "hello",
+                sender_id="1001",
+                signing_key_version="1",
                 conversation_key=base64.b64decode(self.vectors["conversation_key_b64"]),
                 conversation_key_version="1",
             )
@@ -79,19 +86,39 @@ class TestFeatureSwitches(unittest.TestCase):
         public = [name for name in dir(chat_xdk.Chat()) + dir(chat_xdk) if not name.startswith("_")]
         self.assertEqual([name for name in public + chat_xdk.__all__ if "feature" in name.lower()], [])
 
-    def test_a_new_chat_reads_the_switches_once(self):
-        from chat_xdk import ImportKeysParams, SetIdentityParams
+    def test_a_chat_reads_its_senders_bucket_once_its_identity_is_set(self):
+        from chat_xdk import SetIdentityParams
 
         chat = self._chat()
         self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 1), self.server.queries)
-        self.assertEqual(self.server.queries[0], "", "the request carries no query")
+        self.assertEqual(self.server.queries[0], "", "no identity: no bucket")
         self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
-        chat.import_keys(ImportKeysParams(base64.b64decode(self.vectors["private_keys_concat_b64"])))
-        chat.set_identity(SetIdentityParams("1001", "1"))
+        chat.set_identity(SetIdentityParams("1234561001", "1"))
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2), self.server.queries)
+        self.assertEqual(self.server.queries[1], "bucket=1001", "the user id's last four digits")
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        chat.set_identity(SetIdentityParams("9991001", "1"))
         for _ in range(5):
             self._send(chat)
         time.sleep(0.3)
-        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+        self.assertEqual(len(self.server.queries), 2, "the same bucket: no new read")
+
+    def test_chats_of_one_sender_share_their_buckets_read(self):
+        self.server.delay = 0.5
+        first = self._chat(user_id="1001")
+        second = self._chat(user_id="51001")
+        other = self._chat(user_id="2002")
+        self.assertTrue(self._wait_for(lambda: all(self._send(c) == "10" for c in (first, second, other))))
+        bucketed = sorted(query for query in self.server.queries if query)
+        self.assertEqual(bucketed, ["bucket=1001", "bucket=2002"], self.server.queries)
+
+    def test_a_refresh_reaches_a_running_chat(self):
+        chat = self._chat(refresh=0.3)
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        self.server.body = '{"features":{}}'
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "7"), "the refresh turned v1 off")
+        self.server.body = '{"features":{"v1_send":true}}'
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"), "and on again")
 
     def test_the_public_constructor_reads_the_default_endpoint(self):
         import chat_xdk
@@ -122,8 +149,9 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(len(self.server.queries), 1, self.server.queries)
 
         later = self._chat()
-        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2), "the later chat asks for itself")
-        self.assertTrue(self._wait_for(lambda: self._send(later) == "10"))
+        self.assertEqual(self._send(later), "10", "a later chat takes the latest answer at once")
+        time.sleep(0.2)
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
 
     def test_a_read_that_cannot_start_leaves_the_next_chat_its_own(self):
         import types
@@ -143,15 +171,15 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(len(self.server.queries), 1, self.server.queries)
         self.assertEqual(self._send(stranded), "10", "the next chat's read answers the stranded chat")
 
-    def test_the_answer_holds_for_the_chats_lifetime(self):
+    def test_the_answer_holds_until_the_next_refresh(self):
         chat = self._chat()
         self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
         self.server.body = '{"features":{}}'
         other = self._chat()
-        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2))
-        time.sleep(0.2)
-        self.assertEqual(self._send(other), "7", "the second chat reads its own answer")
-        self.assertEqual(self._send(chat), "10", "the first chat's answer holds")
+        time.sleep(0.3)
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+        self.assertEqual(self._send(other), "10", "the later chat takes the latest answer")
+        self.assertEqual(self._send(chat), "10", "the answer holds until the refresh")
 
     def test_any_failure_leaves_sends_on_v0(self):
         cases = [
@@ -186,11 +214,9 @@ class TestFeatureSwitches(unittest.TestCase):
 
     def test_the_read_sends_no_cookies_or_credentials(self):
         self.server.set_cookie = "session=from-the-first-answer; Path=/"
-        first = self._chat()
-        self.assertTrue(self._wait_for(lambda: self._send(first) == "10"))
-        second = self._chat()
-        self.assertTrue(self._wait_for(lambda: len(self.server.queries) == 2))
-        self.assertTrue(self._wait_for(lambda: self._send(second) == "10"))
+        chat = self._chat(refresh=0.2)
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
+        self.assertTrue(self._wait_for(lambda: len(self.server.queries) >= 2), "a refresh after the cookie")
         for headers in self.server.headers:
             names = {name.lower() for name in headers}
             self.assertNotIn("cookie", names, "the read sends no cookie")

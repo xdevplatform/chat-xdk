@@ -27,12 +27,21 @@ class FeatureSwitchTest {
         FeatureServer.keepOffline();
     }
 
-    /** A keyed chat that reads its feature switches from {@code endpoint}. */
-    private static Chat newChat(String endpoint, long timeoutMs) throws Exception {
-        Chat chat = new Chat(null, endpoint, Duration.ofMillis(timeoutMs));
+    /** How long after an answer a chat reads its switches again. */
+    private static final Duration DEFAULT_REFRESH = Duration.ofMinutes(5);
+
+    /**
+     * A keyed chat that reads its feature switches from {@code endpoint} within {@code timeoutMs},
+     * again {@code refresh} after each answer. It has no session identity, so it reads no bucket.
+     */
+    private static Chat newChat(String endpoint, long timeoutMs, Duration refresh) throws Exception {
+        Chat chat = new Chat(null, endpoint, Duration.ofMillis(timeoutMs), refresh);
         chat.generateKeypairs();
-        chat.setIdentity(new SetIdentityParams("1001", "1"));
         return chat;
+    }
+
+    private static Chat newChat(String endpoint, long timeoutMs) throws Exception {
+        return newChat(endpoint, timeoutMs, DEFAULT_REFRESH);
     }
 
     private static Chat newChat(String endpoint) throws Exception {
@@ -42,6 +51,8 @@ class FeatureSwitchTest {
     /** The signature version of a send: "7" for v0, "10" for v1. */
     private static String sendVersion(Chat chat) {
         EncryptMessageParams p = new EncryptMessageParams("conv-1", "hello");
+        p.senderId = "1001";
+        p.signingKeyVersion = "1";
         p.conversationKey = new byte[32];
         p.conversationKeyVersion = "1";
         try {
@@ -86,18 +97,53 @@ class FeatureSwitchTest {
     }
 
     @Test
-    void aNewChatReadsTheSwitchesOnce() throws Exception {
+    void aChatReadsItsSendersBucketOnceItsIdentityIsSet() throws Exception {
         try (FeatureServer server = new FeatureServer(); Chat chat = newChat(server.endpoint)) {
             waitFor("the request", () -> server.queries().size() == 1);
-            assertEquals("", server.queries().get(0), "the request carries no query");
+            assertEquals("", server.queries().get(0), "no identity: no bucket");
             waitFor("v1", () -> sendVersion(chat).equals("10"));
-            chat.generateKeypairs();
-            chat.setIdentity(new SetIdentityParams("1001", "1"));
+            chat.setIdentity(new SetIdentityParams("1234561001", "1"));
+            waitFor("the bucket's request", () -> server.queries().size() == 2);
+            assertEquals("bucket=1001", server.queries().get(1), "the user id's last four digits");
+            waitFor("v1 for the bucket", () -> sendVersion(chat).equals("10"));
+            chat.setIdentity(new SetIdentityParams("9991001", "1"));
             for (int i = 0; i < 5; i++) {
                 sendVersion(chat);
             }
             Thread.sleep(300);
-            assertEquals(1, server.queries().size(), server.queries().toString());
+            assertEquals(2, server.queries().size(), "the same bucket reads nothing new: " + server.queries());
+        }
+    }
+
+    @Test
+    void chatsOfOneSenderShareTheirBucketsRead() throws Exception {
+        try (FeatureServer server = new FeatureServer();
+                Chat first = newChat(server.endpoint);
+                Chat second = newChat(server.endpoint);
+                Chat other = newChat(server.endpoint)) {
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 500);
+            first.setIdentity(new SetIdentityParams("1001", "1"));
+            second.setIdentity(new SetIdentityParams("51001", "1"));
+            other.setIdentity(new SetIdentityParams("2002", "1"));
+            waitFor("v1 everywhere", () -> List.of(first, second, other).stream()
+                    .allMatch(chat -> sendVersion(chat).equals("10")));
+            List<String> bucketed = server.queries().stream()
+                    .filter(query -> !query.isEmpty())
+                    .sorted()
+                    .collect(Collectors.toList());
+            assertEquals(List.of("bucket=1001", "bucket=2002"), bucketed, server.queries().toString());
+        }
+    }
+
+    @Test
+    void aRefreshReachesARunningChat() throws Exception {
+        try (FeatureServer server = new FeatureServer();
+                Chat chat = newChat(server.endpoint, 2000, Duration.ofMillis(300))) {
+            waitFor("v1", () -> sendVersion(chat).equals("10"));
+            server.set(200, "{\"features\":{}}", 0);
+            waitFor("v0 after the refresh", () -> sendVersion(chat).equals("7"));
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 0);
+            waitFor("v1 again", () -> sendVersion(chat).equals("10"));
         }
     }
 
@@ -108,7 +154,6 @@ class FeatureSwitchTest {
             try (Chat chat = new Chat()) {
                 waitFor("the request", () -> server.queries().size() == 1);
                 chat.generateKeypairs();
-                chat.setIdentity(new SetIdentityParams("1001", "1"));
                 waitFor("v1", () -> sendVersion(chat).equals("10"));
             } finally {
                 FeatureServer.keepOffline();
@@ -141,8 +186,9 @@ class FeatureSwitchTest {
                 assertEquals(1, server.queries().size(), server.queries().toString());
 
                 try (Chat later = newChat(server.endpoint)) {
-                    waitFor("the later chat to ask for itself", () -> server.queries().size() == 2);
-                    waitFor("v1 for the later chat", () -> sendVersion(later).equals("10"));
+                    assertEquals("10", sendVersion(later), "the later chat takes the latest answer at once");
+                    Thread.sleep(200);
+                    assertEquals(1, server.queries().size(), server.queries().toString());
                 }
             } finally {
                 chats.forEach(Chat::close);
@@ -151,15 +197,15 @@ class FeatureSwitchTest {
     }
 
     @Test
-    void theAnswerHoldsForTheChatsLifetime() throws Exception {
+    void theAnswerHoldsUntilTheNextRefresh() throws Exception {
         try (FeatureServer server = new FeatureServer(); Chat chat = newChat(server.endpoint)) {
             waitFor("v1", () -> sendVersion(chat).equals("10"));
             server.set(200, "{\"features\":{}}", 0);
             try (Chat other = newChat(server.endpoint)) {
-                waitFor("the second request", () -> server.queries().size() == 2);
-                Thread.sleep(200);
-                assertEquals("7", sendVersion(other), "the second chat reads its own answer");
-                assertEquals("10", sendVersion(chat), "the first chat's answer holds");
+                Thread.sleep(300);
+                assertEquals(1, server.queries().size(), server.queries().toString());
+                assertEquals("10", sendVersion(other), "the later chat takes the latest answer");
+                assertEquals("10", sendVersion(chat), "the first chat's answer holds until the refresh");
             }
         }
     }
@@ -252,12 +298,9 @@ class FeatureSwitchTest {
     void theReadSendsNoCookiesOrCredentials() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
             server.setCookie("session=from-the-first-answer; Path=/");
-            try (Chat first = newChat(server.endpoint)) {
-                waitFor("the first answer", () -> sendVersion(first).equals("10"));
-            }
-            try (Chat second = newChat(server.endpoint)) {
-                waitFor("the second request", () -> server.queries().size() == 2);
-                waitFor("the second answer", () -> sendVersion(second).equals("10"));
+            try (Chat chat = newChat(server.endpoint, 2000, Duration.ofMillis(200))) {
+                waitFor("the first answer", () -> sendVersion(chat).equals("10"));
+                waitFor("a refresh after the cookie", () -> server.queries().size() >= 2);
             }
             for (Headers headers : server.headers()) {
                 assertNull(headers.getFirst("Cookie"), "the read sends no cookie");

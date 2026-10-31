@@ -1,5 +1,6 @@
 //! The signature version of every signed action: the legacy one while sends
-//! are v0, and the version v1 sends sign at while they are v1.
+//! are v0, and the version v1 sends sign at while they are v1; a key change
+//! never signs below one the chat signed or verified in its conversation.
 //!
 //! Each expected payload is spelled out in the layout of the version it signs
 //! at, so the signer is checked against the layout rather than against the

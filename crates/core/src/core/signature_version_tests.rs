@@ -220,7 +220,7 @@ fn a_v7_message_with_a_non_integer_key_version_verifies_only_over_null() {
     .unwrap();
     assert!(
         message.verified,
-        "signed over null, as the native clients sign"
+        "a non-integer key version is signed as null"
     );
 
     let mut raw_signed = event.clone();

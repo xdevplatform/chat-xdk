@@ -102,13 +102,17 @@ See the **Go** column of the unified tables in [`docs/API.md`](../../docs/API.md
 Each chat makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features` in the background, which reads the X
 API's feature switches that pick the format the SDK sends in. A chat reads
-them when it is created, and keeps the first answer for its lifetime; chats
-created while a request is in flight, or waiting to be retried, share it.
-The request carries no credentials and never delays or fails a call. One
-that fails is retried in the background, 1 second later, then after twice
-the previous wait, at most 5 minutes apart and 10 times; until an answer
-arrives, and for the chat's lifetime if none does, sends stay in v0, the
-format 0.5.x sends.
+them when it is created, again once `SetIdentity` gives it a sender, and
+again 5 minutes after each answer, so a change reaches a running chat. The
+sender's request carries its bucket, the last four digits of the user id
+(`?bucket=1234`), so every chat of one sender gets the same answer; before
+that, the X API buckets the request by its address. Chats that read the same
+URL share one request, and a chat that joins it takes its latest answer at
+once. The request carries no credentials and never delays or fails a call.
+One that fails is retried in the background, 1 second later, then after
+twice the previous wait, at most 5 minutes apart. Each answer replaces the
+one before; until an answer for the chat's URL arrives, sends stay in v0,
+the format 0.5.x sends.
 
 ## Security limitations
 

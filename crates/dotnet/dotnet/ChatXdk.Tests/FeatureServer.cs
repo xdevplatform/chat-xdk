@@ -30,7 +30,8 @@ namespace ChatXdk.Tests
         /// A chat whose feature switches turn v1_send on, as the X API would: it reads them
         /// from a local server that answers so. <see cref="WaitForV1"/> waits for the answer.
         /// </summary>
-        internal static Chat V1Chat() => new(null, V1Server.Value.Endpoint, TimeSpan.FromSeconds(2));
+        internal static Chat V1Chat() =>
+            new(null, V1Server.Value.Endpoint, TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5));
 
         /// <summary>Send from <paramref name="chat"/>, which has keys, until a send is v1.</summary>
         internal static void WaitForV1(Chat chat)
@@ -54,8 +55,8 @@ namespace ChatXdk.Tests
     /// <summary>
     /// A local GET /2/chat/features that records each request's query string and head. Its
     /// <see cref="RedirectTarget"/> path answers that v1_send is on, for the tests that check a
-    /// redirect to it is not followed. A request for another path, such as a retry of a server
-    /// that had this port before, gets a 404 and is not recorded. It speaks just
+    /// redirect to it is not followed. A request for another path, such as a retried read meant
+    /// for an earlier server on this port, gets a 404 and is not recorded. It speaks just
     /// enough HTTP over a <see cref="TcpListener"/> for one request per connection, and
     /// handles a client that gives up mid-request itself.
     /// </summary>

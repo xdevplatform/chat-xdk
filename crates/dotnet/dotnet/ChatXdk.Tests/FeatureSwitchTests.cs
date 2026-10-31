@@ -13,12 +13,19 @@ namespace ChatXdk.Tests
 {
     public class FeatureSwitchTests
     {
-        /// <summary>A keyed chat that reads its feature switches from <paramref name="endpoint"/>.</summary>
-        private static Chat NewChat(string endpoint, int timeoutMs = 2000)
+        /// <summary>How long after an answer a chat reads its switches again.</summary>
+        private static readonly TimeSpan DefaultRefresh = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// A keyed chat that reads its feature switches from <paramref name="endpoint"/> within
+        /// <paramref name="timeoutMs"/>, again <paramref name="refresh"/> after each answer
+        /// (<see cref="DefaultRefresh"/> when null). It has no session identity, so it reads no
+        /// bucket.
+        /// </summary>
+        private static Chat NewChat(string endpoint, int timeoutMs = 2000, TimeSpan? refresh = null)
         {
-            var chat = new Chat(null, endpoint, TimeSpan.FromMilliseconds(timeoutMs));
+            var chat = new Chat(null, endpoint, TimeSpan.FromMilliseconds(timeoutMs), refresh ?? DefaultRefresh);
             chat.GenerateKeypairs();
-            chat.SetIdentity(new SetIdentityParams("1001", "1"));
             return chat;
         }
 
@@ -26,6 +33,8 @@ namespace ChatXdk.Tests
         private static string SendVersion(Chat chat) =>
             chat.EncryptMessage(new EncryptMessageParams("conv-1", "hello")
             {
+                SenderId = "1001",
+                SigningKeyVersion = "1",
                 ConversationKey = new byte[32],
                 ConversationKeyVersion = "1",
             }).SignatureInfo.SignatureVersion;
@@ -60,18 +69,50 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public async Task ANewChatReadsTheSwitchesOnce()
+        public async Task AChatReadsItsSendersBucketOnceItsIdentityIsSet()
         {
             using var server = new FeatureServer();
             using var chat = NewChat(server.Endpoint);
             await WaitFor("the request", () => server.Queries.Count == 1);
             Assert.Equal("", server.Queries[0]);
             await WaitFor("v1", () => SendVersion(chat) == "10");
-            chat.GenerateKeypairs();
-            chat.SetIdentity(new SetIdentityParams("1001", "1"));
+            chat.SetIdentity(new SetIdentityParams("1234561001", "1"));
+            await WaitFor("the bucket's request", () => server.Queries.Count == 2);
+            Assert.Equal("bucket=1001", server.Queries[1]);
+            await WaitFor("v1 for the bucket", () => SendVersion(chat) == "10");
+            chat.SetIdentity(new SetIdentityParams("9991001", "1"));
             for (var i = 0; i < 5; i++) SendVersion(chat);
             await Task.Delay(300);
-            Assert.Single(server.Queries);
+            Assert.Equal(2, server.Queries.Count);
+        }
+
+        [Fact]
+        public async Task ChatsOfOneSenderShareTheirBucketsRead()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 500);
+            using var first = NewChat(server.Endpoint);
+            using var second = NewChat(server.Endpoint);
+            using var other = NewChat(server.Endpoint);
+            first.SetIdentity(new SetIdentityParams("1001", "1"));
+            second.SetIdentity(new SetIdentityParams("51001", "1"));
+            other.SetIdentity(new SetIdentityParams("2002", "1"));
+            await WaitFor("v1 everywhere", () => new[] { first, second, other }.All(chat => SendVersion(chat) == "10"));
+            Assert.Equal(
+                new[] { "bucket=1001", "bucket=2002" },
+                server.Queries.Where(query => query.Length > 0).OrderBy(query => query, StringComparer.Ordinal));
+        }
+
+        [Fact]
+        public async Task ARefreshReachesARunningChat()
+        {
+            using var server = new FeatureServer();
+            using var chat = NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(300));
+            await WaitFor("v1", () => SendVersion(chat) == "10");
+            server.Set(200, "{\"features\":{}}");
+            await WaitFor("v0 after the refresh", () => SendVersion(chat) == "7");
+            server.Set(200, "{\"features\":{\"v1_send\":true}}");
+            await WaitFor("v1 again", () => SendVersion(chat) == "10");
         }
 
         [Fact]
@@ -97,8 +138,9 @@ namespace ChatXdk.Tests
                 Assert.Single(server.Queries);
 
                 using var later = NewChat(server.Endpoint);
-                await WaitFor("the later chat to ask for itself", () => server.Queries.Count == 2);
-                await WaitFor("v1 for the later chat", () => SendVersion(later) == "10");
+                Assert.Equal("10", SendVersion(later));
+                await Task.Delay(200);
+                Assert.Single(server.Queries);
             }
             finally
             {
@@ -107,16 +149,16 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
-        public async Task TheAnswerHoldsForTheChatsLifetime()
+        public async Task TheAnswerHoldsUntilTheNextRefresh()
         {
             using var server = new FeatureServer();
             using var chat = NewChat(server.Endpoint);
             await WaitFor("v1", () => SendVersion(chat) == "10");
             server.Set(200, "{\"features\":{}}");
             using var other = NewChat(server.Endpoint);
-            await WaitFor("the second request", () => server.Queries.Count == 2);
-            await Task.Delay(200);
-            Assert.Equal("7", SendVersion(other));
+            await Task.Delay(300);
+            Assert.Single(server.Queries);
+            Assert.Equal("10", SendVersion(other));
             Assert.Equal("10", SendVersion(chat));
         }
 
@@ -200,13 +242,11 @@ namespace ChatXdk.Tests
         {
             using var server = new FeatureServer();
             server.SetCookie("session=from-the-first-answer; Path=/");
-            using (var first = NewChat(server.Endpoint))
+            using (var chat = NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(200)))
             {
-                await WaitFor("the first answer", () => SendVersion(first) == "10");
+                await WaitFor("the first answer", () => SendVersion(chat) == "10");
+                await WaitFor("a refresh after the cookie", () => server.Queries.Count >= 2);
             }
-            using var second = NewChat(server.Endpoint);
-            await WaitFor("the second request", () => server.Queries.Count == 2);
-            await WaitFor("the second answer", () => SendVersion(second) == "10");
             foreach (var head in server.RequestHeads)
             {
                 Assert.DoesNotContain("\r\nCookie:", head, StringComparison.OrdinalIgnoreCase);

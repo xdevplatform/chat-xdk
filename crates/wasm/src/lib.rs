@@ -122,9 +122,10 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
 }
 
 // Feature switches (GET /2/chat/features). A chat reads them when it is
-// created: the core decides what to fetch, when to retry and what an answer
-// means, and the JS wrapper performs the GET and each retry. None of this is
-// API, and all of it is left out of the TypeScript declarations.
+// created and when its identity is set, and again while it lives: the core
+// decides what to fetch, when to fetch it again and what an answer means,
+// and the JS wrapper performs each GET. None of this is API, and all of it
+// is left out of the TypeScript declarations.
 
 /// Milliseconds from `performance.now()`, or `Date.now()` without it.
 fn feature_clock() -> u64 {
@@ -140,8 +141,9 @@ fn feature_clock() -> u64 {
 }
 
 /// Report the result of the GET `id`: its HTTP status, 0 when no complete
-/// response arrived, and its body. Returns the retry to perform, in the shape
-/// `__featureStart` returns, or `undefined`.
+/// response arrived, and its body. Returns the next GET to perform, a
+/// refresh or a retry, in the shape `__featureStart` returns, or
+/// `undefined`.
 #[wasm_bindgen(js_name = __featureComplete, skip_typescript)]
 pub fn feature_complete(id: f64, status: u16, body: &[u8]) -> JsValue {
     feature_request(bindings::complete_fetch(id as u64, status, body))
@@ -373,17 +375,18 @@ impl Chat {
     }
 
     /// For this repository's tests: read this chat's feature switches from
-    /// `endpoint`, within `timeoutMs`. Call it before the wrapper starts the
-    /// read. Not API.
+    /// `endpoint`, within `timeoutMs`, again `refreshMs` after each answer.
+    /// Call it before the wrapper starts the read. Not API.
     #[wasm_bindgen(js_name = __configureFeatures, skip_typescript)]
-    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64) {
-        self.inner.configure_features(endpoint, timeout_ms as u64);
+    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64, refresh_ms: f64) {
+        self.inner
+            .configure_features(endpoint, timeout_ms as u64, refresh_ms as u64);
     }
 
-    /// Start this chat's read of the feature switches:
+    /// Start this chat's reads of the feature switches for its identity:
     /// `{ id, url, timeoutMs, maxBytes, delayMs }` for the wrapper to GET,
-    /// or `undefined` when the chat takes the answer of a GET in flight or
-    /// has started its read already. Not API.
+    /// or `undefined` when the chat already reads its identity's URL or
+    /// takes the answer of a GET in flight. Not API.
     #[wasm_bindgen(js_name = __featureStart, skip_typescript)]
     pub fn feature_start(&self) -> JsValue {
         feature_request(self.inner.start_features())
@@ -662,8 +665,8 @@ impl Chat {
     /// original), and explicit `replyToSequenceId`, `replyToMessageId`,
     /// `replyToSenderId`, `replyToText`, `replyToEntities`,
     /// `replyToAttachments` overrides for callers that no longer hold the raw
-    /// event; such a reply needs `replyToMessageId`, as recipients mark a v1
-    /// reply that names no original invalid. With `replyToEvent`, a
+    /// event; such a reply needs `replyToMessageId`, as recipients treat a v1
+    /// reply that names no original as invalid. With `replyToEvent`, a
     /// `replyToMessageId` other than the id the event carries fails with an
     /// invalid-input error. The reply's id and files work as in
     /// `encryptMessage`.

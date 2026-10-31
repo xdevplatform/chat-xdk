@@ -106,9 +106,10 @@ pub(crate) fn parse_quick_reply(value: serde_json::Value) -> Result<QuickReply, 
 /// `reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
 /// `reply_to_text`, `reply_to_entities`, and `reply_to_attachments`
 /// overrides remain for callers that no longer hold the raw event; such a
-/// reply needs `reply_to_message_id`, as recipients mark a v1 reply that
-/// names no original invalid. With `reply_to_event`, a `reply_to_message_id`
-/// other than the id the event carries fails with an invalid-input error.
+/// reply needs `reply_to_message_id`, as recipients treat a v1 reply that
+/// names no original as invalid. With `reply_to_event`, a
+/// `reply_to_message_id` other than the id the event carries fails with an
+/// invalid-input error.
 ///
 /// Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
 /// and files work as for `chat_xdk_encrypt_message`.

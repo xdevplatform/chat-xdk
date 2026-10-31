@@ -237,6 +237,7 @@ impl ChatCore {
             conversation_key_version,
             &ckey,
             &participant_keys,
+            self.send_version(),
         )?;
         Ok(PreparedConversationChange {
             conversation_id,
@@ -254,7 +255,8 @@ impl ChatCore {
     /// the per-participant encrypted keys, the event the API persists and
     /// relays. Its signed payload covers the plaintext key, which recipients
     /// decrypt from their participant key. It signs at
-    /// [`Self::key_change_signature_version`].
+    /// [`Self::key_change_signature_version`] under `send_version`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_key_change(
         &self,
         public_key_version: &str,
@@ -263,6 +265,7 @@ impl ChatCore {
         conversation_key_version: &str,
         ckey: &XChatConversationKey,
         participant_keys: &[ConversationParticipantKey],
+        send_version: crate::pipeline::SendVersion,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
         let participant_keys = participant_keys
             .iter()
@@ -280,7 +283,7 @@ impl ChatCore {
                 for_key_rotation: Some(false),
             },
         );
-        let signature_version = self.key_change_signature_version(conversation_id);
+        let signature_version = self.key_change_signature_version(conversation_id, send_version);
         let signature = self.sign_action_event_at(
             public_key_version,
             sender_id,
@@ -417,6 +420,7 @@ impl ChatCore {
 
         // A group create needs two signed actions: the conversation-key change
         // that seeds the group's key, and the group-create action itself.
+        let send_version = self.send_version();
         let ckce_sig = self.sign_key_change(
             &signing_key_version,
             &sender_id,
@@ -424,12 +428,16 @@ impl ChatCore {
             conversation_key_version,
             &ckey,
             &participant_keys,
+            send_version,
         )?;
-        let create_sig = self.sign_action_event(
+        let create_sig = self.sign_action_event_at(
             &signing_key_version,
             &sender_id,
             &params.conversation_id,
-            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            signing::action_signature_version(
+                send_version,
+                crate::signatures::CURRENT_SIGNATURE_VERSION,
+            ),
             Self::group_create_detail(
                 &params.member_ids,
                 &params.admin_ids,
@@ -522,6 +530,7 @@ impl ChatCore {
 
         // A member add needs two signed actions: the conversation-key change
         // that rotates the group's key, and the member-add action itself.
+        let send_version = self.send_version();
         let ckce_sig = self.sign_key_change(
             &signing_key_version,
             &sender_id,
@@ -529,6 +538,7 @@ impl ChatCore {
             conversation_key_version,
             &ckey,
             &participant_keys,
+            send_version,
         )?;
         // A description is first part of the member-add payload at version
         // 8, so a v0 add that carries one signs at 8.
@@ -537,11 +547,11 @@ impl ChatCore {
         } else {
             crate::signatures::CURRENT_SIGNATURE_VERSION
         };
-        let member_add_sig = self.sign_action_event(
+        let member_add_sig = self.sign_action_event_at(
             &signing_key_version,
             &sender_id,
             &params.conversation_id,
-            legacy_version,
+            signing::action_signature_version(send_version, legacy_version),
             Self::group_member_add_detail(
                 &params.new_member_ids,
                 &params.current_member_ids,

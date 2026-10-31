@@ -15,7 +15,8 @@ struct FfiResult chat_xdk_internal_feature_complete(uint64_t id,
                                                     uintptr_t body_len);
 struct FfiResult chat_xdk_internal_feature_configure(const struct ChatHandle *handle,
                                                      const char *endpoint,
-                                                     uint64_t timeout_ms);
+                                                     uint64_t timeout_ms,
+                                                     uint64_t refresh_ms);
 struct FfiResult chat_xdk_internal_feature_set_default_endpoint(const char *endpoint);
 */
 import "C"
@@ -163,14 +164,15 @@ func ffiSetCacheKeys(h handle, enabled bool) error {
 	return err
 }
 
-// ffiFeatureStart starts the chat's read of the feature switches and returns
-// the GET to perform as JSON, or "" when there is none to perform.
+// ffiFeatureStart starts the chat's reads of the feature switches for its
+// identity and returns the GET to perform as JSON, or "" when there is none
+// to perform.
 func ffiFeatureStart(h handle) (string, error) {
 	return ffiResult(C.chat_xdk_internal_feature_start(h))
 }
 
-// ffiFeatureComplete reports the result of the GET id and returns the retry
-// to perform as JSON, or "" when there is none.
+// ffiFeatureComplete reports the result of the GET id and returns the next
+// GET to perform, a refresh or a retry, as JSON, or "" when there is none.
 func ffiFeatureComplete(id uint64, status int, body []byte) (string, error) {
 	var p *C.uint8_t
 	if len(body) > 0 {
@@ -179,10 +181,14 @@ func ffiFeatureComplete(id uint64, status int, body []byte) (string, error) {
 	return ffiResult(C.chat_xdk_internal_feature_complete(C.uint64_t(id), C.int32_t(status), p, C.uintptr_t(len(body))))
 }
 
-func ffiFeatureConfigure(h handle, endpoint string, timeout time.Duration) error {
+// ffiFeatureConfigure has the chat read its feature switches from endpoint
+// within timeout, again refresh after each answer, from the next read it
+// starts; for tests only.
+func ffiFeatureConfigure(h handle, endpoint string, timeout, refresh time.Duration) error {
 	c := C.CString(endpoint)
 	defer C.free(unsafe.Pointer(c))
-	_, err := ffiResult(C.chat_xdk_internal_feature_configure(h, c, C.uint64_t(timeout.Milliseconds())))
+	_, err := ffiResult(C.chat_xdk_internal_feature_configure(
+		h, c, C.uint64_t(timeout.Milliseconds()), C.uint64_t(refresh.Milliseconds())))
 	return err
 }
 

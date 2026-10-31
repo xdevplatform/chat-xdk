@@ -911,8 +911,8 @@ public final class Types {
         /**
          * Signed message ID of the message being replied to; derived from
          * {@link #replyToEvent} when null. A reply built without
-         * {@link #replyToEvent} needs it: recipients mark a v1 reply that
-         * names no original invalid. With {@link #replyToEvent}, one other than
+         * {@link #replyToEvent} needs it: recipients treat a v1 reply that
+         * names no original as invalid. With {@link #replyToEvent}, one other than
          * the id the event carries fails with a {@link ChatXdkException} of
          * kind {@code INVALID_INPUT}.
          */
@@ -1022,7 +1022,10 @@ public final class Types {
      * raw event.
      */
     public static final class EncryptEditParams {
-        /** Base64 raw event being edited; the conversation id and target sequence id are derived from it. */
+        /**
+         * Base64 raw event being edited; the conversation id, the target sequence id and, for a v1
+         * edit, the target message id are derived from it.
+         */
         public final String targetEvent;
 
         /** The replacement message text. */
@@ -1066,8 +1069,9 @@ public final class Types {
          * Create params with the required fields; all optional fields default to null.
          *
          * @param targetEvent Base64 raw event being edited. Pass null or ""
-         *     only when supplying {@link #conversationId} and
-         *     {@link #targetMessageSequenceId} directly instead.
+         *     only when supplying {@link #conversationId},
+         *     {@link #targetMessageSequenceId} and, for a v1 edit,
+         *     {@link #targetMessageId} directly instead.
          * @param updatedText The replacement message text.
          */
         public EncryptEditParams(String targetEvent, String updatedText) {

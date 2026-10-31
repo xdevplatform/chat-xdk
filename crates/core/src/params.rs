@@ -314,9 +314,9 @@ pub struct EncryptReplyParams {
     pub reply_to_sequence_id: Option<String>,
     /// The signed `message_id` of the message being replied to; derived from
     /// `reply_to_event` when unset. A reply built without `reply_to_event`
-    /// needs it: recipients mark a v1 reply that names no original invalid.
-    /// With `reply_to_event`, one that is not the id the event carries fails
-    /// the call with an `InvalidInput` error.
+    /// needs it: recipients treat a v1 reply that names no original as
+    /// invalid. With `reply_to_event`, one that is not the id the event
+    /// carries fails the call with an `InvalidInput` error.
     pub reply_to_message_id: Option<String>,
     /// The user ID of the message's sender, as digits (for the preview);
     /// derived from `reply_to_event` when unset.

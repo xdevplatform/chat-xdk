@@ -73,6 +73,10 @@ fn the_feature_switch_constants_are_the_cores() {
         chat_xdk_core::FEATURES_TIMEOUT_MS
     );
     assert_eq!(CHAT_XDK_FEATURES_MAX_BODY, chat_xdk_core::FEATURES_MAX_BODY);
+    assert_eq!(
+        CHAT_XDK_FEATURES_REFRESH_MS,
+        chat_xdk_core::FEATURES_REFRESH_MS
+    );
     let header = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../go/chatxdk/include/chat_xdk.h"
@@ -86,15 +90,24 @@ fn the_feature_switch_constants_are_the_cores() {
 }
 
 #[test]
-fn a_caller_hands_a_chat_its_feature_switches_until_one_answer_holds() {
+fn a_caller_hands_a_chat_each_answer_for_its_senders_url() {
     let on = br#"{"features":{"v1_send":true}}"#;
     let chat = new_chat();
+    assert_eq!(
+        data(chat_xdk_feature_switches_url(chat)).as_deref(),
+        Some(format!("{}?bucket=1001", chat_xdk_core::FEATURES_ENDPOINT).as_str()),
+        "the bucket of user 1001"
+    );
     assert_eq!(send(chat), "7", "no answer: v0");
     answer(chat, 200, on);
     assert_eq!(send(chat), "10");
     answer(chat, 200, br#"{"features":{"v1_send":false}}"#);
-    assert_eq!(send(chat), "10", "a chat takes one answer");
+    assert_eq!(send(chat), "7", "a later answer replaces it");
     chat_xdk_free(chat);
+    assert_eq!(
+        error(chat_xdk_feature_switches_url(std::ptr::null()))["kind"],
+        "invalid_input"
+    );
 
     let mut oversized = on.to_vec();
     oversized.resize(CHAT_XDK_FEATURES_MAX_BODY + 1, b' ');

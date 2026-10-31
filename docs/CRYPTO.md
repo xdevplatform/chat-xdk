@@ -371,10 +371,10 @@ attachment_key = HKDF-SHA256(ikm  = message_key,
 `attachment_id` is the attachment's `attachment_id` when set (an empty string
 counts as set); otherwise it is the message id for the first attachment and
 `{message_id}#{index}` for later ones, by position in the message's
-attachment list, counting every attachment but payment receipts, which X
-clients leave out before they number the rest, kinds the SDK does not
-surface included. A URL card's banner and favicon images share the card's
-key.
+attachment list. The count includes every attachment, kinds the SDK does
+not surface too, except payment receipts, which X clients leave out before
+they number the rest. A URL card's banner and favicon images share the
+card's key.
 
 On send, the message is built before its files are encrypted. Each file of
 the message names the media hash key its upload started with. `encrypt_file`
@@ -482,7 +482,7 @@ as `message_event_signature.signature_version`).
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends, the first version that signs `contents_encryption_version`, and on every action signature (conversation-key changes, group changes, deletes, read receipts) while the chat sends v1 |
+| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends, the first version that signs `contents_encryption_version`, and on every action signature (conversation-key changes, group changes, deletes, read receipts) while the chat sends v1, apart from a key change in a conversation where the chat signed or verified one at a higher version (that version) |
 | `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and, while the chat sends v0, on its action signatures, apart from a member add that carries a description (version 8) and a key change in a conversation where the chat signed or verified one at a higher version (that version) |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
 | `MAX_SIGNATURE_VERSION` (internal) | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
@@ -534,10 +534,11 @@ where each layout gains the components versions 8 through 10 add (see
 change never signs below the highest version of a key change the chat has
 signed or verified in that conversation: X clients that enforce a key-change
 signature-version floor reject a key change signed below the newest one
-before it as a downgrade, and a chat sends v0 until its feature read
-answers. Decrypting a conversation's key changes before changing its key
-lets the chat see them; the floor lives in memory for the chat's lifetime,
-like the conversation-key high-water mark.
+before it as a downgrade. Without the floor, a chat that signed a key change
+at 10 while it sent v1 would sign the next one at 7 while it sends v0, as it
+does until its feature read answers. Decrypting a conversation's key changes
+before changing its key lets the chat see them; the floor lives in memory
+for the chat's lifetime, like the conversation-key high-water mark.
 
 - **GroupCreate** (from `prepare_group_create`, v4+):
   ```
@@ -614,7 +615,8 @@ further fields.
 
 The action layouts above are the ones the SDK signs at v7, while the chat
 sends v0 (v8 for a member add with a description); while it sends v1,
-messages and actions alike are signed at v10. Verification rebuilds each
+messages and actions alike are signed at v10. A key change can sign higher
+in either case, at its conversation's key-change floor. Verification rebuilds each
 payload in the layout of the version its signature carries, 2 through 11:
 
 - **v8**: GroupMemberAdd appends `current_description`.

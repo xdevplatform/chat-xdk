@@ -1148,11 +1148,11 @@ func sendFiles(t *testing.T, chat *Chat, v sdkVectors, text string, attachments 
 	return payload
 }
 
-// TestV1ParityFieldsReachTheWire drives the three optional fields a v1 send
-// takes when the caller holds no original event: a reply's
-// ReplyToMessageID, an edit's TargetMessageID and a media attachment's
-// PlaintextSHA256, each read back from the decrypted send.
-func TestV1ParityFieldsReachTheWire(t *testing.T) {
+// A v1 send built without the original event names it through the explicit
+// fields, and a media attachment carries the SHA-256 of its plaintext file:
+// ReplyToMessageID, TargetMessageID and PlaintextSHA256 each read back from
+// the decrypted send.
+func TestV1SendsNameTheOriginalAndCarryTheFileHashFromExplicitFields(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)
 	defer chat.Close()

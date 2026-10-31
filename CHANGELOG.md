@@ -32,6 +32,11 @@
   Option<String>` field, so code that builds the variant with a struct
   literal adds `plaintext_sha256: None` (or the hash), and a pattern that
   lists every field adds it or ends in `..`.
+- Rust: `ChatCore::feature_switches_url` and `Chat::feature_switches_url`
+  return the URL of a chat's feature switches, `FEATURES_ENDPOINT` with the
+  sender's bucket once `set_identity` has set it, and `FEATURES_REFRESH_MS`
+  is how long after an answer to read them again. The C ABI adds
+  `chat_xdk_feature_switches_url` and `CHAT_XDK_FEATURES_REFRESH_MS`.
 
 ### Changed
 
@@ -44,23 +49,33 @@
   carries a description, which signs at version 8. A member removal and the
   removal a leave signs follow the same rule instead of signing at version
   11, so 0.5.x readers verify them while the chat sends v0; their
-  signatures don't cover the key version the removal names, which the
-  removal's key change signs. A conversation-key change never signs below
-  the highest version of a key change the chat has signed or verified in
-  that conversation, since X clients that enforce a key-change floor
-  reject one signed below the newest before it. A key change raised above 8
-  this way is one 0.5.x readers can't verify, like the one that raised it.
+  signatures don't cover the key version the removal names, and a member
+  removal's key change signs the new key version. A conversation-key change
+  never signs below the highest version of a key change the chat has signed
+  or verified in that conversation, since X clients that enforce a
+  key-change floor reject one signed below the newest before it. A key
+  change raised above 7 this way is one 0.5.x readers can't verify, like
+  the one that raised it.
   The chat holds that floor in memory, so after a restart decrypt the
   conversation's key changes again before changing its key.
-- A feature-switch request that fails is retried in the background while a
-  chat waits for its answer: 1 second later, then after twice the previous
-  wait, at most 5 minutes apart and 10 times. The Rust core sets the
-  schedule and every binding follows it. The first answer sets the switches
-  of every chat that shares the request, for their lifetime; until one
-  arrives, and for the chat's lifetime if none does, every switch stays off
-  and the chat sends v0. `set_feature_switches` and `chat_xdk_set_feature_switches` take
-  a later answer after one that failed, so a Rust app or C caller can retry
-  the same way; the first 200 response with a features object holds.
+- The bindings read the feature switches again 5 minutes after each answer
+  while a chat lives, so a change at the X API reaches running chats with
+  no restart and no new chat; each answer replaces the one before. Once
+  `set_identity` sets the sender, the request carries the sender's bucket,
+  the last four digits of the user id (`?bucket=1234`), so a ramp of
+  `v1_send` picks the same senders wherever they run; before that the X API
+  buckets the request by its address, as in 0.7.1. Chats that read the same
+  URL share one request. A request that fails is retried in the background
+  while a chat waits for it: 1 second later, then after twice the previous
+  wait, at most 5 minutes apart. A failure keeps the answer the chats have;
+  until one arrives, every switch stays off and the chat sends v0. The Rust
+  core sets the schedule and every binding follows it.
+- Rust and the C ABI: each answer handed to `set_feature_switches` or
+  `chat_xdk_set_feature_switches` that is a 200 with a features object
+  replaces the one before, and any other answer changes nothing. Request the
+  URL `feature_switches_url` (`chat_xdk_feature_switches_url`) returns, and
+  again every `FEATURES_REFRESH_MS` (`CHAT_XDK_FEATURES_REFRESH_MS`), as the
+  bindings do.
 - A v1 send's encoded signature lists the signing keys the message relies
   on, by user id and key version (`message_signing_key_info_list`): its
   sender's and, for a reply, those of the quoted message's sender and of its

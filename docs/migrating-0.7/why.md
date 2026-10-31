@@ -44,9 +44,14 @@ and while it sends v0 they sign at version 7, which 0.5.x verifies, apart
 from a member add that carries a description, which signs at version 8, the
 first that covers one. A member removal or a leave signs at those versions
 too, as X clients' do, so its signature doesn't cover the key version the
-removal names, which version 11 is the first to sign; the key change that
-carries the new key signs its version. Upgrade the apps that read your
-conversations first: [Rust](rust.md#upgrade-readers-first),
+removal names, which version 11 is the first to sign; a member removal's key
+change, which carries the new key, signs its version. A conversation-key
+change never signs below the highest version of a key change the chat has
+signed or verified in that conversation, since X clients that enforce that
+floor reject one signed below the newest before it as a downgrade; so while
+a chat sends v0 it can sign one above 7, which 0.5.x readers can't verify.
+Upgrade the apps that read your conversations first:
+[Rust](rust.md#upgrade-readers-first),
 [Python](python.md#upgrade-readers-first),
 [JavaScript](javascript.md#upgrade-readers-first),
 [Go](go.md#upgrade-readers-first),
@@ -58,25 +63,30 @@ conversations first: [Rust](rust.md#upgrade-readers-first),
 
 The bindings read the switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, in the background. It carries no
-credentials and no query parameters. Each chat reads the switches when it is
-created and keeps the first answer for its lifetime, so a change to a switch
-reaches the chats created after it; chats created while a request is in
-flight, or waiting to be retried, share it. Every switch is off until an
+credentials. Each chat reads the switches when it is created, again once
+`set_identity` gives it a sender, and again 5 minutes after each answer, so
+a change to a switch reaches running chats with no restart and no new chat.
+The sender's request carries its bucket, the last four digits of the user
+id, so a ramp of `v1_send` picks the same senders wherever they run and
+whatever address they send from; before the sender is set, the X API buckets
+the request by its address. Chats that read the same URL share one request,
+so a process with many chats of one sender makes one request every 5
+minutes. Each answer replaces the one before. Every switch is off until an
 answer arrives, so a chat whose `v1_send` switch is on sends v0 first and v1
-from then on. Files encrypted from a v0 build of a message don't open with a
-v1 build of it, so encrypt each file from the payload you send. The request
-never delays or fails a call. One that fails is retried in the background
-while a chat waits for its answer, 1 second later, then after twice the
-previous wait, at most 5 minutes apart and 10 times, so a chat created while
-the X API is briefly out of reach still follows the switch, and an endpoint
-that stays blocked gets a bounded number of requests. Until an answer
-arrives, and for the chat's lifetime if none does, every switch stays off,
-so its sends stay in v0, the format every reader opens. The SDK decides when
-to retry and what an answer means in one place, its Rust core: a binding
-only performs the requests, and a body is read only up to its size limit,
-never whole first. A Rust app, or code that calls the C ABI directly, hands
-the core the answer to a request it made, and to each retry it makes on the
-same schedule, and the core applies the same rules to it:
+from then on, until an answer turns it off. Files encrypted from a v0 build
+of a message don't open with a v1 build of it, so encrypt each file from the
+payload you send. The request never delays or fails a call. One that fails
+is retried in the background while a chat waits for its answer, 1 second
+later, then after twice the previous wait, at most 5 minutes apart, so a
+chat that loses the X API briefly still follows the switch, and an endpoint
+that stays blocked gets one request every 5 minutes. A failure keeps the
+answer a chat has; until one arrives every switch stays off, so its sends
+stay in v0, the format every reader opens. The SDK decides when to read and
+what an answer means in one place, its Rust core: a binding only performs
+the requests, and a body is read only up to its size limit, never whole
+first. A Rust app, or code that calls the C ABI directly, hands the core the
+answer to each request it makes on the same schedule, and the core applies
+the same rules to it:
 [Rust](rust.md#the-feature-switch-request),
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),

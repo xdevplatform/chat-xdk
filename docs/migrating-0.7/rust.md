@@ -116,15 +116,21 @@ once it runs a 0.7 release too, so plan the rollout below before you deploy.
 
 ### Upgrade readers first
 
-0.7.2 sends each message, reply, reaction and edit in one of two formats.
-v0 is the format 0.5.x sends. v1 encrypts each message under its own key,
+0.7.2 sends each message, reply, reaction and edit in one of two formats. v0
+is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
-it at signature version 10. A chat sends v1 once you hand it the X API's
-`v1_send` feature switch, on, and v0 otherwise (see [The feature-switch
-request](#the-feature-switch-request)). While a chat sends v1, its key
-changes, group changes, deletes and read receipts sign at version 10 too, as
-X clients' do; while it sends v0 they sign at version 7, as in 0.5.x, apart
-from a member add that carries a description, which signs at version 8.
+it at signature version 10. A chat sends v1 while the last answer you handed
+it turns the X API's `v1_send` feature switch on, and v0 otherwise (see [The
+feature-switch request](#the-feature-switch-request)). While a chat sends
+v1, its key changes, group changes, deletes and read receipts sign at
+version 10 too, as X clients' do; while it sends v0 they sign at version 7,
+as in 0.5.x, apart from a member add that carries a description, which signs
+at version 8. A conversation-key change never signs below the highest
+version of a key change the chat has signed or verified in that
+conversation, so while it sends v0 it can sign one above 7, which 0.5.x
+readers can't verify. The chat holds that floor in memory, so after a
+restart decrypt a conversation's key changes again before you change its
+key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
 every app that reads your conversations to 0.7.2, Rust ones included,
@@ -141,26 +147,30 @@ There's no code to change: to see which format a send used, read
 
 The language bindings read the X API's feature switches with one anonymous
 request, `GET https://api.x.com/2/chat/features`, when a chat is created,
-and retry it when it fails. The Rust crate never makes the request: a chat
+again once `set_identity` gives it a sender, and again every 5 minutes, and
+retry it when it fails. The Rust crate never makes the request: a chat
 sends v0 until you make it and hand the answer to `set_feature_switches`,
-which `ChatCore` and `Chat` both have. Make the request when you create the
-chat, as the crate's constants say: GET `FEATURES_ENDPOINT` without
-credentials or query parameters, within `FEATURES_TIMEOUT_MS` milliseconds,
-reading at most one byte past `FEATURES_MAX_BODY`:
+which `ChatCore` and `Chat` both have. Make the request once you have called
+`set_identity`, as the crate's constants say: GET the URL
+`feature_switches_url` returns, `FEATURES_ENDPOINT` with the sender's
+bucket, the last four digits of the user id, without credentials, within
+`FEATURES_TIMEOUT_MS` milliseconds, reading at most one byte past
+`FEATURES_MAX_BODY`:
 
 ```rust
 // 0.7.2
-let (status, body) = http_get(FEATURES_ENDPOINT, FEATURES_TIMEOUT_MS, FEATURES_MAX_BODY + 1)?;
+let url = chat.feature_switches_url();
+let (status, body) = http_get(&url, FEATURES_TIMEOUT_MS, FEATURES_MAX_BODY + 1)?;
 chat.set_feature_switches(status, &body);
 ```
 
-A chat keeps the first answer whose status is 200 and whose body is a
-`{"features": {...}}` object no larger than `FEATURES_MAX_BODY`, for its
-lifetime: a later call changes nothing. Any other answer leaves every switch
-off and the chat open to a later call, so retry a request that fails, as the
-bindings retry theirs: 1 second later, then after twice the previous wait,
-at most 5 minutes apart and 10 times. A chat whose requests all fail keeps
-sending v0. Without the call there's no code to change.
+Make it again every `FEATURES_REFRESH_MS` (5 minutes), so a change at the
+X API reaches the running chat. Each answer whose status is 200 and whose
+body is a `{"features": {...}}` object no larger than `FEATURES_MAX_BODY`
+replaces the one before. Any other answer changes nothing, so retry a
+request that fails, as the bindings retry theirs: 1 second later, then
+after twice the previous wait, at most 5 minutes apart. A chat that never
+gets an answer keeps sending v0. Without the call there's no code to change.
 
 ## 1. Symbol index
 
@@ -406,6 +416,9 @@ Code outside the SDK can't build one with a struct literal:
 - Give a `match` on an SDK enum, `SdkError` included, a wildcard arm, and end
   a pattern on a variant with named fields, such as `MessageContent::Edit`,
   in `..`.
+- An enum variant with named fields still builds with a struct literal: an
+  `AttachmentDescriptor::Media` literal lists `plaintext_sha256`, `None` or
+  the base64 SHA-256 of the file's plaintext bytes.
 
 ```rust
 // 0.5.x
@@ -948,6 +961,12 @@ take](#decrypted-events-use-the-names-the-calls-take) shows, and use
 `target_message_id` only to match a v1 edit to the `message_id` you
 deduplicate on.
 
+An edit you build names the edited message the same way: pass its signed
+`message_id` to `EncryptEditParams::with_target_message_id`, which a v1 edit
+built from the conversation id and the target sequence id needs. With
+`target_event`, the SDK takes the id from the event, and a
+`target_message_id` other than it fails with `SdkError::InvalidInput`.
+
 ### A reply preview quotes its message exactly
 
 A received reply that embeds the message it quotes has its preview checked
@@ -962,7 +981,9 @@ start of the quoted text, and entities among the quoted message's.
 hold them. In v1, X clients check a reply against the message it names and
 mark a reply that names none invalid, so a reply built from the explicit
 preview fields names the quoted message's `message_id` as
-`reply_to_message_id`.
+`reply_to_message_id`. With `reply_to_event`, the SDK takes the id from the
+event, and a `reply_to_message_id` other than it fails with
+`SdkError::InvalidInput`.
 
 A reply carries no key change. Recipients open the quoted message with their
 own conversation keys, or with the message key a reply carries for a v1
@@ -1694,11 +1715,12 @@ grep -rn "target_message_id" --include='*.rs' .
 ```
 
 Every `target_message_id` the second search finds should read a v1 edit's
-signed message id; rename the rest to `target_message_sequence_id`. Each
-`encrypt_stream` and `decrypt_stream` the first finds is a message's file or
-a file under a key you hold, and [Encrypt a file under a key you
-hold](#encrypt-a-file-under-a-key-you-hold) says which call each moves to.
-The compiler reports the rest of the index once the dependency is 0.7.2.
+signed message id or set it on an edit you build; rename the rest to
+`target_message_sequence_id`. Each `encrypt_stream` and `decrypt_stream` the
+first finds is a message's file or a file under a key you hold, and [Encrypt
+a file under a key you hold](#encrypt-a-file-under-a-key-you-hold) says
+which call each moves to. The compiler reports the rest of the index once
+the dependency is 0.7.2.
 
 ### Run a round trip
 

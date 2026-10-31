@@ -4,11 +4,11 @@ using System.Text.Json.Serialization;
 namespace ChatXdk
 {
     /// <summary>
-    /// Reads a chat's feature switches (<c>GET /2/chat/features</c>) when the chat is created.
-    /// The native core decides what to fetch, when to retry and what an answer means; this
-    /// class performs the GET, and each retry the core hands back, with
-    /// <see cref="HttpClient"/> on the thread pool and hands the status and body back. Nothing
-    /// here is API.
+    /// Reads a chat's feature switches (<c>GET /2/chat/features</c>) when the chat is created,
+    /// when its identity is set, and again after each answer. The native core decides what to
+    /// fetch, when to fetch it again and what an answer means; this class performs each GET it
+    /// hands out with <see cref="HttpClient"/> on the thread pool and reports the status and
+    /// body to it. Nothing here is API.
     /// </summary>
     internal static class FeatureFetch
     {
@@ -21,8 +21,8 @@ namespace ChatXdk
             };
 
         /// <summary>
-        /// Start <paramref name="chat"/>'s read of the feature switches: nothing to do when it
-        /// takes the answer of a GET already in flight.
+        /// Start <paramref name="chat"/>'s reads of the feature switches for its identity:
+        /// perform the GET the core hands out, if any, and then each GET the core hands back.
         /// </summary>
         internal static void Start(Chat chat)
         {
@@ -49,8 +49,8 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Perform <paramref name="fetch"/> after its delay, then the retry each result returns,
-        /// until none does.
+        /// Perform <paramref name="fetch"/> after its delay, then the refresh or retry each
+        /// result returns, until none does.
         /// </summary>
         private static async Task PerformAsync(Fetch? fetch)
         {
@@ -94,7 +94,10 @@ namespace ChatXdk
             }
         }
 
-        /// <summary>Report the result of the GET <paramref name="id"/>; returns the retry to perform, if any.</summary>
+        /// <summary>
+        /// Report the result of the GET <paramref name="id"/>; returns the next GET to perform, a
+        /// refresh or a retry, if any.
+        /// </summary>
         private static unsafe Fetch? Complete(ulong id, int status, byte[] body)
         {
             string json;
