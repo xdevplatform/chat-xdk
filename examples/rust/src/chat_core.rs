@@ -95,8 +95,16 @@ impl ChatCore {
         }
     }
 
-    /// Take the answer to `GET /2/chat/features`: its status and body. The
-    /// switches decide whether sends are v0 or v1.
+    /// The URL of the X API's feature switches: with the bucket of this
+    /// bot's sender once [`ChatCore::set_identity`] has run, the bare
+    /// endpoint before.
+    pub fn feature_switches_url(&self) -> String {
+        self.inner.feature_switches_url()
+    }
+
+    /// Take the answer to `GET` [`ChatCore::feature_switches_url`]: its status
+    /// and body. The switches decide whether sends are v0 or v1; each answer
+    /// replaces the one before.
     pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
         self.inner.set_feature_switches(status, body);
     }

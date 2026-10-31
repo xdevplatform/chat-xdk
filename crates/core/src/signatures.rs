@@ -7,31 +7,31 @@ use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{KeypairPurpose, XChatPrivateKey};
 use crate::error::SdkError;
 use crate::protocol::serialization::base64_encode;
+use crate::thrift::event::{MessageEvent, MessageEventDetail};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 
 /// [`SIGNATURE_VERSION`] as the integer used in verification.
 pub const CURRENT_SIGNATURE_VERSION: i32 = 7;
 
-/// Signature version of v0 sends and of signed actions other than a group
-/// member remove: conversation-key changes, the other group changes, deletes,
-/// and read receipts. A member remove signs at
-/// [`MEMBER_REMOVE_SIGNATURE_VERSION`] so the conversation-key version is part
-/// of the payload, and a member add that carries a description at
-/// [`MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION`]. v1 sends sign at version 10.
+/// Signature version of v0 sends, and of every signed action while sends
+/// are v0 (conversation-key changes, group and conversation changes,
+/// deletes and read receipts), apart from a member add that carries a
+/// description, which signs at version 8. While sends are v1, sends and
+/// signed actions sign at version 10. Either way, a key change in a
+/// conversation where the chat signed or verified one at a higher version
+/// signs at that version.
 pub const SIGNATURE_VERSION: &str = "7";
 
-/// Signature version of a group member remove. From this version the signed
-/// payload includes the conversation-key version (`null` when the remove does
-/// not name one).
-pub(crate) const MEMBER_REMOVE_SIGNATURE_VERSION: i32 = 11;
-
-/// Signature version of a group member add that carries a description: the
-/// first version whose member-add payload covers `current_description`.
+/// Signature version of a group member add that carries a description while
+/// sends are v0: the first version whose member-add payload covers
+/// `current_description`.
 pub(crate) const MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION: i32 = 8;
 
-/// Signature version of v1 sends: the first version whose payload signs
-/// `contents_encryption_version`, so the choice of key for the contents is
-/// covered by the signature. v0 sends sign at [`SIGNATURE_VERSION`].
+/// Signature version of v1 sends, and of every signed action while sends are
+/// v1 apart from a key change raised above it (see [`SIGNATURE_VERSION`]):
+/// the first version whose payload signs `contents_encryption_version`,
+/// so the choice of key for the contents is covered by the signature. v0
+/// sends sign at [`SIGNATURE_VERSION`].
 pub(crate) const MESSAGE_SIGNATURE_VERSION: i32 = 10;
 
 /// Minimum signature version accepted on verification. v1 payloads omit
@@ -157,47 +157,6 @@ pub fn build_group_member_add_signature(
     current_screen_capture_blocking_enabled: Option<bool>,
     conversation_key_version: &str,
 ) -> Result<ActionSignature, SdkError> {
-    sign_group_member_add(
-        signing_key,
-        public_key_version,
-        message_id,
-        sender_id,
-        conversation_id,
-        new_member_ids,
-        current_member_ids,
-        current_admin_ids,
-        current_title,
-        current_avatar_url,
-        current_ttl_msec,
-        current_screen_capture_blocking_enabled,
-        conversation_key_version,
-        None,
-    )
-}
-
-/// Sign a GroupMemberAdd as [`build_group_member_add_signature`] does, also
-/// covering `current_description` when it is set.
-///
-/// A description is first part of the payload at signature version 8, which
-/// appends it after the screen-capture slot, so a member add that carries one
-/// signs at 8 and any other at 7.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn sign_group_member_add(
-    signing_key: &XChatPrivateKey,
-    public_key_version: &str,
-    message_id: &str,
-    sender_id: &str,
-    conversation_id: &str,
-    new_member_ids: &[String],
-    current_member_ids: &[String],
-    current_admin_ids: &[String],
-    current_title: Option<&str>,
-    current_avatar_url: Option<&str>,
-    current_ttl_msec: Option<i64>,
-    current_screen_capture_blocking_enabled: Option<bool>,
-    conversation_key_version: &str,
-    current_description: Option<&str>,
-) -> Result<ActionSignature, SdkError> {
     let mut components: Vec<&str> = vec![
         "GroupChangeEvent.GroupMemberAddChange",
         message_id,
@@ -217,21 +176,7 @@ pub(crate) fn sign_group_member_add(
     components.push(&ttl_str);
     components.push(conversation_key_version);
     components.push(&screen_capture_str);
-
-    let signature_version = match current_description {
-        Some(description) => {
-            components.push(description);
-            MEMBER_ADD_DESCRIPTION_SIGNATURE_VERSION
-        }
-        None => CURRENT_SIGNATURE_VERSION,
-    };
-    sign_action(
-        signing_key,
-        public_key_version,
-        message_id,
-        signature_version,
-        &components,
-    )
+    sign_payload(signing_key, public_key_version, message_id, &components)
 }
 
 /// Build and sign a GroupCreate action signature.
@@ -392,40 +337,6 @@ pub fn build_message_delete_signature(
     sign_payload(signing_key, public_key_version, message_id, &components)
 }
 
-/// Build and sign a MarkConversationRead action signature.
-///
-/// Payload format:
-/// ```text
-/// MarkConversationReadEvent,{msg_id},{sender_id},{conv_id},{seen_until_sequence_id},{seen_at_msec}
-/// ```
-///
-/// The payload is comma-joined with no escaping, so signing fails with a
-/// parse error if any component contains a comma.
-pub(crate) fn build_mark_conversation_read_signature(
-    signing_key: &XChatPrivateKey,
-    public_key_version: &str,
-    message_id: &str,
-    sender_id: &str,
-    conversation_id: &str,
-    seen_until_sequence_id: &str,
-    seen_at_msec: i64,
-) -> Result<ActionSignature, SdkError> {
-    let seen_at = seen_at_msec.to_string();
-    sign_payload(
-        signing_key,
-        public_key_version,
-        message_id,
-        &[
-            "MarkConversationReadEvent",
-            message_id,
-            sender_id,
-            conversation_id,
-            seen_until_sequence_id,
-            &seen_at,
-        ],
-    )
-}
-
 /// Sign a comma-joined payload at [`CURRENT_SIGNATURE_VERSION`] and return an
 /// [`ActionSignature`].
 ///
@@ -438,47 +349,72 @@ fn sign_payload(
     message_id: &str,
     components: &[&str],
 ) -> Result<ActionSignature, SdkError> {
-    sign_action(
-        signing_key,
-        public_key_version,
-        message_id,
-        CURRENT_SIGNATURE_VERSION,
-        components,
-    )
-}
-
-/// Sign a comma-joined payload at `signature_version`.
-///
-/// Versions 9 and above append `,signature_version={n}` to the signed bytes.
-/// The same comma rule as [`sign_payload`] applies to `components`; the
-/// version suffix is added after that check.
-pub(crate) fn sign_action(
-    signing_key: &XChatPrivateKey,
-    public_key_version: &str,
-    message_id: &str,
-    signature_version: i32,
-    components: &[&str],
-) -> Result<ActionSignature, SdkError> {
     if components.iter().any(|c| c.contains(',')) {
         return Err(SdkError::InvalidInput(
             "Signature payload contains comma-separated component".into(),
         ));
     }
-    let mut payload = components.join(",");
-    if signature_version >= 9 {
-        payload.push_str(&format!(",signature_version={signature_version}"));
-    }
-
+    let payload = components.join(",");
     Ok(ActionSignature {
         message_id: message_id.to_string(),
         encoded_message_event_detail: String::new(),
-        message_event_signature: MessageEventSignature::sign_at(
+        message_event_signature: MessageEventSignature::sign(
             signing_key,
             public_key_version,
             payload.as_bytes(),
-            &signature_version.to_string(),
         )?,
         signature_payload: payload,
+    })
+}
+
+/// Sign `detail`, the event of the action `message_id` that `sender_id`
+/// sends in `conversation_id`, at `signature_version`, and return it as an
+/// [`ActionSignature`] carrying the encoded event.
+///
+/// The signed bytes are the payload recipients rebuild from the event
+/// (`crate::core::build_event_signature_payload`), in the layout of
+/// `signature_version`, so what is signed is what they verify.
+/// `plaintext_ckey_b64` is the conversation key a key change carries, which
+/// its payload embeds; that payload is never kept. The comma rule of
+/// [`sign_payload`] applies to every component.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sign_event(
+    signing_key: &XChatPrivateKey,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    signature_version: i32,
+    detail: MessageEventDetail,
+    plaintext_ckey_b64: Option<&str>,
+) -> Result<ActionSignature, SdkError> {
+    let event = MessageEvent {
+        message_id: Some(message_id.to_string()),
+        sender_id: Some(sender_id.to_string()),
+        conversation_id: Some(conversation_id.to_string()),
+        message_event_signature: Some(crate::thrift::event::MessageEventSignature {
+            signature_version: Some(signature_version.to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let payload = crate::core::build_event_signature_payload(&event, &detail, plaintext_ckey_b64)
+        .ok_or_else(|| {
+        SdkError::InvalidInput("Signature payload contains comma-separated component".into())
+    })?;
+    Ok(ActionSignature {
+        message_id: message_id.to_string(),
+        encoded_message_event_detail: base64_encode(&crate::pipeline::serialize_thrift(&detail)?),
+        message_event_signature: MessageEventSignature::sign_at(
+            signing_key,
+            public_key_version,
+            &payload,
+            &signature_version.to_string(),
+        )?,
+        signature_payload: match plaintext_ckey_b64 {
+            Some(_) => String::new(),
+            None => String::from_utf8_lossy(&payload).into_owned(),
+        },
     })
 }
 

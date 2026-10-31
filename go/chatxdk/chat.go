@@ -58,7 +58,8 @@ type Chat struct {
 }
 
 // New creates a new Chat SDK instance. It reads the X API's feature switches
-// once, in the background.
+// in the background, retries a read that fails, and reads them again five
+// minutes after each answer, so a change reaches a running Chat.
 //
 // The returned Chat must be freed with Close() when no longer needed.
 func New() *Chat {
@@ -129,14 +130,19 @@ func (c *Chat) SetRejectUnverified(reject bool) {
 // SigningKeyVersion empty. A resolved default and an explicitly passed value
 // produce byte-identical signed output for the same logical inputs. The
 // signing-key version is the public_key_version returned when the keys were
-// registered.
+// registered. The Chat then reads its feature switches for this sender's
+// bucket, the last four digits of the user ID.
 func (c *Chat) SetIdentity(params SetIdentityParams) error {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	return ffiSetIdentity(c.h, string(j))
+	if err := ffiSetIdentity(c.h, string(j)); err != nil {
+		return err
+	}
+	c.startFeatures()
+	return nil
 }
 
 // SetCacheKeys enables or disables the conversation-key cache (off by
@@ -375,7 +381,7 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 //
 // PublicKeys are the identity keys of the members who stay. The result
 // carries the new key, those members' participant keys, and the action
-// signatures: the removal (bound to the new key version), a title and a
+// signatures: the removal (which names the new key version), a title and a
 // description change for each one the params set, re-encrypted under the new
 // key, and the key change.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {

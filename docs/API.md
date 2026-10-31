@@ -20,6 +20,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 | 2 | **update_config** | `update_config(&self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 | 3a | **set_feature_switches** | `set_feature_switches(&self, status: u16, body: &[u8])` | — | — | — | — | — |
+| 3b | **feature_switches_url** | `feature_switches_url(&self) → String` | — | — | — | — | — |
 
 A chat takes its Juicebox config when it's created, in every binding, and
 `update_config` sets or replaces it: on first boot, when the account has no
@@ -40,17 +41,23 @@ error in every binding, and so does Rust's
 
 Rust's `set_feature_switches`, and the C ABI's
 `chat_xdk_set_feature_switches(chat, status, body, body_len)`, hand a chat
-the answer to `GET /2/chat/features` (`FEATURES_ENDPOINT`,
-`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`), which the bindings read
-themselves when a chat is created (see
-[ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)): make the request once,
-when you create the chat, without credentials or query parameters, within
-`FEATURES_TIMEOUT_MS` (`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one
-byte past `FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), and pass its
-status, 0 when no response arrived, and body. Sends stay v0 until an answer
-turns `v1_send` on; a chat takes one answer for its lifetime, and a status
-other than 200 or a body that is too long or isn't a features object leaves
-every switch off.
+the answer to `GET /2/chat/features`, which the bindings read themselves
+(see [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)). Request the URL
+`feature_switches_url` (`chat_xdk_feature_switches_url`) returns once you
+have called `set_identity`: `FEATURES_ENDPOINT`
+(`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`) with the sender's bucket, the
+last four digits of the user id, so every chat of one sender gets the same
+answer. Make the request without credentials, within `FEATURES_TIMEOUT_MS`
+(`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one byte past
+`FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), pass its status, 0 when
+no response arrived, and body, and request it again every
+`FEATURES_REFRESH_MS` (`CHAT_XDK_FEATURES_REFRESH_MS`, 5 minutes) so a
+change reaches the running chat. Sends are v0 until an answer turns
+`v1_send` on, then v1, and v0 again if a later answer turns it off. Each
+answer that is a 200 with a features object no longer than the limit
+replaces the one before; any other status or body changes nothing, so retry
+a request that fails, as the bindings do: 1 second later, then after twice
+the previous wait, at most 5 minutes apart.
 
 The config JSON accepted by the constructor and `update_config` supports
 three shapes, checked in this order:
@@ -135,7 +142,9 @@ Every method with optional `sender_id` / `signing_key_version` fields — the
 from it. An explicit per-call value always overrides, and an omitted value and
 its explicit equivalent produce byte-identical signed output for the same
 logical inputs. Calling a signing method with neither a per-call value nor a
-session identity is an error.
+session identity is an error. After `set_identity`, the bindings read the
+feature switches again for the sender's bucket, the last four digits of the
+user id (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)).
 
 `decrypt_events`
 reports as `latest_version` (the version to encrypt with) the newest key
@@ -319,6 +328,21 @@ Two hygiene notes:
   `newAvatarUrl` containing a comma is rejected at signing time (the signed
   payload is comma-joined with no escaping, so it could never verify).
 
+**Signature versions follow the send format.** A chat signs every action at
+signature version 7 while it sends v0 and at version 10 while it sends v1,
+as X clients sign each event at the version their messages sign at; while it
+sends v0, a member add that carries a description signs at version 8. A
+conversation-key change never signs below the highest version of a key
+change the chat has signed or verified in that conversation, which X
+clients enforcing a key-change floor require, so decrypt a conversation's
+key changes (`meta.conversation_key_events`) before you change its key. The
+chat holds that floor in memory for its lifetime, so decrypt them again
+after a restart. The
+payloads below are the version-7 layouts. At version 10 each also carries
+the components versions 8 through 10 add (a member add's description slot, a
+group create's `group_type` and `ttl_msec`) and ends with
+`,signature_version=10` ([CRYPTO.md](CRYPTO.md#verifying-newer-versions)).
+
 ---
 
 #### prepare_conversation_key_change
@@ -480,9 +504,10 @@ plaintext, and the call encrypts each under the new key, signs the
 ciphertext in the member add, and returns it, base64, as `encrypted_title`
 and `encrypted_description` (`encryptedTitle`, `encryptedDescription` in
 JS), absent when unset. Send `encrypted_title` as the add-members request's
-`encrypted_title`; the description travels in the signed member add. An add
-that carries a description signs at signature version 8, the first whose
-member-add payload covers it; any other add signs at version 7.
+`encrypted_title`; the description travels in the signed member add. While
+the chat sends v0, an add that carries a description signs at signature
+version 8, the first whose member-add payload covers it, and any other add
+at version 7; while it sends v1, every add signs at version 10.
 
 ```python
 prepared = chat.prepare_group_members_change(
@@ -533,8 +558,8 @@ change](#prepare_group_avatar_change) naming the new key version.
 The call generates a new conversation key, encrypts it for the members who
 stay, and returns a `PreparedConversationChange`: the new key and version,
 the participant keys, and `action_signatures` in request order — the
-removal, bound to the new key version; a title and a description change for
-each one passed, signed as
+removal, which names the new key version; a title and a description change
+for each one passed, signed as
 [`prepare_group_title_change`](#prepare_group_title_change) and
 [`prepare_group_description_change`](#prepare_group_description_change) sign
 them and marked as key-rotation re-encryptions (`for_key_rotation`), which
@@ -585,14 +610,18 @@ await api.post(`/2/chat/conversations/${conversationId}/members/remove`, {
 });
 ```
 
-The removal is signed at signature version 11:
+The removal signs the removed members. Its event also names the new key
+version, which neither version 7 nor version 10 signs; the key change
+signs it:
 
 ```text
-GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version},signature_version=11
+GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...}
 ```
 
 The key change is the same `ConversationKeyChangeEvent` payload
-`prepare_conversation_key_change` signs, at signature version 7.
+`prepare_conversation_key_change` signs, at the removal's version, or higher
+when the chat has signed or verified a key change at a higher version in
+that conversation.
 
 The result does not carry a ratchet tree (`base64_encoded_key_rotation`) or
 a rewrapped pin-key bundle (`rotated_pmk_bundle`).
@@ -605,12 +634,13 @@ Sign leaving a group. Leave is a removal of the sender and does not rotate
 the conversation key. `promote_admin_id`, when set, is the member who becomes
 an admin — the caller chooses whom to promote.
 
-`action_signatures` are the removal (version 11, with `conversation_key_version`
-or `null`), then a `GroupAdminAddChange` when `promote_admin_id` is set, then
-a `ConversationDeleteEvent` with no further fields. Returns a
-`PreparedAction`.
+`action_signatures` are the removal, whose event names
+`conversation_key_version` when it is passed, then a `GroupAdminAddChange`
+when `promote_admin_id` is set, then a `ConversationDeleteEvent` with no
+further fields. Returns a `PreparedAction`.
 
 ```text
+GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{sender_id}
 GroupChangeEvent.GroupAdminAddChange,{message_id},{sender_id},{conversation_id},{promote_admin_id}
 ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}
 ```
@@ -634,7 +664,7 @@ identity.
 |---|---|
 | `encrypted_value` | The title encrypted under the conversation key, base64: the value the request sends as the title |
 | `conversation_key_version` | The version of the key it is encrypted under |
-| `action_signatures` | One signature, at version 7, over the key version and the encrypted title |
+| `action_signatures` | One signature over the key version and the encrypted title |
 
 ```text
 GroupChangeEvent.GroupTitleChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{encrypted_value}
@@ -665,8 +695,8 @@ group's media, and passes the image's media URL. Required:
 `conversation_id`; `new_avatar_url`, that media URL, signed and sent as is;
 and `conversation_key_version`, the version of the key the image is
 encrypted under. The `sender_id` / `signing_key_version` overrides resolve
-from the session identity. Returns a `PreparedAction`: one signature, at
-version 7, over the key version and the URL.
+from the session identity. Returns a `PreparedAction`: one signature over
+the key version and the URL.
 
 ```text
 GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{new_avatar_url}
@@ -723,7 +753,7 @@ A recipient's `decrypt_event` returns it as `DescriptionChanged`, its
 #### prepare_group_admins_add
 
 Sign adding group admins. `user_ids` are the admins being added, in the
-order they are signed. Returns one `PreparedAction` signature at version 7:
+order they are signed. Returns one `PreparedAction` signature, over:
 
 ```text
 GroupChangeEvent.GroupAdminAddChange,{message_id},{sender_id},{conversation_id},{user_ids...}
@@ -746,7 +776,7 @@ GroupChangeEvent.GroupAdminRemoveChange,{message_id},{sender_id},{conversation_i
 Sign enabling a group invite. `invite_url` is required. An omitted
 `expires_at_msec` or `affiliate_id` — and a negative expiry or an empty
 affiliate id — signs the literal `null`. Returns one `PreparedAction`
-signature at version 7:
+signature, over:
 
 ```text
 GroupChangeEvent.GroupInviteEnable,{message_id},{sender_id},{conversation_id},{invite_url},{expires_at_msec|null},{affiliate_id|null}
@@ -757,8 +787,7 @@ GroupChangeEvent.GroupInviteEnable,{message_id},{sender_id},{conversation_id},{i
 #### prepare_group_invite_disable
 
 Sign disabling a group invite. `disabled_by` is the member turning it off
-and defaults to the sender. Returns one `PreparedAction` signature at
-version 7:
+and defaults to the sender. Returns one `PreparedAction` signature, over:
 
 ```text
 GroupChangeEvent.GroupInviteDisable,{message_id},{sender_id},{conversation_id},{disabled_by}
@@ -770,7 +799,7 @@ GroupChangeEvent.GroupInviteDisable,{message_id},{sender_id},{conversation_id},{
 
 Sign a request to join a group. `requesting_user_id` defaults to the sender.
 An invite token the request also carries is not part of the signature.
-Returns one `PreparedAction` signature at version 7:
+Returns one `PreparedAction` signature, over:
 
 ```text
 GroupChangeEvent.GroupJoinRequest,{message_id},{sender_id},{conversation_id},{requesting_user_id}
@@ -781,7 +810,7 @@ GroupChangeEvent.GroupJoinRequest,{message_id},{sender_id},{conversation_id},{re
 #### prepare_group_join_reject
 
 Sign rejecting join requests. `user_ids` are the rejected users, in the
-order they are signed. Returns one `PreparedAction` signature at version 7:
+order they are signed. Returns one `PreparedAction` signature, over:
 
 ```text
 GroupChangeEvent.GroupJoinReject,{message_id},{sender_id},{conversation_id},{user_ids...}
@@ -792,7 +821,7 @@ GroupChangeEvent.GroupJoinReject,{message_id},{sender_id},{conversation_id},{use
 #### prepare_message_ttl_change
 
 Sign a message-TTL change. The signature covers `ttl_msec` only. A negative
-TTL is rejected. Returns one `PreparedAction` signature at version 7:
+TTL is rejected. Returns one `PreparedAction` signature, over:
 
 ```text
 ConversationMetadataChangeEvent.MessageDurationChange,{message_id},{sender_id},{conversation_id},{ttl_msec}
@@ -803,8 +832,7 @@ ConversationMetadataChangeEvent.MessageDurationChange,{message_id},{sender_id},{
 #### prepare_message_ttl_remove
 
 Sign clearing a conversation's message TTL. The signature has no fields
-after the conversation id. Returns one `PreparedAction` signature at
-version 7:
+after the conversation id. Returns one `PreparedAction` signature, over:
 
 ```text
 ConversationMetadataChangeEvent.MessageDurationRemove,{message_id},{sender_id},{conversation_id}
@@ -825,7 +853,7 @@ Sign one screen-capture setting. `change` is a `ScreenCaptureChange`:
 
 Blocking names are the events X clients sign. Detection names are the event
 names this SDK's verifier reconstructs. Each signature has no fields after
-the conversation id and is signed at version 7. Returns one `PreparedAction`.
+the conversation id. Returns one `PreparedAction`.
 
 ```text
 ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{message_id},{sender_id},{conversation_id}
@@ -1267,7 +1295,12 @@ field (see [CRYPTO.md — Message Keys](CRYPTO.md#message-keys)). Files follow
 their message's format. The sender id must be the sender's numeric user id
 and the conversation key version an integer, as the key-change event carries
 it; anything else is rejected, since v1 recipients derive the key from the
-numeric id and look the key up by the version.
+numeric id and look the key up by the version. As in X clients' v1 sends, a
+v1 send's encoded signature lists the signing keys the message relies on, by
+user id and key version (its sender's and, for a reply, those of the quoted
+message's sender and of its edit's), a v1 reaction sets `should_notify` only
+in a one-to-one conversation, and a v1 reaction removal or edit sets it to
+false.
 
 **Every user id is a string of digits** in every binding: the `set_identity`
 user id, `sender_id`, `reply_to_sender_id`, the `user_id` of each public key,
@@ -1284,22 +1317,21 @@ integer written without a sign or leading zeros, and anything else fails
 with an error naming the field.
 
 The format follows the X API's `v1_send` feature switch, which the JS,
-Python, Go, .NET and JVM bindings read in the background once, when a chat
-is created (see
-[ARCHITECTURE.md — Feature Switches](ARCHITECTURE.md#feature-switches)).
-Every switch is off until the answer arrives, so a chat whose switch is on
-sends v0 first and v1 from then on. Files encrypted from a v0 build of a
+Python, Go, .NET and JVM bindings read in the background when a chat is
+created, again once `set_identity` gives it a sender, and again every 5
+minutes, retrying a read that fails (see [ARCHITECTURE.md — Feature
+Switches](ARCHITECTURE.md#feature-switches)). Every switch is off until an
+answer arrives, so a chat whose switch is on sends v0 first and v1 from then
+on, until a later answer turns it off. Files encrypted from a v0 build of a
 message don't open with a v1 build of it, so encrypt each file from the
-payload you send.
-**The Rust crate and the C ABI never fetch it:** a Rust app or a C caller
-makes the request and hands a chat the answer, with `set_feature_switches`
-or `chat_xdk_set_feature_switches` (see
-[Constructor & Config](#constructor--config)), and a chat without one sends
-v0. They read v1 sends like every binding. The fetch logs nothing; to see
-which format a send used, read the payload's
-`signature_info.signature_version`: `"7"` for v0, `"10"` for v1. A 0.5.x
-reader rejects a v1 send as a signature verification failure, so in its logs
-v1 sends look like forged messages.
+payload you send. **The Rust crate and the C ABI never fetch it:** a Rust
+app or a C caller makes the request and hands a chat the answer, with
+`set_feature_switches` or `chat_xdk_set_feature_switches` (see [Constructor
+& Config](#constructor--config)), and a chat without one sends v0. They read
+v1 sends like every binding. The fetch logs nothing; to see which format a
+send used, read the payload's `signature_info.signature_version`: `"7"` for
+v0, `"10"` for v1. A 0.5.x reader rejects a v1 send as a signature
+verification failure, so in its logs v1 sends look like forged messages.
 
 The `entities` parameter shape is split by binding: **Rust, .NET, and JVM**
 take structured `EntityDescriptor` objects (`{ start, end, entity_type }`),
@@ -1327,19 +1359,29 @@ format already carries them.
 
 **Replies are event-based.** The preferred form of `EncryptReplyParams` adds
 `reply_to_event` — the base64 raw signed event being replied to. The SDK
-derives the reply preview (sequence id, sender, text, entities, attachments)
-from it and embeds the raw event in the outgoing message so recipients can
+derives the reply preview (sequence id, message id, sender, text, entities,
+attachments) from it and embeds the raw event in the outgoing message so
+recipients can
 validate the preview (see
 [CRYPTO.md — Reply preview validation](CRYPTO.md#reply-preview-validation)).
 Two companions cover the edge cases: `reply_to_edit_event` carries the raw
 edit event when the original was edited, and `reply_to_ckces` carries the raw
 key-change events needed to decrypt an original that was encrypted under a
-different key version than this reply. When the original or its edit is
-encrypted under a per-message key, the reply also carries that key so
-recipients can open it. The explicit preview fields —
-`reply_to_sequence_id`, `reply_to_sender_id`, `reply_to_text`,
-`reply_to_entities`, `reply_to_attachments` — remain as overrides for callers
-that no longer hold the raw event.
+different key version than this reply; the reply doesn't embed them, since
+recipients open the original with their own keys. When the original or its
+edit is encrypted under a per-message key, the reply also carries that key
+so recipients can open it. The explicit preview fields —
+`reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
+`reply_to_text`, `reply_to_entities`, `reply_to_attachments` — remain as
+overrides for callers that no longer hold the raw event. A reply built from
+them must set `reply_to_message_id`, the original's signed message id
+(`replyToMessageId` in JS, `ReplyToMessageID` in Go, `replyToMessageId` on
+the JVM, `ReplyToMessageId` in .NET): recipients treat a v1 reply that
+names no original as invalid, and validate one that names it against their
+own copy of the original. With `reply_to_event`,
+the id comes from the event, and a `reply_to_message_id` other than it fails
+with an invalid-input error: recipients reject a preview whose id is not
+its embedded original's.
 
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
@@ -1353,9 +1395,14 @@ instead.
 as a reaction: `target_event` (the base64 raw event of the message being
 edited) or the explicit `conversation_id` / `target_message_sequence_id`
 pair. Optional `entities` describe rich text in the replacement text;
-omitting them clears any entities the original carried. With
-`target_event`, the edit also names the original's signed message id, which
-receivers need to tie an edit to a message encrypted under a per-message key.
+omitting them clears any entities the original carried. A v1 edit also
+names the original's signed message id, which receivers need to tie an edit
+to a message encrypted under a per-message key: the SDK derives it from
+`target_event`, and an edit built from the explicit pair sets it as
+`target_message_id` (`targetMessageId` in JS and on the JVM,
+`TargetMessageID` in Go, `TargetMessageId` in .NET). With `target_event`, a
+`target_message_id` other than the id the event carries fails with an
+invalid-input error. A v0 edit names none.
 The edit is encrypted and signed like a regular message (the identity/key
 overrides above apply) and returns a `SendPayload` with its own fresh
 `message_id`.
@@ -2196,6 +2243,7 @@ let params = EncryptMessageParams::new(conversation_id, "a photo").with_attachme
         filename: "photo.jpg".to_string(),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     },
 ]);
 let photo_message = chat.encrypt_message(&params)?;
@@ -2627,7 +2675,7 @@ the snake_case keys below).
 
 ```typescript
 type AttachmentDescriptor =
-  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number }
+  | { attachment_type: 'media'; media_hash_key: string; width: number; height: number; filesize_bytes: number; filename: string; media_type?: number; duration_millis?: number; plaintext_sha256?: string | null }
   | { attachment_type: 'url'; url: string; display_title?: string; banner_image?: UrlAttachmentImageDescriptor; favicon_image?: UrlAttachmentImageDescriptor }
   | { attachment_type: 'post'; rest_id?: string; post_url?: string };
 
@@ -2653,6 +2701,47 @@ fidelity); a negative one, on an image or a media attachment, fails the same
 way. So do a `url` attachment with an empty `url` (`a URL card's url is
 empty: pass the link the card shows`) and a `post` attachment with neither
 `rest_id` nor `post_url`.
+
+**File hashes.** A `media` attachment's optional `plaintext_sha256` is the
+base64 SHA-256 of the file's plaintext bytes, as X clients send it. The
+message carries and signs it, and the message is built before its files are
+encrypted, so hash the file yourself before you encrypt the message.
+Recipients read it back as the decrypted attachment's `plaintext_sha256`
+(`plaintextSha256` in JS) to check the file they decrypt. One that is not the
+base64 of 32 bytes fails the send with an invalid-input error:
+`media_hash_key 'photo' has plaintext_sha256 '…': pass the base64 SHA-256 of
+the file's plaintext bytes (32 bytes)`.
+
+```python
+# Python
+digest = base64.b64encode(hashlib.sha256(photo).digest()).decode()
+attachment = {"attachment_type": "media", "media_hash_key": key, "width": 640, "height": 480,
+              "filesize_bytes": encrypted_file_size(len(photo)), "filename": "photo.jpg",
+              "media_type": 1, "plaintext_sha256": digest}
+```
+
+```go
+// Go
+sum := sha256.Sum256(photo)
+hash := base64.StdEncoding.EncodeToString(sum[:])
+attachment.PlaintextSHA256 = &hash
+```
+
+```java
+// JVM
+String hash = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(photo));
+AttachmentDescriptor.media(key, 640, 480, encryptedSize, "photo.jpg", 1, null, hash);
+```
+
+```csharp
+// .NET
+var hash = Convert.ToBase64String(SHA256.HashData(photo));
+AttachmentDescriptor.Media(key, 640, 480, encryptedSize, "photo.jpg", 1, null, hash);
+```
+
+In Rust the field is `plaintext_sha256: Option<String>` on
+`AttachmentDescriptor::Media`, and in JS `plaintext_sha256` on the
+attachment object.
 
 **URL cards ("clickable images").** A `url` attachment with only a `url`
 renders as a bare link on some clients: clients only auto-fetch missing card
@@ -2951,7 +3040,7 @@ Parsed from decrypted message content. Uses `attachmentType` (JS) / `attachment_
 ```typescript
 // JS/WASM
 type AttachmentInfo =
-  | { attachmentType: 'media'; mediaHashKey?: string; dimensions?: { width?: number; height?: number }; mediaType?: string; durationMillis?: number; filesizeBytes?: number; filename?: string; attachmentId?: string }
+  | { attachmentType: 'media'; mediaHashKey?: string; dimensions?: { width?: number; height?: number }; mediaType?: string; durationMillis?: number; filesizeBytes?: number; filename?: string; attachmentId?: string; plaintextSha256?: string }
   | { attachmentType: 'url'; url?: string; bannerImageMediaHashKey?: string; faviconImageMediaHashKey?: string; displayTitle?: string; attachmentId?: string }
   | { attachmentType: 'post'; restId?: string; postUrl?: string; attachmentId?: string }
   | { attachmentType: 'unifiedCard'; url?: string; attachmentId?: string }

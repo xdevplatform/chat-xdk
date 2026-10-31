@@ -629,6 +629,42 @@ class TestApiShapes(unittest.TestCase):
         self.assertTrue(payload.message_id)
         self.assertTrue(payload.event_b64)
 
+    def test_group_actions_sign_at_version_7_until_v1_send_is_on(self):
+        from chat_xdk import GroupLeaveParams
+        from features_support import FeatureServer, reading, wait_for_v1
+
+        server = FeatureServer()
+        server.delay = 0.5
+        self.addCleanup(server.close)
+        chat, _ = self._unlocked_chat(reading(server.url))
+
+        def leave():
+            return chat.prepare_group_leave(
+                GroupLeaveParams("g100", sender_id="1001", signing_key_version="1")
+            )["action_signatures"]
+
+        versions = [s["message_event_signature"]["signature_version"] for s in leave()]
+        self.assertEqual(versions, ["7", "7"])
+        wait_for_v1(chat, sender_id="1001", signing_key_version="1")
+        removal, delete = leave()
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "10")
+        self.assertTrue(
+            _signs(
+                chat,
+                removal,
+                f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},1001,g100,"
+                "1001,signature_version=10",
+            )
+        )
+        self.assertEqual(delete["message_event_signature"]["signature_version"], "10")
+        self.assertTrue(
+            _signs(
+                chat,
+                delete,
+                f"ConversationDeleteEvent,{delete['message_id']},1001,g100,signature_version=10",
+            )
+        )
+
     def test_encrypt_message_key_without_version_rejected(self):
         from chat_xdk import EncryptMessageParams
 
@@ -1161,26 +1197,25 @@ class TestApiShapes(unittest.TestCase):
             GroupMembersRemoveParams(remaining, "g100", ["910007"], title="Board", **ident)
         )
         self.assertEqual(len(with_title["action_signatures"]), 3)
-        version = with_title["conversation_key_version"]
         removal, title = with_title["action_signatures"][:2]
         self.assertTrue(
             _signs(
                 chat,
                 removal,
                 f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
-                f"910007,{version},signature_version=11",
+                "910007",
             )
         )
         self.assertEqual(title["message_event_signature"]["signature_version"], "7")
         self.assertTrue(title["encoded_message_event_detail"])
         removal = rotated["action_signatures"][0]
-        self.assertEqual(removal["message_event_signature"]["signature_version"], "11")
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "7")
         self.assertTrue(
             _signs(
                 chat,
                 removal,
                 f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
-                f"910007,{rotated['conversation_key_version']},signature_version=11",
+                "910007",
             )
         )
         with self.assertRaises(ValueError) as raised:
@@ -1197,12 +1232,13 @@ class TestApiShapes(unittest.TestCase):
         )
         self.assertEqual(len(left["action_signatures"]), 3)
         removal, promote, delete = left["action_signatures"]
+        self.assertEqual(removal["message_event_signature"]["signature_version"], "7")
         self.assertTrue(
             _signs(
                 chat,
                 removal,
                 f"GroupChangeEvent.GroupMemberRemoveChange,{removal['message_id']},910002,g100,"
-                "910002,7,signature_version=11",
+                "910002",
             )
         )
         self.assertTrue(

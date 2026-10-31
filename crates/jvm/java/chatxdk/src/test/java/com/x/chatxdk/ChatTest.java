@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -769,10 +770,10 @@ class ChatTest {
             assertEquals(32, rotated.conversationKey.length);
             assertEquals(1, rotated.conversationParticipantKeys.size());
             assertEquals(2, rotated.actionSignatures.size());
-            assertEquals("11", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
+            assertEquals("7", rotated.actionSignatures.get(0).messageEventSignature.signatureVersion);
             ActionSignature removed = rotated.actionSignatures.get(0);
             assertTrue(signs(chat, removed, "GroupChangeEvent.GroupMemberRemoveChange," + removed.messageId
-                    + ",111,g100,910007," + rotated.conversationKeyVersion + ",signature_version=11"));
+                    + ",111,g100,910007"));
 
             GroupMembersRemoveParams noKeys =
                     new GroupMembersRemoveParams(List.of(), "g100", List.of("910007"));
@@ -794,8 +795,26 @@ class ChatTest {
             ActionSignature leaving = left.actionSignatures.get(0);
             ActionSignature promoting = left.actionSignatures.get(1);
             ActionSignature deleting = left.actionSignatures.get(2);
+            assertEquals("7", leaving.messageEventSignature.signatureVersion);
             assertTrue(signs(chat, leaving, "GroupChangeEvent.GroupMemberRemoveChange," + leaving.messageId
-                    + ",111,g100,111,7,signature_version=11"));
+                    + ",111,g100,111"));
+
+            try (Chat v1 = FeatureServer.v1Chat()) {
+                v1.importKeys(new ImportKeysParams(chat.exportKeys()));
+                FeatureServer.waitForV1(v1);
+                GroupLeaveParams v1Leave = new GroupLeaveParams("g100");
+                v1Leave.senderId = "111";
+                v1Leave.signingKeyVersion = "1";
+                PreparedAction v1Left = v1.prepareGroupLeave(v1Leave);
+                ActionSignature v1Removal = v1Left.actionSignatures.get(0);
+                ActionSignature v1Delete = v1Left.actionSignatures.get(1);
+                assertEquals("10", v1Removal.messageEventSignature.signatureVersion);
+                assertTrue(signs(v1, v1Removal, "GroupChangeEvent.GroupMemberRemoveChange," + v1Removal.messageId
+                        + ",111,g100,111,signature_version=10"));
+                assertEquals("10", v1Delete.messageEventSignature.signatureVersion);
+                assertTrue(signs(v1, v1Delete,
+                        "ConversationDeleteEvent," + v1Delete.messageId + ",111,g100,signature_version=10"));
+            }
             assertTrue(signs(chat, promoting,
                     "GroupChangeEvent.GroupAdminAddChange," + promoting.messageId + ",111,g100,910008"));
             assertTrue(signs(chat, deleting, "ConversationDeleteEvent," + deleting.messageId + ",111,g100"));
@@ -1415,11 +1434,98 @@ class ChatTest {
 
     /** The content of a message this chat sent, decrypted and verified. */
     private static JsonNode decryptedContent(Chat chat, JsonNode v, String eventB64) throws Exception {
+        return decryptedEvent(chat, v, eventB64).path("content");
+    }
+
+    /** A message this chat sent, decrypted and verified. */
+    private static JsonNode decryptedEvent(Chat chat, JsonNode v, String eventB64) throws Exception {
         DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys(v));
         params.signingKeys = eventSigningKeys(v);
         JsonNode event = chat.decryptEvent(params);
         assertTrue(event.path("verified").asBoolean());
-        return event.path("content");
+        return event;
+    }
+
+    // A v1 send built without the original event names it through the explicit fields, and a
+    // media attachment carries the SHA-256 of its plaintext file: replyToMessageId,
+    // targetMessageId and plaintextSha256 each read back from the decrypted send.
+    @Test
+    void v1SendsNameTheOriginalAndCarryTheFileHashFromExplicitFields() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = FeatureServer.v1Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            String senderId = v.get("event_sender_id").asText();
+            chat.setIdentity(new SetIdentityParams(senderId, v.get("event_signing_key_version").asText()));
+            FeatureServer.waitForV1(chat);
+            byte[] key = b64(v, "conversation_key_b64");
+            String version = v.get("event_conversation_key_version").asText();
+            String conversationId = v.get("event_conversation_id").asText();
+            String hash = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256")
+                    .digest("the photo's plaintext bytes".getBytes(StandardCharsets.UTF_8)));
+
+            EncryptMessageParams photo = new EncryptMessageParams(conversationId, "a photo");
+            photo.conversationKey = key;
+            photo.conversationKeyVersion = version;
+            photo.attachments = List.of(
+                    AttachmentDescriptor.media("hashed", 4, 3, 64, "hashed.jpg", 1, null, hash),
+                    AttachmentDescriptor.media("unhashed", 4, 3, 64, "unhashed.jpg", 1, null));
+            SendPayload sent = chat.encryptMessage(photo);
+            assertEquals("10", sent.signatureInfo.signatureVersion);
+            JsonNode attachments = decryptedEvent(chat, v, sent.eventB64).path("attachments");
+            assertEquals(hash, attachments.path(0).path("plaintext_sha256").asText());
+            assertTrue(attachments.path(1).path("plaintext_sha256").isNull());
+
+            EncryptReplyParams reply = new EncryptReplyParams(conversationId, "nice", null);
+            reply.conversationKey = key;
+            reply.conversationKeyVersion = version;
+            reply.replyToSequenceId = "100";
+            reply.replyToMessageId = sent.messageId;
+            reply.replyToSenderId = senderId;
+            reply.replyToText = "a photo";
+            JsonNode replied = decryptedContent(chat, v, chat.encryptReply(reply).eventB64);
+            assertEquals(sent.messageId, replied.path("replying_to_preview").path("replying_to_message_id").asText());
+
+            EncryptEditParams edit = new EncryptEditParams(null, "a better photo");
+            edit.conversationId = conversationId;
+            edit.targetMessageSequenceId = "100";
+            edit.targetMessageId = sent.messageId;
+            edit.conversationKey = key;
+            edit.conversationKeyVersion = version;
+            JsonNode edited = decryptedContent(chat, v, chat.encryptEdit(edit).eventB64);
+            assertEquals(sent.messageId, edited.path("target_message_id").asText());
+
+            // With the original's event, an explicit id must be the one it carries.
+            String other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+            EncryptReplyParams mismatchedReply = new EncryptReplyParams(conversationId, "nice", sent.eventB64);
+            mismatchedReply.conversationKey = key;
+            mismatchedReply.conversationKeyVersion = version;
+            mismatchedReply.replyToSequenceId = "100";
+            mismatchedReply.replyToMessageId = other;
+            ChatXdkException replyError =
+                    assertThrows(ChatXdkException.class, () -> chat.encryptReply(mismatchedReply));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, replyError.getKind());
+            assertEquals("reply_to_message_id '" + other + "' is not the message_id '" + sent.messageId
+                    + "' that reply_to_event carries: pass that id or leave reply_to_message_id unset",
+                    replyError.getMessage());
+            EncryptEditParams mismatchedEdit = new EncryptEditParams(sent.eventB64, "a better photo");
+            mismatchedEdit.conversationId = conversationId;
+            mismatchedEdit.targetMessageSequenceId = "100";
+            mismatchedEdit.targetMessageId = other;
+            mismatchedEdit.conversationKey = key;
+            mismatchedEdit.conversationKeyVersion = version;
+            ChatXdkException editError =
+                    assertThrows(ChatXdkException.class, () -> chat.encryptEdit(mismatchedEdit));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, editError.getKind());
+            assertEquals("target_message_id '" + other + "' is not the message_id '" + sent.messageId
+                    + "' that target_event carries: pass that id or leave target_message_id unset",
+                    editError.getMessage());
+
+            photo.attachments = List.of(AttachmentDescriptor.media("hashed", 4, 3, 64, "hashed.jpg", 1, null, "c2hvcnQ="));
+            ChatXdkException error = assertThrows(ChatXdkException.class, () -> chat.encryptMessage(photo));
+            assertEquals(ChatXdkException.Kind.INVALID_INPUT, error.getKind());
+            assertEquals("media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the "
+                    + "file's plaintext bytes (32 bytes)", error.getMessage());
+        }
     }
 
     @Test

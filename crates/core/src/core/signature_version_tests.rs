@@ -1,4 +1,4 @@
-//! Signature versions 8 through 11 on received events.
+//! Signature versions on received events, and the payload layout of each.
 //!
 //! Signed payloads are spelled out in each test for the version it signs at,
 //! so the verifier is checked against the payload layout rather than against
@@ -10,10 +10,11 @@ use super::test_support::{
 use super::*;
 use crate::pipeline::build_message_content;
 use crate::thrift::event::{
-    ConversationKeyChangeEvent, ConversationParticipantKey, GroupChange as ThriftGroupChange,
-    GroupChangeEvent as ThriftGroupChangeEvent, GroupCreate, GroupMemberAddChange,
-    GroupMemberRemoveChange, GroupType, MessageCreateEvent, MessageEvent as ThriftEvent,
-    MessageEventDetail as Detail, MessageEventSignature,
+    ConversationKeyChangeEvent, ConversationParticipantKey, GroupAvatarUrlChange,
+    GroupChange as ThriftGroupChange, GroupChangeEvent as ThriftGroupChangeEvent, GroupCreate,
+    GroupDescriptionChange, GroupMemberAddChange, GroupMemberRemoveChange, GroupTitleChange,
+    GroupType, MessageCreateEvent, MessageEvent as ThriftEvent, MessageEventDetail as Detail,
+    MessageEventSignature,
 };
 
 fn payload_string(event: &ThriftEvent, plaintext_ckey_b64: Option<&str>) -> String {
@@ -188,19 +189,28 @@ fn a_version_above_eleven_is_rejected() {
 }
 
 #[test]
-fn a_v7_message_signed_over_a_non_integer_key_version_still_verifies() {
+fn a_message_key_version_signs_as_its_integer_value_at_every_version() {
+    let prefix = format!(
+        "MessageCreateEvent,{},{},{}",
+        KAT_MESSAGE_ID, KAT_SENDER, CONVERSATION
+    );
+    for version in [2, 5, 7, 8] {
+        for (carried, signed) in [("5", "5"), ("005", "5"), ("v1", "null"), ("", "null")] {
+            assert_eq!(
+                payload_string(&kat_message_event(version, carried, None), None),
+                format!("{prefix},{signed},SGVsbG8"),
+                "v{version} key version {carried:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_v7_message_with_a_non_integer_key_version_verifies_only_over_null() {
     let author = Party::new("1001");
     let ckey = key(9);
-    let event = message_event(
-        &author,
-        "m-1",
-        "100",
-        "v1",
-        None,
-        7,
-        &ckey,
-        &build_message_content("signed at v7", None, None, None).unwrap(),
-    );
+    let plaintext = build_message_content("signed at v7", None, None, None).unwrap();
+    let event = message_event(&author, "m-1", "100", "v1", None, 7, &ckey, &plaintext);
     let message = decrypt_message(
         &ChatCore::new(),
         &event,
@@ -208,7 +218,153 @@ fn a_v7_message_signed_over_a_non_integer_key_version_still_verifies() {
         std::slice::from_ref(&author.entry),
     )
     .unwrap();
-    assert!(message.verified);
+    assert!(
+        message.verified,
+        "a non-integer key version is signed as null"
+    );
+
+    let mut raw_signed = event.clone();
+    let Some(Detail::MessageCreateEvent(mce)) = &raw_signed.detail else {
+        unreachable!()
+    };
+    let raw_payload = format!(
+        "MessageCreateEvent,m-1,1001,{},v1,{}",
+        CONVERSATION,
+        STANDARD_NO_PAD.encode(mce.contents.as_ref().unwrap())
+    );
+    raw_signed.message_event_signature = Some(author.sign(&raw_payload, 7));
+    let err = decrypt_message(
+        &ChatCore::new(),
+        &raw_signed,
+        &keys("v1", &ckey),
+        std::slice::from_ref(&author.entry),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("verification failed"), "{err}");
+}
+
+#[test]
+fn a_key_change_version_signs_as_its_integer_value() {
+    let ckey: Vec<u8> = (0u8..32).collect();
+    let event = |key_version: &str| ThriftEvent {
+        message_id: Some(KAT_MESSAGE_ID.to_string()),
+        sender_id: Some(KAT_SENDER.to_string()),
+        conversation_id: Some(CONVERSATION.to_string()),
+        detail: Some(Detail::ConversationKeyChangeEvent(
+            ConversationKeyChangeEvent {
+                conversation_key_version: Some(key_version.to_string()),
+                ..Default::default()
+            },
+        )),
+        message_event_signature: Some(MessageEventSignature {
+            signature_version: Some("7".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let ckey_b64 = STANDARD_NO_PAD.encode(&ckey);
+    assert_eq!(
+        payload_string(&event("042"), Some(&ckey_b64)),
+        format!(
+            "ConversationKeyChangeEvent,{},{},{},42,{}",
+            KAT_MESSAGE_ID, KAT_SENDER, CONVERSATION, ckey_b64
+        )
+    );
+    let unversioned = event("v42");
+    assert!(build_event_signature_payload(
+        &unversioned,
+        unversioned.detail.as_ref().unwrap(),
+        Some(&ckey_b64)
+    )
+    .is_none());
+}
+
+#[test]
+fn a_legacy_key_change_signs_only_the_participant_fields_it_carries() {
+    let event = ThriftEvent {
+        message_id: Some("kc-1".to_string()),
+        sender_id: Some(KAT_SENDER.to_string()),
+        conversation_id: Some(CONVERSATION.to_string()),
+        detail: Some(Detail::ConversationKeyChangeEvent(
+            ConversationKeyChangeEvent {
+                conversation_key_version: Some("3".to_string()),
+                conversation_participant_keys: Some(vec![
+                    ConversationParticipantKey::new(
+                        Some("1001".to_string()),
+                        Some("a2V5MQ".to_string()),
+                        Some("1".to_string()),
+                    ),
+                    ConversationParticipantKey::new(
+                        Some("1002".to_string()),
+                        Some("a2V5Mg".to_string()),
+                        None::<String>,
+                    ),
+                ]),
+                ..Default::default()
+            },
+        )),
+        message_event_signature: Some(MessageEventSignature {
+            signature_version: Some("5".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        payload_string(&event, None),
+        format!(
+            "ConversationKeyChangeEvent,kc-1,{},{},3,1001,a2V5MQ,1,1002,a2V5Mg",
+            KAT_SENDER, CONVERSATION
+        )
+    );
+}
+
+#[test]
+fn an_event_without_a_signature_version_is_rejected() {
+    let author = Party::new("1001");
+    let ckey = key(9);
+    let mut event = message_event(
+        &author,
+        "m-1",
+        "100",
+        "7",
+        None,
+        7,
+        &ckey,
+        &build_message_content("a valid v7 signature", None, None, None).unwrap(),
+    );
+    for label in [None, Some("seven")] {
+        event
+            .message_event_signature
+            .as_mut()
+            .unwrap()
+            .signature_version = label.map(str::to_string);
+        assert!(
+            build_event_signature_payload(&event, event.detail.as_ref().unwrap(), None).is_none()
+        );
+        let err = decrypt_message(
+            &ChatCore::new(),
+            &event,
+            &keys("7", &ckey),
+            std::slice::from_ref(&author.entry),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("signature_version is missing or not an integer"),
+            "{label:?}: {err}"
+        );
+
+        let lenient = ChatCore::new();
+        lenient.set_reject_unverified(false);
+        let message = decrypt_message(
+            &lenient,
+            &event,
+            &keys("7", &ckey),
+            std::slice::from_ref(&author.entry),
+        )
+        .unwrap();
+        assert!(!message.verified, "{label:?}");
+    }
 }
 
 #[test]
@@ -549,4 +705,115 @@ fn a_key_change_verifies_only_at_the_version_it_was_signed_at() {
         &owner,
         &ckey
     ));
+}
+
+// Group metadata changes, and a value a change removes.
+
+/// A title, description or avatar change setting `value` (`None` removes
+/// it) under key version "2", and the event name its payload starts with.
+fn metadata_changes(value: Option<&str>) -> [(ThriftGroupChange, &'static str); 3] {
+    let value = value.map(str::to_string);
+    let key_version = Some("2".to_string());
+    [
+        (
+            ThriftGroupChange::GroupTitleChange(GroupTitleChange {
+                custom_title: value.clone(),
+                conversation_key_version: key_version.clone(),
+            }),
+            "GroupChangeEvent.GroupTitleChange",
+        ),
+        (
+            ThriftGroupChange::GroupDescriptionChange(GroupDescriptionChange {
+                custom_description: value.clone(),
+                conversation_key_version: key_version.clone(),
+            }),
+            "GroupChangeEvent.GroupDescriptionChange",
+        ),
+        (
+            ThriftGroupChange::GroupAvatarChange(GroupAvatarUrlChange {
+                custom_avatar_url: value,
+                conversation_key_version: key_version,
+            }),
+            "GroupChangeEvent.GroupAvatarUrlChange",
+        ),
+    ]
+}
+
+fn metadata_payload(event_name: &str, value: &str, version: i32) -> String {
+    let mut payload = format!("{event_name},gc-1,{OWNER},{CONVERSATION},2,{value}");
+    if version >= 9 {
+        payload.push_str(&format!(",signature_version={version}"));
+    }
+    payload
+}
+
+#[test]
+fn a_change_that_removes_a_title_description_or_avatar_signs_null() {
+    let owner = Party::new(OWNER);
+    for version in [7, 9, 10, 11] {
+        for (change, event_name) in metadata_changes(None) {
+            let signed = metadata_payload(event_name, "null", version);
+            let event = group_change_event(&owner, change, &signed, version);
+            assert_eq!(payload_string(&event, None), signed);
+            assert!(group_change_verified(&event, &owner), "{signed}");
+        }
+    }
+}
+
+#[test]
+fn an_empty_value_signs_empty_and_never_as_a_removal() {
+    let owner = Party::new(OWNER);
+    for (change, event_name) in metadata_changes(Some("")) {
+        let signed = metadata_payload(event_name, "", 7);
+        let event = group_change_event(&owner, change, &signed, 7);
+        assert!(group_change_verified(&event, &owner), "{signed}");
+    }
+    for (change, event_name) in metadata_changes(None) {
+        let signed = metadata_payload(event_name, "", 7);
+        let event = group_change_event(&owner, change, &signed, 7);
+        assert!(!group_change_verified(&event, &owner), "{signed}");
+    }
+}
+
+#[test]
+fn a_removal_from_a_native_client_decrypts_to_an_empty_value() {
+    let owner = Party::new(OWNER);
+    let core = ChatCore::new();
+    let changes: Vec<GroupChange> = metadata_changes(None)
+        .into_iter()
+        .map(|(change, event_name)| {
+            let event = group_change_event(
+                &owner,
+                change,
+                &metadata_payload(event_name, "null", 10),
+                10,
+            );
+            match core
+                .decrypt_event_with(
+                    &frame(&event),
+                    &keys("2", &key(1)),
+                    std::slice::from_ref(&owner.entry),
+                )
+                .unwrap()
+            {
+                Event::GroupChange(change) => {
+                    assert!(change.verified);
+                    change.change
+                }
+                other => panic!("expected a group change, got {:?}", other),
+            }
+        })
+        .collect();
+    let empty = || GroupText::Text {
+        text: String::new(),
+    };
+    assert!(
+        matches!(&changes[0], GroupChange::TitleChanged { new_title } if *new_title == empty())
+    );
+    assert!(
+        matches!(&changes[1], GroupChange::DescriptionChanged { new_description } if *new_description == empty())
+    );
+    assert!(
+        matches!(&changes[2], GroupChange::AvatarChanged { new_avatar_url, .. } if new_avatar_url.is_empty())
+    );
 }

@@ -70,18 +70,26 @@ impl Chat {
     }
 
     /// For this repository's tests: a chat that reads its feature switches
-    /// from ``endpoint``, within ``timeout`` seconds.
+    /// from ``endpoint``, within ``timeout`` seconds, again ``refresh``
+    /// seconds after each answer.
     #[staticmethod]
-    #[pyo3(name = "_reading_features_from", signature = (endpoint, timeout, config_json=None))]
+    #[pyo3(
+        name = "_reading_features_from",
+        signature = (endpoint, timeout, refresh=300.0, config_json=None)
+    )]
     pub(crate) fn reading_features_from(
         py: Python<'_>,
         endpoint: &str,
         timeout: f64,
+        refresh: f64,
         config_json: Option<&str>,
     ) -> PyResult<Self> {
         let chat = Self::create(config_json)?;
-        chat.inner
-            .configure_features(endpoint, (timeout * 1000.0) as u64);
+        chat.inner.configure_features(
+            endpoint,
+            (timeout * 1000.0) as u64,
+            (refresh * 1000.0) as u64,
+        );
         start_feature_read(py, &chat.inner);
         Ok(chat)
     }
@@ -116,14 +124,21 @@ impl Chat {
     /// ``signing_key_version`` is ``None``. A resolved default and an
     /// explicitly passed value produce identical signed output. The
     /// signing-key version is the ``public_key_version`` returned when your
-    /// keys were registered.
-    pub(crate) fn set_identity(&self, params: PyRef<'_, SetIdentityParams>) -> PyResult<()> {
+    /// keys were registered. The chat then reads its feature switches for
+    /// this sender's bucket, the last four digits of the user id.
+    pub(crate) fn set_identity(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, SetIdentityParams>,
+    ) -> PyResult<()> {
         self.inner
             .set_identity(&chat_xdk_core::SetIdentityParams::new(
                 params.user_id.as_str(),
                 params.signing_key_version.as_str(),
             ))
-            .map_err(to_py_err)
+            .map_err(to_py_err)?;
+        start_feature_read(py, &self.inner);
+        Ok(())
     }
 
     /// Enable or disable the conversation-key cache (off by default).
@@ -839,7 +854,7 @@ impl Chat {
     /// members who stay.
     ///
     /// The result carries the new key, the remaining members' participant
-    /// keys, and the action signatures: the removal (bound to the new key
+    /// keys, and the action signatures: the removal (which names the new key
     /// version), a title and a description change for each one the params
     /// set, re-encrypted under the new key, and the key change.
     pub(crate) fn prepare_group_members_remove(

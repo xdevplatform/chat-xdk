@@ -378,7 +378,10 @@ export class ChatWithJuicebox {
 
   setRejectUnverified(reject) { return this.#inner.setRejectUnverified(reject); }
   generateKeypairs() { return this.#inner.generateKeypairs(); }
-  setIdentity(params) { return this.#inner.setIdentity(params); }
+  setIdentity(params) {
+    this.#inner.setIdentity(params);
+    startFeatureFetch(this.#inner);
+  }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
   importKeys(params) { return this.#inner.importKeys(params); }
@@ -442,23 +445,36 @@ export class ChatWithJuicebox {
   }
 }
 
-// Feature switches (GET /2/chat/features). A chat reads them once, when it is
-// created: the wasm core decides what to fetch and what an answer means, and
-// this module performs the GET. Nothing here is API.
+// Feature switches (GET /2/chat/features). A chat reads them when it is
+// created and when its identity is set, and again while it lives: the wasm
+// core decides what to fetch, when to fetch it again and what an answer
+// means, and this module performs each GET. Nothing here is API.
 
-/** Start the one read of `wasmChat`'s feature switches. */
+/** Start the reads of `wasmChat`'s feature switches for its identity. */
 function startFeatureFetch(wasmChat) {
-  const request = wasmChat.__featureStart();
-  if (request === undefined) return;
-  getFeatures(request.url, request.timeoutMs, request.maxBytes).then(({ status, body }) =>
-    __featureComplete(request.id, status, body),
-  );
+  performFeatureFetch(wasmChat.__featureStart());
 }
 
-/** In Node, keep a request's timer from holding the process open. */
+/**
+ * Perform `request`, a GET the core hands out, after its delay, then the
+ * refresh or retry its result returns, until none does.
+ */
+function performFeatureFetch(request) {
+  if (request === undefined) return;
+  delay(request.delayMs)
+    .then(() => getFeatures(request.url, request.timeoutMs, request.maxBytes))
+    .then(({ status, body }) => performFeatureFetch(__featureComplete(request.id, status, body)));
+}
+
+/** In Node, keep a timer from holding the process open. */
 function unrefTimer(timer) {
   timer?.unref?.();
   return timer;
+}
+
+/** Resolve after `ms`, on a timer that never keeps Node running. */
+function delay(ms) {
+  return ms > 0 ? new Promise((resolve) => unrefTimer(setTimeout(resolve, ms))) : Promise.resolve();
 }
 
 const NO_RESPONSE = { status: 0, body: new Uint8Array(0) };

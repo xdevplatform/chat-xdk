@@ -209,8 +209,14 @@ impl Chat {
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
     }
-    /// Set this chat's feature switches from the answer to `GET
-    /// /2/chat/features`; see [`crate::ChatCore::set_feature_switches`].
+    /// The URL of this chat's feature switches; see
+    /// [`crate::ChatCore::feature_switches_url`].
+    pub fn feature_switches_url(&self) -> String {
+        self.inner.feature_switches_url()
+    }
+    /// Set this chat's feature switches from the answer to `GET`
+    /// [`Self::feature_switches_url`]; see
+    /// [`crate::ChatCore::set_feature_switches`].
     pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
         self.inner.set_feature_switches(status, body);
     }
@@ -1100,6 +1106,7 @@ mod tests {
                 filename: "photo.jpg".into(),
                 media_type: Some(1),
                 duration_millis: None,
+                plaintext_sha256: None,
             }])
             .with_should_notify(false)
             .with_ttl_msec(60_000);
@@ -1566,6 +1573,7 @@ mod tests {
                 filename: "photo.png".to_string(),
                 media_type: None,
                 duration_millis: None,
+                plaintext_sha256: None,
             }]);
         let payload = chat.encrypt_message(&params).unwrap();
         (
@@ -1683,26 +1691,33 @@ mod tests {
 
         let sig = chat
             .inner
-            .sign_add_members(
+            .sign_action_event(
                 "1",
-                "msg-1",
                 "910003",
                 "conv-1",
-                &["new-member-1".to_string()],
-                &["member-1".to_string(), "member-2".to_string()],
-                &["admin-1".to_string()],
-                "1",
-                Some("Group Name"),
-                None,
-                None,
-                None,
+                crate::signatures::CURRENT_SIGNATURE_VERSION,
+                crate::core::ChatCore::group_member_add_detail(
+                    &["910005".to_string()],
+                    &["910003".to_string(), "910004".to_string()],
+                    &["910003".to_string()],
+                    &[],
+                    Some("Group Name"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    "1",
+                ),
                 None,
             )
             .unwrap();
 
         assert!(!sig.message_event_signature.signature.is_empty());
-        assert!(!sig.signature_payload.is_empty());
+        assert!(sig
+            .signature_payload
+            .starts_with("GroupChangeEvent.GroupMemberAddChange,"));
         assert_eq!(sig.message_event_signature.public_key_version, "1");
+        assert_eq!(sig.message_event_signature.signature_version, "7");
     }
 
     #[tokio::test]
@@ -1714,7 +1729,15 @@ mod tests {
         let ckey = chat.inner.generate_conversation_key().unwrap();
         let sig = chat
             .inner
-            .sign_key_change("1", "msg-1", "910003", "conv-1", "2", ckey.encoded())
+            .sign_key_change(
+                "1",
+                "910003",
+                "conv-1",
+                "2",
+                &ckey,
+                &[],
+                crate::pipeline::SendVersion::V0,
+            )
             .unwrap();
 
         assert!(!sig.message_event_signature.signature.is_empty());

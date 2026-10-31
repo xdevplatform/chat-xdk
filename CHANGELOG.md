@@ -4,6 +4,113 @@
 
 ### Added
 
+- `EncryptReplyParams` takes `reply_to_message_id`, the signed `message_id`
+  of the message a reply quotes, in every binding (`replyToMessageId` in JS
+  and on the JVM, `ReplyToMessageID` in Go, `ReplyToMessageId` in .NET). A
+  reply built from the explicit preview fields needs it: in v1, X clients
+  mark a reply that names no original invalid. With `reply_to_event`, the id
+  comes from the event, and a `reply_to_message_id` other than it fails with
+  an invalid-input error.
+- `EncryptEditParams` takes `target_message_id`, the signed `message_id` of
+  the message an edit replaces (`targetMessageId` in JS and on the JVM,
+  `TargetMessageID` in Go, `TargetMessageId` in .NET). A v1 edit names the
+  message it edits, as X clients' edits do, so a v1 edit built from
+  `conversation_id` and `target_message_sequence_id` needs it; with
+  `target_event`, the id comes from the event, and a `target_message_id`
+  other than it fails with an invalid-input error. A v0 edit names none, as
+  in 0.5.x.
+- A media attachment descriptor takes `plaintext_sha256`, the base64
+  SHA-256 of the file's plaintext bytes, which the message carries and signs
+  as X clients' messages do. The message is built before its files are
+  encrypted, so the caller hashes the file. One that is not the base64 of 32
+  bytes fails the send with an invalid-input error. Decrypted media
+  attachments return it as `plaintext_sha256` (`plaintextSha256` in JS),
+  `null` when the sender sent none. The JVM and .NET add an eight-argument
+  `media` / `Media` factory that takes it; Go adds
+  `AttachmentDescriptor.PlaintextSHA256`.
+- Rust: `AttachmentDescriptor::Media` gains the `plaintext_sha256:
+  Option<String>` field, so code that builds the variant with a struct
+  literal adds `plaintext_sha256: None` (or the hash), and a pattern that
+  lists every field adds it or ends in `..`.
+- Rust: `ChatCore::feature_switches_url` and `Chat::feature_switches_url`
+  return the URL of a chat's feature switches, `FEATURES_ENDPOINT` with the
+  sender's bucket once `set_identity` has set it, and `FEATURES_REFRESH_MS`
+  is how long after an answer to read them again. The C ABI adds
+  `chat_xdk_feature_switches_url` and `CHAT_XDK_FEATURES_REFRESH_MS`.
+
+### Changed
+
+- While a chat sends v1, every event it signs takes signature version 10, as
+  X clients sign each event at the version their messages sign at:
+  conversation-key changes, group creates (whose payload then covers the
+  group type and TTL), member adds, removals and leaves, the other group and
+  conversation-metadata changes, deletes and read receipts. While it sends
+  v0 they sign at version 7, as in 0.5.x, apart from a member add that
+  carries a description, which signs at version 8. A member removal and the
+  removal a leave signs follow the same rule instead of signing at version
+  11, so 0.5.x readers verify them while the chat sends v0; their
+  signatures don't cover the key version the removal names, and a member
+  removal's key change signs the new key version. A conversation-key change
+  never signs below the highest version of a key change the chat has signed
+  or verified in that conversation, since X clients that enforce a
+  key-change floor reject one signed below the newest before it. A key
+  change raised above 7 this way is one 0.5.x readers can't verify, like
+  the one that raised it.
+  The chat holds that floor in memory, so after a restart decrypt the
+  conversation's key changes again before changing its key.
+- The bindings read the feature switches again 5 minutes after each answer
+  while a chat lives, so a change at the X API reaches running chats with
+  no restart and no new chat; each answer replaces the one before. Once
+  `set_identity` sets the sender, the request carries the sender's bucket,
+  the last four digits of the user id (`?bucket=1234`), so a ramp of
+  `v1_send` picks the same senders wherever they run; before that the X API
+  buckets the request by its address, as in 0.7.1. Chats that read the same
+  URL share one request. A request that fails is retried in the background
+  while a chat waits for it: 1 second later, then after twice the previous
+  wait, at most 5 minutes apart. A failure keeps the answer the chats have;
+  until one arrives, every switch stays off and the chat sends v0. The Rust
+  core sets the schedule and every binding follows it.
+- Rust and the C ABI: each answer handed to `set_feature_switches` or
+  `chat_xdk_set_feature_switches` that is a 200 with a features object
+  replaces the one before, and any other answer changes nothing. Request the
+  URL `feature_switches_url` (`chat_xdk_feature_switches_url`) returns, and
+  again every `FEATURES_REFRESH_MS` (`CHAT_XDK_FEATURES_REFRESH_MS`), as the
+  bindings do.
+- A v1 send's encoded signature lists the signing keys the message relies
+  on, by user id and key version (`message_signing_key_info_list`): its
+  sender's and, for a reply, those of the quoted message's sender and of its
+  edit's, as X clients' v1 sends do.
+- A v1 reaction asks for a notification (`should_notify`) only in a
+  one-to-one conversation, and a v1 reaction removal or edit asks for none,
+  as X clients' v1 sends do. v0 reactions, removals and edits ask for one,
+  as 0.5.x's do.
+- A reply embeds no key change (`raw_event_ckces`), and decrypt reads none
+  from a received reply: recipients open the quoted message with their own
+  conversation keys, or with the message key a reply carries for a v1
+  message. `reply_to_ckces` still opens an original under a key version the
+  sender's chat doesn't hold.
+
+### Fixed
+
+- A reply preview validates only when the first 140 characters of its text,
+  counted in UTF-16 code units as X clients count them, are those of the
+  quoted text, and its entities are exactly the quoted message's, or its
+  edit's when the reply embeds the edit.
+- A group change that removes the title, description or avatar verifies: X
+  clients sign `null` in the value's place, and so does the verifier. It
+  decrypts to an empty title, description or avatar URL.
+- An event whose signature carries no signature version, or one that isn't
+  an integer, fails verification. Every version signs a message's
+  conversation-key version as an integer, `null` when missing or not an
+  integer, and a key change's as an integer, as X clients sign them.
+- `decrypt_file` and `file_decryptor` number a message's attachments as X
+  clients do, leaving out payment receipts, so a v1 file whose attachment
+  carries no id opens from a message that also carries a payment receipt.
+
+## [0.7.1] - 2026-10-28
+
+### Added
+
 `encrypt_file_with_key` and `decrypt_file_with_key` encrypt and decrypt a
 file under a key the app already holds, rather than a file a message
 carries: a group's avatar image, which X clients encrypt under the

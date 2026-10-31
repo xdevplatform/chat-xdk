@@ -254,9 +254,16 @@ fn ckey_sig_v6_enforcement_gates_adoption_by_sequence_number() {
         let encrypted = core
             .encrypt_conversation_key_for_recipients(&ckey, &recipients)
             .unwrap();
-        let action_sig = core
-            .sign_key_change("61", "msg-kc", "910003", "conv-1", "1001", ckey.encoded())
-            .unwrap();
+        let action_sig = crate::core::test_support::key_change_signature(
+            core,
+            "61",
+            "msg-kc",
+            "910003",
+            "conv-1",
+            "1001",
+            ckey.encoded(),
+        )
+        .unwrap();
         let signature = if corrupt {
             let mut raw = base64_decode(&action_sig.message_event_signature.signature).unwrap();
             raw[5] ^= 0xff;
@@ -377,9 +384,16 @@ fn build_freshness_keychange(
     let encrypted = core
         .encrypt_conversation_key_for_recipients(&ckey, &recipients)
         .unwrap();
-    let action_sig = core
-        .sign_key_change("61", "msg-kc", "910003", conv_id, version, ckey.encoded())
-        .unwrap();
+    let action_sig = crate::core::test_support::key_change_signature(
+        core,
+        "61",
+        "msg-kc",
+        "910003",
+        conv_id,
+        version,
+        ckey.encoded(),
+    )
+    .unwrap();
     let signature = if corrupt {
         let mut raw = base64_decode(&action_sig.message_event_signature.signature).unwrap();
         raw[5] ^= 0xff;

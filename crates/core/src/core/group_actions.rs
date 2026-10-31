@@ -10,7 +10,7 @@
 use crate::crypto::keys::XChatConversationKey;
 use crate::error::SdkError;
 use crate::protocol::serialization::base64_encode;
-use crate::signatures::{sign_action, ActionSignature, CURRENT_SIGNATURE_VERSION};
+use crate::signatures::{sign_event, ActionSignature, CURRENT_SIGNATURE_VERSION};
 use crate::thrift::event::{
     GroupChange, GroupChangeEvent, GroupDescriptionChange, GroupTitleChange, MessageEventDetail,
 };
@@ -23,6 +23,11 @@ struct ActionCtx {
     signing_key_version: String,
     conversation_id: String,
     signing_key: crate::crypto::keys::XChatPrivateKey,
+    /// The send format this call's signatures follow, read once.
+    send_version: crate::pipeline::SendVersion,
+    /// The version this call's group and conversation actions sign at; a key
+    /// change it carries signs at `ChatCore::key_change_signature_version`.
+    signature_version: i32,
 }
 
 /// A group field the SDK encrypts under the conversation key before signing.
@@ -33,23 +38,16 @@ enum GroupMetadata {
 }
 
 impl GroupMetadata {
-    fn event_name(self) -> &'static str {
-        match self {
-            Self::Title => "GroupChangeEvent.GroupTitleChange",
-            Self::Description => "GroupChangeEvent.GroupDescriptionChange",
-        }
-    }
-
     /// The change event for `encrypted` under `key_version`. A change that
     /// only re-encrypts the value for a key rotation is marked
-    /// `for_key_rotation`, so X clients don't show it as a change and the
+    /// `for_key_rotation`, so recipients don't show it as a change; this
     /// SDK's decrypt drops it.
     fn detail(
         self,
         encrypted: &str,
         key_version: &str,
         for_key_rotation: bool,
-    ) -> Result<String, SdkError> {
+    ) -> MessageEventDetail {
         let encrypted = Some(encrypted.to_string());
         let conversation_key_version = Some(key_version.to_string());
         group_event_detail(
@@ -85,15 +83,20 @@ impl ChatCore {
         let conversation_id =
             crate::pipeline::canonical_conversation_id(conversation_id, &sender_id).into_owned();
         let signing_key = self.get_signing_private_key()?;
+        let send_version = self.send_version();
         Ok(ActionCtx {
             sender_id,
             signing_key_version,
             conversation_id,
             signing_key,
+            send_version,
+            signature_version: super::signing::action_signature_version(
+                send_version,
+                CURRENT_SIGNATURE_VERSION,
+            ),
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn prepare_id_list(
         &self,
         conversation_id: &str,
@@ -101,19 +104,11 @@ impl ChatCore {
         signing_key_version: Option<&str>,
         field: &str,
         user_ids: &[String],
-        event_name: &str,
-        encode: impl FnOnce(&[String]) -> Result<String, SdkError>,
+        change: impl FnOnce(&[String]) -> GroupChange,
     ) -> Result<PreparedAction, SdkError> {
         let ctx = self.action_ctx(conversation_id, sender_id, signing_key_version)?;
         require_user_ids(field, user_ids)?;
-        let refs: Vec<&str> = user_ids.iter().map(String::as_str).collect();
-        let signature = sign_named(
-            &ctx,
-            event_name,
-            &refs,
-            CURRENT_SIGNATURE_VERSION,
-            encode(user_ids)?,
-        )?;
+        let signature = sign_change(&ctx, group_detail(change(user_ids)))?;
         Ok(one_action(signature))
     }
 }
@@ -143,12 +138,6 @@ fn require_user_ids(field: &str, user_ids: &[String]) -> Result<(), SdkError> {
     crate::pipeline::validate_user_ids(field, user_ids)
 }
 
-fn nullable_str(value: Option<&str>) -> String {
-    value
-        .map(str::to_string)
-        .unwrap_or_else(|| "null".to_string())
-}
-
 /// Encrypt a group title or description under `key`: the base64
 /// XSalsa20-Poly1305 ciphertext a group event carries and its signature
 /// covers.
@@ -173,52 +162,36 @@ fn sign_metadata(
     for_key_rotation: bool,
 ) -> Result<(String, ActionSignature), SdkError> {
     let encrypted = encrypt_group_metadata(key, value)?;
-    let signature = sign_named(
-        ctx,
-        field.event_name(),
-        &[key_version, &encrypted],
-        CURRENT_SIGNATURE_VERSION,
-        field.detail(&encrypted, key_version, for_key_rotation)?,
-    )?;
+    let signature = sign_change(ctx, field.detail(&encrypted, key_version, for_key_rotation))?;
     Ok((encrypted, signature))
 }
 
-fn sign_named(
-    ctx: &ActionCtx,
-    event_name: &str,
-    extras: &[&str],
-    signature_version: i32,
-    detail: String,
-) -> Result<ActionSignature, SdkError> {
-    let message_id = ChatCore::generate_message_id();
-    let mut components = Vec::with_capacity(4 + extras.len());
-    components.push(event_name);
-    components.push(message_id.as_str());
-    components.push(ctx.sender_id.as_str());
-    components.push(ctx.conversation_id.as_str());
-    components.extend_from_slice(extras);
-    let mut signature = sign_action(
+/// Sign `detail` as a new action of `ctx`, at `ctx`'s signature version.
+fn sign_change(ctx: &ActionCtx, detail: MessageEventDetail) -> Result<ActionSignature, SdkError> {
+    sign_event(
         &ctx.signing_key,
         &ctx.signing_key_version,
-        &message_id,
-        signature_version,
-        &components,
-    )?;
-    signature.encoded_message_event_detail = detail;
-    Ok(signature)
+        &ChatCore::generate_message_id(),
+        &ctx.sender_id,
+        &ctx.conversation_id,
+        ctx.signature_version,
+        detail,
+        None,
+    )
 }
 
-fn group_detail(change: GroupChange) -> Result<String, SdkError> {
+fn group_detail(change: GroupChange) -> MessageEventDetail {
     group_event_detail(change, false)
 }
 
-fn group_event_detail(change: GroupChange, for_key_rotation: bool) -> Result<String, SdkError> {
-    encode_detail(MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
+fn group_event_detail(change: GroupChange, for_key_rotation: bool) -> MessageEventDetail {
+    MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
         group_change: Some(change),
         for_key_rotation: Some(for_key_rotation),
-    }))
+    })
 }
 
+#[cfg(test)]
 fn encode_detail(detail: MessageEventDetail) -> Result<String, SdkError> {
     Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
 }

@@ -73,6 +73,10 @@ fn the_feature_switch_constants_are_the_cores() {
         chat_xdk_core::FEATURES_TIMEOUT_MS
     );
     assert_eq!(CHAT_XDK_FEATURES_MAX_BODY, chat_xdk_core::FEATURES_MAX_BODY);
+    assert_eq!(
+        CHAT_XDK_FEATURES_REFRESH_MS,
+        chat_xdk_core::FEATURES_REFRESH_MS
+    );
     let header = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../go/chatxdk/include/chat_xdk.h"
@@ -86,15 +90,24 @@ fn the_feature_switch_constants_are_the_cores() {
 }
 
 #[test]
-fn a_caller_hands_a_chat_its_feature_switches_once() {
+fn a_caller_hands_a_chat_each_answer_for_its_senders_url() {
     let on = br#"{"features":{"v1_send":true}}"#;
     let chat = new_chat();
+    assert_eq!(
+        data(chat_xdk_feature_switches_url(chat)).as_deref(),
+        Some(format!("{}?bucket=1001", chat_xdk_core::FEATURES_ENDPOINT).as_str()),
+        "the bucket of user 1001"
+    );
     assert_eq!(send(chat), "7", "no answer: v0");
     answer(chat, 200, on);
     assert_eq!(send(chat), "10");
     answer(chat, 200, br#"{"features":{"v1_send":false}}"#);
-    assert_eq!(send(chat), "10", "a chat takes one answer");
+    assert_eq!(send(chat), "7", "a later answer replaces it");
     chat_xdk_free(chat);
+    assert_eq!(
+        error(chat_xdk_feature_switches_url(std::ptr::null()))["kind"],
+        "invalid_input"
+    );
 
     let mut oversized = on.to_vec();
     oversized.resize(CHAT_XDK_FEATURES_MAX_BODY + 1, b' ');
@@ -107,6 +120,8 @@ fn a_caller_hands_a_chat_its_feature_switches_once() {
         let chat = new_chat();
         answer(chat, status, body);
         assert_eq!(send(chat), "7", "{status} {}", body.len());
+        answer(chat, 200, on);
+        assert_eq!(send(chat), "10", "the answer to a retried request");
         chat_xdk_free(chat);
     }
 
@@ -128,6 +143,51 @@ fn a_caller_hands_a_chat_its_feature_switches_once() {
         ))["kind"],
         "invalid_input"
     );
+}
+
+#[test]
+fn a_group_leave_signs_at_the_version_sends_sign_at() {
+    let chat = new_chat();
+    let leave = || {
+        let params = c(r#"{"conversation_id":"g100"}"#);
+        let prepared: serde_json::Value = serde_json::from_str(
+            &data(prepare::chat_xdk_prepare_group_leave(chat, params.as_ptr())).unwrap(),
+        )
+        .unwrap();
+        prepared["action_signatures"].as_array().unwrap().clone()
+    };
+    let signed_at = |signatures: &[serde_json::Value]| -> Vec<String> {
+        signatures
+            .iter()
+            .map(|s| s["message_event_signature"]["signature_version"].to_string())
+            .collect()
+    };
+    assert_eq!(signed_at(&leave()), [r#""7""#, r#""7""#]);
+    answer(chat, 200, br#"{"features":{"v1_send":true}}"#);
+    let signatures = leave();
+    assert_eq!(signed_at(&signatures), [r#""10""#, r#""10""#]);
+    for (signature, fields) in signatures.iter().zip([
+        "GroupChangeEvent.GroupMemberRemoveChange,{id},1001,g100,1001,signature_version=10",
+        "ConversationDeleteEvent,{id},1001,g100,signature_version=10",
+    ]) {
+        let payload = fields.replace("{id}", signature["message_id"].as_str().unwrap());
+        let signed = &signature["message_event_signature"];
+        let public_key = c(signed["signing_public_key"].as_str().unwrap());
+        let unpadded = signed["signature"].as_str().unwrap();
+        let raw = c(&format!(
+            "{unpadded}{}",
+            "=".repeat((4 - unpadded.len() % 4) % 4)
+        ));
+        let valid = data(signing::chat_xdk_verify(
+            chat,
+            public_key.as_ptr(),
+            raw.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+        ));
+        assert_eq!(valid.as_deref(), Some("true"), "{payload}");
+    }
+    chat_xdk_free(chat);
 }
 
 #[test]
@@ -193,7 +253,14 @@ fn invalid_entities_and_attachments_fail_with_invalid_input() {
     });
     let mut negative_width = photo(1000, "photo.jpg");
     negative_width["width"] = (-1).into();
+    let mut short_hash = photo(1000, "photo.jpg");
+    short_hash["plaintext_sha256"] = "c2hvcnQ=".into();
     for (attachment, message) in [
+        (
+            short_hash,
+            "media_hash_key 'photo' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 \
+             of the file's plaintext bytes (32 bytes)",
+        ),
         (
             photo(1000, ""),
             "media_hash_key 'photo' has an empty filename: pass the file's original name",

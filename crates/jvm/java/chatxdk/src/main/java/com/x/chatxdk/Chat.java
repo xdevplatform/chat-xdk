@@ -86,7 +86,7 @@ public final class Chat implements AutoCloseable {
      * {@link ChatXdkException.Kind#INVALID_STATE}.
      */
     public Chat() {
-        this(null, null, null);
+        this(null, null, null, null);
     }
 
     /**
@@ -99,15 +99,15 @@ public final class Chat implements AutoCloseable {
      *     without a config gives its Juicebox calls).
      */
     public Chat(String juiceboxConfigJson) {
-        this(Objects.requireNonNull(juiceboxConfigJson, "juiceboxConfigJson"), null, null);
+        this(Objects.requireNonNull(juiceboxConfigJson, "juiceboxConfigJson"), null, null, null);
     }
 
     /**
      * For this repository's tests: a chat that reads its feature switches from
-     * {@code featureEndpoint} within {@code featureTimeout}, or from the default endpoint when
-     * it is null.
+     * {@code featureEndpoint} within {@code featureTimeout}, again {@code featureRefresh} after
+     * each answer, or from the default endpoint when {@code featureEndpoint} is null.
      */
-    Chat(String juiceboxConfigJson, String featureEndpoint, Duration featureTimeout) {
+    Chat(String juiceboxConfigJson, String featureEndpoint, Duration featureTimeout, Duration featureRefresh) {
         PointerByReference out = new PointerByReference();
         if (juiceboxConfigJson == null) {
             FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_new(null, out));
@@ -119,7 +119,7 @@ public final class Chat implements AutoCloseable {
         handle = out.getValue();
         cleanable = CLEANER.register(this, new FreeHandle(handle));
         if (featureEndpoint != null) {
-            configureFeatures(featureEndpoint, featureTimeout);
+            configureFeatures(featureEndpoint, featureTimeout, featureRefresh);
         }
         FeatureFetch.start(this);
     }
@@ -189,7 +189,8 @@ public final class Chat implements AutoCloseable {
      * is left null. A resolved default and an explicitly passed value produce
      * byte-identical signed output for the same logical inputs. The signing-key
      * version is the {@code public_key_version} returned when the keys were
-     * registered.
+     * registered. The chat then reads its feature switches for this sender's
+     * bucket, the last four digits of the user id.
      */
     public void setIdentity(SetIdentityParams parameters) {
         throwIfDisposed();
@@ -202,6 +203,7 @@ public final class Chat implements AutoCloseable {
         } finally {
             Reference.reachabilityFence(this);
         }
+        FeatureFetch.start(this);
     }
 
     /**
@@ -220,18 +222,18 @@ public final class Chat implements AutoCloseable {
         }
     }
 
-    private void configureFeatures(String endpoint, Duration timeout) {
+    private void configureFeatures(String endpoint, Duration timeout, Duration refresh) {
         try (Memory e = FfiStrings.utf8(endpoint)) {
             FfiStrings.consume(FeatureNative.INSTANCE.chat_xdk_internal_feature_configure(
-                    handle, e, timeout.toMillis()));
+                    handle, e, timeout.toMillis(), refresh.toMillis()));
         } finally {
             Reference.reachabilityFence(this);
         }
     }
 
     /**
-     * Start this chat's one read of the feature switches: the GET to perform as JSON, or an empty
-     * string when the chat takes the answer of a GET already in flight.
+     * Start this chat's reads of the feature switches for its identity: the GET to perform as
+     * JSON, or an empty string when there is none to perform.
      */
     String startFeatures() {
         try {
@@ -1272,6 +1274,9 @@ public final class Chat implements AutoCloseable {
         if (p.replyToSequenceId != null) {
             n.put("reply_to_sequence_id", p.replyToSequenceId);
         }
+        if (p.replyToMessageId != null) {
+            n.put("reply_to_message_id", p.replyToMessageId);
+        }
         if (p.replyToSenderId != null) {
             n.put("reply_to_sender_id", p.replyToSenderId);
         }
@@ -1332,6 +1337,9 @@ public final class Chat implements AutoCloseable {
         }
         if (p.targetMessageSequenceId != null) {
             n.put("target_message_sequence_id", p.targetMessageSequenceId);
+        }
+        if (p.targetMessageId != null) {
+            n.put("target_message_id", p.targetMessageId);
         }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);

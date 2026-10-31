@@ -182,17 +182,51 @@ fn a_set_attachment_id_names_the_key_even_when_empty() {
 }
 
 #[test]
-fn positions_count_attachments_the_sdk_does_not_surface() {
+fn positions_skip_payment_receipts() {
     let author = Party::new("1001");
     let ckey = key(6);
-    let receipt = Box::new(ThriftAttachment::PaymentReceipt(Box::new(
-        PaymentReceiptAttachment {
-            receipt_token: Some("token".to_string()),
-        },
-    )));
-    let event = message_with(&author, "m-2", &ckey, vec![receipt, media("photo", None)]);
+    let receipt = || {
+        Box::new(ThriftAttachment::PaymentReceipt(Box::new(
+            PaymentReceiptAttachment {
+                receipt_token: Some("token".to_string()),
+            },
+        )))
+    };
+    let event = message_with(
+        &author,
+        "m-2",
+        &ckey,
+        vec![
+            receipt(),
+            media("photo", None),
+            receipt(),
+            media("video", None),
+        ],
+    );
+    let msg_key = message_key(&ckey, "1001", "m-2");
+    for (hash, attachment_id) in [("photo", "m-2"), ("video", "m-2#1")] {
+        let encrypted = encrypt_media(&attachment_key(&msg_key, attachment_id), hash.as_bytes());
+        assert_eq!(
+            open(&event, &keys("7", &ckey), hash, &encrypted).unwrap(),
+            hash.as_bytes(),
+            "{hash}"
+        );
+    }
+}
+
+#[test]
+fn positions_count_the_other_attachments_the_sdk_does_not_surface() {
+    let author = Party::new("1001");
+    let ckey = key(6);
+    let bot_message = Box::new(ThriftAttachment::BotMessage(Box::default()));
+    let event = message_with(
+        &author,
+        "m-3",
+        &ckey,
+        vec![bot_message, media("photo", None)],
+    );
     let encrypted = encrypt_media(
-        &attachment_key(&message_key(&ckey, "1001", "m-2"), "m-2#1"),
+        &attachment_key(&message_key(&ckey, "1001", "m-3"), "m-3#1"),
         b"photo",
     );
     assert_eq!(

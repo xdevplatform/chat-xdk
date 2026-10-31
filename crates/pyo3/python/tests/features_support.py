@@ -41,7 +41,9 @@ REDIRECT_TARGET = "/followed/2/chat/features"
 class FeatureServer:
     """A local GET /2/chat/features that records each request's query string
     and headers. Set ``location`` to answer with a redirect there; requests
-    that reach ``REDIRECT_TARGET`` are counted in ``followed``."""
+    that reach ``REDIRECT_TARGET`` are counted in ``followed``. A request for
+    another path, such as a retried read meant for an earlier server on this
+    port, gets a 404 and is not recorded."""
 
     def __init__(self, body='{"features":{"v1_send":true}}'):
         self.status = 200
@@ -56,13 +58,19 @@ class FeatureServer:
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                if urllib.parse.urlparse(self.path).path == REDIRECT_TARGET:
+                path = urllib.parse.urlparse(self.path).path
+                if path == REDIRECT_TARGET:
                     server.followed += 1
                     answer = b'{"features":{"v1_send":true}}'
                     self.send_response(200)
                     self.send_header("Content-Length", str(len(answer)))
                     self.end_headers()
                     self.wfile.write(answer)
+                    return
+                if path != server.path:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                     return
                 # The answer is fixed before the request is recorded, so a
                 # test that sees the request can change the next answer.
@@ -91,7 +99,8 @@ class FeatureServer:
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True
         self.origin = "http://127.0.0.1:%d" % self.httpd.server_address[1]
-        self.url = "%s/%d/2/chat/features" % (self.origin, next(_server_ids))
+        self.path = "/%d/2/chat/features" % next(_server_ids)
+        self.url = self.origin + self.path
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def close(self):
@@ -99,12 +108,12 @@ class FeatureServer:
         self.httpd.server_close()
 
 
-def reading(url, timeout=2.0):
+def reading(url, timeout=2.0, refresh=300.0):
     """A chat that reads its feature switches from ``url``, within
-    ``timeout`` seconds."""
+    ``timeout`` seconds, again ``refresh`` seconds after each answer."""
     from chat_xdk import Chat
 
-    return Chat._reading_features_from(url, timeout)
+    return Chat._reading_features_from(url, timeout, refresh)
 
 
 _v1_server = None

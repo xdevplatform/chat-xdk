@@ -38,10 +38,15 @@ pub struct EncryptMessageParams {
     /// encrypt the files afterwards with ``Chat.encrypt_file`` or
     /// ``Chat.file_encryptor``. Upload each file for one message only:
     /// reusing another message's uploads can give this message that
-    /// message's id. A file with an empty ``filename``, a ``filesize_bytes``
-    /// of 0 or less, or a negative ``width`` or ``height``, a ``"url"`` card
-    /// with an empty ``url``, and a ``"post"`` with neither ``rest_id`` nor
-    /// ``post_url`` raise ``InvalidInputError``.
+    /// message's id. A ``"media"`` attachment's optional
+    /// ``"plaintext_sha256"`` is the base64 SHA-256 of the file's plaintext
+    /// bytes, which the message carries and signs; the message is built
+    /// before its files are encrypted, so hash the file yourself. A file with
+    /// an empty ``filename``, a ``filesize_bytes`` of 0 or less, or a
+    /// negative ``width`` or ``height``, a ``plaintext_sha256`` that is not
+    /// the base64 of 32 bytes, a ``"url"`` card with an empty ``url``, and a
+    /// ``"post"`` with neither ``rest_id`` nor ``post_url`` raise
+    /// ``InvalidInputError``.
     pub(crate) attachments: Option<Py<PyAny>>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.
@@ -108,9 +113,9 @@ impl EncryptMessageParams {
 /// Parameters for ``Chat.encrypt_reply``.
 ///
 /// The preferred form passes ``reply_to_event`` — the base64 raw signed event
-/// being replied to — so the preview (sequence id, sender, text, entities,
-/// attachments) is derived from it and the raw event is embedded for
-/// recipients to validate. Pass ``None`` only when setting
+/// being replied to — so the preview (sequence id, message id, sender, text,
+/// entities, attachments) is derived from it and the raw event is embedded
+/// for recipients to validate. Pass ``None`` only when setting
 /// ``reply_to_sequence_id`` and the other ``reply_to_*`` fields directly.
 /// Identity and key fields resolve like ``EncryptMessageParams``.
 #[pyclass(get_all, set_all)]
@@ -140,6 +145,12 @@ pub struct EncryptReplyParams {
     /// Sequence id of the message being replied to; derived from
     /// ``reply_to_event`` when ``None``.
     pub(crate) reply_to_sequence_id: Option<String>,
+    /// Signed message id of the message being replied to; derived from
+    /// ``reply_to_event`` when ``None``. A reply built without
+    /// ``reply_to_event`` needs it: recipients treat a v1 reply that names no
+    /// original as invalid. With ``reply_to_event``, one other than the id
+    /// the event carries raises ``InvalidInputError``.
+    pub(crate) reply_to_message_id: Option<String>,
     /// User ID of the message's sender, as digits; derived from
     /// ``reply_to_event`` when ``None``.
     pub(crate) reply_to_sender_id: Option<String>,
@@ -170,7 +181,7 @@ pub struct EncryptReplyParams {
 impl EncryptReplyParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_message_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     pub(crate) fn new(
         conversation_id: String,
         text: String,
@@ -182,6 +193,7 @@ impl EncryptReplyParams {
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
         reply_to_sequence_id: Option<String>,
+        reply_to_message_id: Option<String>,
         reply_to_sender_id: Option<String>,
         reply_to_text: Option<String>,
         entities: Option<Py<PyAny>>,
@@ -203,6 +215,7 @@ impl EncryptReplyParams {
             conversation_key,
             conversation_key_version,
             reply_to_sequence_id,
+            reply_to_message_id,
             reply_to_sender_id,
             reply_to_text,
             entities,
@@ -231,6 +244,7 @@ impl EncryptReplyParams {
         params.conversation_key = self.conversation_key.clone();
         params.conversation_key_version = self.conversation_key_version.clone();
         params.reply_to_sequence_id = self.reply_to_sequence_id.clone();
+        params.reply_to_message_id = self.reply_to_message_id.clone();
         params.reply_to_sender_id = self.reply_to_sender_id.clone();
         params.reply_to_text = self.reply_to_text.clone();
         params.entities = entities_field(py, &self.entities, "entities")?;
@@ -325,9 +339,10 @@ impl EncryptReactionParams {
 /// Parameters for ``Chat.encrypt_edit``.
 ///
 /// The preferred form passes ``target_event`` — the base64 raw event of the
-/// message being edited — so the conversation id and target sequence id are
-/// derived from it. Pass ``None`` only when setting ``conversation_id`` and
-/// ``target_message_sequence_id`` directly.
+/// message being edited — so the conversation id, the target sequence id
+/// and, for a v1 edit, the target message id are derived from it. Pass
+/// ``None`` only when setting ``conversation_id``,
+/// ``target_message_sequence_id`` and ``target_message_id`` directly.
 #[pyclass(get_all, set_all)]
 pub struct EncryptEditParams {
     /// Base64 raw event of the message being edited.
@@ -342,6 +357,12 @@ pub struct EncryptEditParams {
     /// Sequence id of the message being edited; derived from
     /// ``target_event`` when ``None``.
     pub(crate) target_message_sequence_id: Option<String>,
+    /// Signed message id of the message being edited; derived from
+    /// ``target_event`` when ``None``. A v1 edit names the message it edits,
+    /// so a v1 edit built without ``target_event`` needs it; a v0 edit names
+    /// none. With ``target_event``, one other than the id the event carries
+    /// raises ``InvalidInputError``.
+    pub(crate) target_message_id: Option<String>,
     /// Your user ID; defaults to the ``set_identity`` value.
     pub(crate) sender_id: Option<String>,
     /// Your registered signing public key version; defaults to the
@@ -359,13 +380,14 @@ pub struct EncryptEditParams {
 impl EncryptEditParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event=None, updated_text=None, *, entities=None, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, updated_text=None, *, entities=None, conversation_id=None, target_message_sequence_id=None, target_message_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
     pub(crate) fn new(
         target_event: Option<String>,
         updated_text: Option<String>,
         entities: Option<Py<PyAny>>,
         conversation_id: Option<String>,
         target_message_sequence_id: Option<String>,
+        target_message_id: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
@@ -377,6 +399,7 @@ impl EncryptEditParams {
             entities,
             conversation_id,
             target_message_sequence_id,
+            target_message_id,
             sender_id,
             signing_key_version,
             conversation_key,
@@ -394,6 +417,7 @@ impl EncryptEditParams {
         params.entities = entities_field(py, &self.entities, "entities")?;
         params.conversation_id = self.conversation_id.clone();
         params.target_message_sequence_id = self.target_message_sequence_id.clone();
+        params.target_message_id = self.target_message_id.clone();
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
         params.conversation_key = self.conversation_key.clone();

@@ -558,9 +558,23 @@ async function main() {
       conversationKeyVersion: "1",
       signingKeyVersion: "1",
     });
+  // Group actions sign at the version sends sign at.
+  const leaveGroup = () => switching.prepareGroupLeave({
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "g100",
+  }).actionSignatures;
   assert.equal(sendHello().signatureInfo.signatureVersion, "7");
+  assert.deepEqual(leaveGroup().map((s) => s.messageEventSignature.signatureVersion), ["7", "7"]);
   await waitForV1(sendHello);
   assert.equal(sendHello().signatureInfo.signatureVersion, "10");
+  const [v1Removal, v1Delete] = leaveGroup();
+  assert.equal(v1Removal.messageEventSignature.signatureVersion, "10");
+  assert.ok(signs(switching, v1Removal,
+    `GroupChangeEvent.GroupMemberRemoveChange,${v1Removal.messageId},111,g100,111,signature_version=10`));
+  assert.equal(v1Delete.messageEventSignature.signatureVersion, "10");
+  assert.ok(signs(switching, v1Delete,
+    `ConversationDeleteEvent,${v1Delete.messageId},111,g100,signature_version=10`));
   switching.free();
   await lateAnswer.close();
 
@@ -676,6 +690,93 @@ async function main() {
   assert.equal(decodedEdit.entities[0].startIndex, 4);
   assert.equal(decodedEdit.entities[0].endIndex, 23);
 
+  // 4c2b. A v1 send built without the original event names it through the
+  // explicit fields, and a media attachment carries the SHA-256 of its
+  // plaintext file: replyToMessageId, targetMessageId and plaintext_sha256
+  // each read back from the decrypted send.
+  const photoSha256 = Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode("the photo's plaintext bytes")),
+  ).toString("base64");
+  const hashedPhoto = v1Sender.encryptMessage({
+    conversationId: "conv-1",
+    text: "a hashed photo",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+    attachments: [
+      { ...photoAttachment("hashed"), plaintext_sha256: photoSha256 },
+      photoAttachment("unhashed"),
+    ],
+  });
+  const hashedEvent = chat.decryptEvent({
+    eventB64: hashedPhoto.eventB64,
+    conversationKeys: { "1": convKey },
+    signingKeys: ownSigningKeys,
+  });
+  assert.equal(hashedEvent.verified, true);
+  assert.deepEqual(hashedEvent.attachments.map((a) => a.plaintextSha256), [photoSha256, null]);
+  const v1Reply = v1Sender.encryptReply({
+    conversationId: "conv-1",
+    text: "nice",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+    replyToSequenceId: "seq-99",
+    replyToMessageId: hashedPhoto.messageId,
+    replyToSenderId: "111",
+    replyToText: "a hashed photo",
+  });
+  assert.equal(decryptOwn(v1Reply).replyingToPreview.replyingToMessageId, hashedPhoto.messageId);
+  const v1Edit = v1Sender.encryptEdit({
+    conversationId: "conv-1",
+    targetMessageSequenceId: "seq-99",
+    targetMessageId: hashedPhoto.messageId,
+    updatedText: "a better photo",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  });
+  assert.equal(decryptOwn(v1Edit).targetMessageId, hashedPhoto.messageId);
+  // With the original's event, an explicit id must be the one it carries.
+  const otherId = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+  assert.throws(
+    () => v1Sender.encryptReply({
+      conversationId: "conv-1",
+      text: "nice",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+      replyToEvent: hashedPhoto.eventB64,
+      replyToSequenceId: "seq-99",
+      replyToMessageId: otherId,
+    }),
+    {
+      kind: "invalidInput",
+      message: `reply_to_message_id '${otherId}' is not the message_id '${hashedPhoto.messageId}' that reply_to_event carries: pass that id or leave reply_to_message_id unset`,
+    },
+  );
+  assert.throws(
+    () => v1Sender.encryptEdit({
+      targetEvent: hashedPhoto.eventB64,
+      conversationId: "conv-1",
+      targetMessageSequenceId: "seq-99",
+      targetMessageId: otherId,
+      updatedText: "a better photo",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+    }),
+    {
+      kind: "invalidInput",
+      message: `target_message_id '${otherId}' is not the message_id '${hashedPhoto.messageId}' that target_event carries: pass that id or leave target_message_id unset`,
+    },
+  );
+  assert.throws(
+    () => v1Sender.encryptMessage({
+      conversationId: "conv-1",
+      text: "a short hash",
+      conversationKey: convKey,
+      conversationKeyVersion: "1",
+      attachments: [{ ...photoAttachment("hashed"), plaintext_sha256: "c2hvcnQ=" }],
+    }),
+    /media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the file's plaintext bytes \(32 bytes\)/,
+  );
+
   // 4c3. prepareMessageDelete returns the request's actionSignatures: one
   // signed action with the encoded MessageDeleteEvent detail, its signature
   // nested; 1:1 ids are signed in canonical colon form.
@@ -708,10 +809,10 @@ async function main() {
   }));
   assert.ok(signs(chat, deleteForSelfSig, `MessageDeleteEvent,${deleteForSelfSig.messageId},111,g999,1,seq-1`));
 
-  // 4c5. Group actions: a removal signs version 11 and rotates the key for
-  // the members who stay, the title and description changes sign the value
-  // encrypted under the conversation key, the avatar change signs the media
-  // URL as is, and the other prepares sign one version-7 payload.
+  // 4c5. Group actions: a removal rotates the key for the members who stay,
+  // the title and description changes sign the value encrypted under the
+  // conversation key, the avatar change signs the media URL as is, and every
+  // action signs a version-7 payload.
   const identity = { senderId: "111", signingKeyVersion: "1" };
   const keys = chat.getPublicKeys();
   const remaining = [{ userId: "111", identityPublicKey: keys.identity, publicKeyVersion: "1" }];
@@ -725,11 +826,10 @@ async function main() {
   assert.equal(rotated.conversationKey.length, 32);
   assert.equal(rotated.conversationParticipantKeys.length, 1);
   assert.equal(rotated.actionSignatures.length, 2);
-  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "11");
+  assert.equal(rotated.actionSignatures[0].messageEventSignature.signatureVersion, "7");
   const removal = rotated.actionSignatures[0];
   assert.ok(signs(chat, removal,
-    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007,` +
-    `${rotated.conversationKeyVersion},signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${removal.messageId},111,g100,910007`));
   assert.throws(
     () => chat.prepareGroupMembersRemove({
       senderId: "111",
@@ -750,8 +850,9 @@ async function main() {
   });
   assert.equal(left.actionSignatures.length, 3);
   const [leaving, promoting, deleting] = left.actionSignatures;
+  assert.equal(leaving.messageEventSignature.signatureVersion, "7");
   assert.ok(signs(chat, leaving,
-    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111,7,signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${leaving.messageId},111,g100,111`));
   assert.ok(signs(chat, promoting, `GroupChangeEvent.GroupAdminAddChange,${promoting.messageId},111,g100,910008`));
   assert.ok(signs(chat, deleting, `ConversationDeleteEvent,${deleting.messageId},111,g100`));
 
@@ -796,8 +897,7 @@ async function main() {
   assert.equal(withTitle.actionSignatures.length, 3);
   const [titledRemoval, titleChange] = withTitle.actionSignatures;
   assert.ok(signs(chat, titledRemoval,
-    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007,` +
-    `${withTitle.conversationKeyVersion},signature_version=11`));
+    `GroupChangeEvent.GroupMemberRemoveChange,${titledRemoval.messageId},111,g100,910007`));
   assert.equal(titleChange.messageEventSignature.signatureVersion, "7");
   assert.ok(titleChange.encodedMessageEventDetail.length > 0);
   const blocking = onlyAction(chat.prepareScreenCapture({
