@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-02
+
 ### Added
 
 - `EncryptReplyParams` takes `reply_to_message_id`, the signed `message_id`
@@ -941,5 +943,7 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.7.0
