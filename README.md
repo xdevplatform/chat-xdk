@@ -140,16 +140,23 @@ provisioning step in both modes.
 
 The SDK makes one kind of request itself: an anonymous
 `GET https://api.x.com/2/chat/features`, which reads the X API's feature
-switches. They pick the format the SDK sends in. Each chat reads them once,
-when it is created, and keeps the answer for its lifetime; chats created while
-a request is in flight share it.
+switches. They pick the format the SDK sends in. Each chat reads them when
+it is created, again once `set_identity` gives it a sender, and again 5
+minutes after each answer, so a change reaches a running chat without a
+restart. The sender's request carries its bucket, the last four digits of
+the user id (`?bucket=1234`), so every chat of one sender gets the same
+answer; before that, the X API buckets the request by its address. Chats
+that read the same URL share one request.
 
 The request carries no credentials and never delays or fails an SDK call.
-Until it answers, and for the chat's lifetime if it fails or is blocked, every
-switch stays off and sends stay in v0, the format 0.5.x sends. The Rust crate
-and the C ABI never make the request: a Rust app or a C caller makes it and
-hands the chat the answer (`set_feature_switches`,
-`chat_xdk_set_feature_switches`), and a chat that gets none sends v0.
+One that fails is retried in the background, 1 second later, then after
+twice the previous wait, at most 5 minutes apart. Each answer replaces the
+one before; until an answer for the chat's URL arrives, every switch stays
+off and sends stay in v0, the format 0.5.x sends. The Rust crate and the C
+ABI never make the request: a Rust app or a C caller requests the URL
+`feature_switches_url` (`chat_xdk_feature_switches_url`) returns, again every
+5 minutes, and hands the chat each answer (`set_feature_switches`,
+`chat_xdk_set_feature_switches`); a chat that gets none sends v0.
 
 ## Cryptography
 

@@ -4,10 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chat_xdk_core::error::SdkError;
-use chat_xdk_core::{Event, SigningKeyEntry};
+use chat_xdk_core::{Event, SigningKeyEntry, FEATURES_REFRESH_MS};
 
 use crate::chat_core::{message_text, ChatCore, ReplyOptions};
 use crate::x_api::{ChatApi, EventItem};
@@ -198,11 +198,42 @@ impl<A: ChatApi> Bot<A> {
         println!("reply_sent conv={reply_conv_id} len={}", reply.len());
     }
 
-    /// Load the backlog then poll forever.
+    /// Read the X API's feature switches for the bot's sender, which decide
+    /// whether its sends are v0 or v1, and return whether a 200 answer
+    /// arrived. Any other result changes nothing.
+    pub fn read_feature_switches(&self) -> bool {
+        let url = self.core.feature_switches_url();
+        match self.api.get_feature_switches(&url) {
+            Some((status, body)) => {
+                self.core.set_feature_switches(status, &body);
+                status == 200
+            }
+            None => false,
+        }
+    }
+
+    /// Load the backlog, then poll forever. The bot reads the feature
+    /// switches before its first poll and again [`FEATURES_REFRESH_MS`] after
+    /// each answer, so a change reaches it while it runs; a read that gets no
+    /// answer is retried 1 s later, then after twice the previous wait, never
+    /// more than that interval apart.
     pub fn run(&mut self, conversation_id: &str, poll_interval: Duration) -> Result<(), String> {
+        let refresh = Duration::from_millis(FEATURES_REFRESH_MS);
+        let mut next_read = Instant::now();
+        let mut retry = Duration::ZERO;
         self.load_backlog(conversation_id)?;
         println!("bot_running conv={conversation_id} polling every {poll_interval:?}");
         loop {
+            if Instant::now() >= next_read {
+                retry = if self.read_feature_switches() {
+                    next_read = Instant::now() + refresh;
+                    Duration::ZERO
+                } else {
+                    let wait = (retry * 2).clamp(Duration::from_secs(1), refresh);
+                    next_read = Instant::now() + wait;
+                    wait
+                };
+            }
             if let Err(e) = self.poll_once(conversation_id) {
                 eprintln!("poll_error conv={conversation_id} err={e}");
             }

@@ -2,6 +2,7 @@ package chatxdk
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -1147,6 +1148,138 @@ func sendFiles(t *testing.T, chat *Chat, v sdkVectors, text string, attachments 
 	return payload
 }
 
+// A v1 send built without the original event names it through the explicit
+// fields, and a media attachment carries the SHA-256 of its plaintext file:
+// ReplyToMessageID, TargetMessageID and PlaintextSHA256 each read back from
+// the decrypted send.
+func TestV1SendsNameTheOriginalAndCarryTheFileHashFromExplicitFields(t *testing.T) {
+	v := loadVectors(t)
+	chat := mediaSender(t, v)
+	defer chat.Close()
+
+	sum := sha256.Sum256([]byte("the photo's plaintext bytes"))
+	hash := base64.StdEncoding.EncodeToString(sum[:])
+	photo := mediaAttachment("photo")
+	photo.PlaintextSHA256 = &hash
+	original := sendFiles(t, chat, v, "a photo", []AttachmentDescriptor{photo, mediaAttachment("other")})
+	decrypted, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         original.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	var hashes []*string
+	for _, raw := range mustMessage(t, decrypted, err).Attachments {
+		var info struct {
+			PlaintextSHA256 *string `json:"plaintext_sha256"`
+		}
+		if err := json.Unmarshal(raw, &info); err != nil {
+			t.Fatalf("attachment %s: %v", raw, err)
+		}
+		hashes = append(hashes, info.PlaintextSHA256)
+	}
+	if len(hashes) != 2 || hashes[0] == nil || *hashes[0] != hash || hashes[1] != nil {
+		t.Errorf("decrypted plaintext_sha256s %v, want [%s <nil>]", hashes, hash)
+	}
+
+	replyText := "a photo"
+	reply, err := chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "nice",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToSequenceID:      "100",
+		ReplyToMessageID:       original.MessageID,
+		ReplyToSenderID:        v.EventSenderID,
+		ReplyToText:            &replyText,
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply failed: %v", err)
+	}
+	var preview struct {
+		ReplyingToMessageID string `json:"replying_to_message_id"`
+	}
+	if err := json.Unmarshal(decryptOwnText(t, chat, v, reply).ReplyingToPreview, &preview); err != nil {
+		t.Fatalf("reply preview: %v", err)
+	}
+	if preview.ReplyingToMessageID != original.MessageID {
+		t.Errorf("replying_to_message_id %q, want %q", preview.ReplyingToMessageID, original.MessageID)
+	}
+
+	edit, err := chat.EncryptEdit(EncryptEditParams{
+		ConversationID:          v.EventConversationID,
+		TargetMessageSequenceID: "100",
+		TargetMessageID:         original.MessageID,
+		UpdatedText:             "a better photo",
+		ConversationKey:         v.conversationKey(t),
+		ConversationKeyVersion:  v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptEdit failed: %v", err)
+	}
+	decrypted, err = chat.DecryptEvent(DecryptEventParams{
+		EventB64:         edit.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	var edited struct {
+		TargetMessageID string `json:"target_message_id"`
+	}
+	if err := json.Unmarshal(mustMessage(t, decrypted, err).Content.raw, &edited); err != nil {
+		t.Fatalf("edit content: %v", err)
+	}
+	if edited.TargetMessageID != original.MessageID {
+		t.Errorf("target_message_id %q, want %q", edited.TargetMessageID, original.MessageID)
+	}
+
+	// With the original's event, an explicit id must be the one it carries.
+	other := "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f"
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "nice",
+		ReplyToEvent:           original.EventB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToSequenceID:      "100",
+		ReplyToMessageID:       other,
+	})
+	wantReply := "reply_to_message_id '" + other + "' is not the message_id '" + original.MessageID +
+		"' that reply_to_event carries: pass that id or leave reply_to_message_id unset"
+	var replyErr *Error
+	if !errors.As(err, &replyErr) || replyErr.Kind != ErrorKindInvalidInput || replyErr.Message != wantReply {
+		t.Errorf("a mismatched ReplyToMessageID: got %v, want an invalid-input error %q", err, wantReply)
+	}
+	_, err = chat.EncryptEdit(EncryptEditParams{
+		TargetEvent:             original.EventB64,
+		ConversationID:          v.EventConversationID,
+		TargetMessageSequenceID: "100",
+		TargetMessageID:         other,
+		UpdatedText:             "a better photo",
+		ConversationKey:         v.conversationKey(t),
+		ConversationKeyVersion:  v.EventConversationKeyVersion,
+	})
+	wantEdit := "target_message_id '" + other + "' is not the message_id '" + original.MessageID +
+		"' that target_event carries: pass that id or leave target_message_id unset"
+	var editErr *Error
+	if !errors.As(err, &editErr) || editErr.Kind != ErrorKindInvalidInput || editErr.Message != wantEdit {
+		t.Errorf("a mismatched TargetMessageID: got %v, want an invalid-input error %q", err, wantEdit)
+	}
+
+	short := "c2hvcnQ="
+	photo.PlaintextSHA256 = &short
+	_, err = chat.EncryptMessage(EncryptMessageParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "a photo",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		Attachments:            []AttachmentDescriptor{photo},
+	})
+	want := "media_hash_key 'photo' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the file's plaintext bytes (32 bytes)"
+	var chatErr *Error
+	if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput || chatErr.Message != want {
+		t.Errorf("a short plaintext_sha256: got %v, want an invalid-input error %q", err, want)
+	}
+}
+
 // fileParams names the file mediaHashKey of the sent message payload.
 func fileParams(t *testing.T, v sdkVectors, payload *SendPayload, mediaHashKey string) DecryptFileParams {
 	t.Helper()
@@ -1787,9 +1920,9 @@ func TestGroupActionSignatures(t *testing.T) {
 			len(rotated.ConversationKey), len(rotated.ConversationParticipantKeys), len(rotated.ActionSignatures))
 	}
 	removal := rotated.ActionSignatures[0]
-	if removal.MessageEventSignature.SignatureVersion != "11" ||
+	if removal.MessageEventSignature.SignatureVersion != "7" ||
 		!signedOver(t, chat, removal, "GroupChangeEvent.GroupMemberRemoveChange,"+removal.MessageID+
-			",111,g100,910007,"+rotated.ConversationKeyVersion+",signature_version=11") {
+			",111,g100,910007") {
 		t.Fatalf("removal signature: %+v", removal)
 	}
 	_, err = chat.PrepareGroupMembersRemove(GroupMembersRemoveParams{
@@ -1813,8 +1946,9 @@ func TestGroupActionSignatures(t *testing.T) {
 		t.Fatalf("leave: %v", err)
 	}
 	if len(left.ActionSignatures) != 3 ||
+		left.ActionSignatures[0].MessageEventSignature.SignatureVersion != "7" ||
 		!signedOver(t, chat, left.ActionSignatures[0], "GroupChangeEvent.GroupMemberRemoveChange,"+
-			left.ActionSignatures[0].MessageID+",111,g100,111,7,signature_version=11") ||
+			left.ActionSignatures[0].MessageID+",111,g100,111") ||
 		!signedOver(t, chat, left.ActionSignatures[1], "GroupChangeEvent.GroupAdminAddChange,"+
 			left.ActionSignatures[1].MessageID+",111,g100,910008") ||
 		!signedOver(t, chat, left.ActionSignatures[2], "ConversationDeleteEvent,"+
@@ -1899,6 +2033,40 @@ func TestGroupActionSignatures(t *testing.T) {
 	if !signedOver(t, chat, blocking, "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,"+
 		blocking.MessageID+",111,g100") {
 		t.Fatalf("screen capture signature: %+v", blocking)
+	}
+}
+
+// While a chat sends v1, its group actions sign at version 10, as its
+// messages do.
+func TestGroupActionsSignAtVersion10WhileSendsAreV1(t *testing.T) {
+	v := loadVectors(t)
+	chat := newV1Chat(t)
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	waitForV1(t, chat)
+	left, err := chat.PrepareGroupLeave(GroupLeaveParams{
+		SenderID:          "111",
+		SigningKeyVersion: "1",
+		ConversationID:    "g100",
+	})
+	if err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if len(left.ActionSignatures) != 2 {
+		t.Fatalf("leave signatures: %+v", left.ActionSignatures)
+	}
+	removal, deletion := left.ActionSignatures[0], left.ActionSignatures[1]
+	if removal.MessageEventSignature.SignatureVersion != "10" ||
+		!signedOver(t, chat, removal, "GroupChangeEvent.GroupMemberRemoveChange,"+
+			removal.MessageID+",111,g100,111,signature_version=10") {
+		t.Errorf("removal signature: %+v", removal)
+	}
+	if deletion.MessageEventSignature.SignatureVersion != "10" ||
+		!signedOver(t, chat, deletion, "ConversationDeleteEvent,"+
+			deletion.MessageID+",111,g100,signature_version=10") {
+		t.Errorf("delete signature: %+v", deletion)
 	}
 }
 

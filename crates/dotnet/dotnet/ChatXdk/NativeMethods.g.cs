@@ -187,16 +187,29 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_set_cache_keys(ChatHandle* handle, int enabled);
 
         /// <summary>
+        ///  The URL of this chat's feature switches, in `data`:
+        ///  `CHAT_XDK_FEATURES_ENDPOINT` with `?bucket=` and the last four digits of
+        ///  the user id `chat_xdk_set_identity` set, so every chat of one sender gets
+        ///  the same answer wherever it runs; the bare endpoint before an identity is
+        ///  set.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_feature_switches_url", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_feature_switches_url(ChatHandle* handle);
+
+        /// <summary>
         ///  Set this chat's feature switches from the answer to the GET of
-        ///  `CHAT_XDK_FEATURES_ENDPOINT` you made: its HTTP status, 0 when no
+        ///  `chat_xdk_feature_switches_url` you made: its HTTP status, 0 when no
         ///  response arrived, and `body_len` bytes of its body, read to the end or to
         ///  one byte past [`CHAT_XDK_FEATURES_MAX_BODY`]; `body` may be NULL when
-        ///  `body_len` is 0. Make the request once, when you create the chat, within
-        ///  [`CHAT_XDK_FEATURES_TIMEOUT_MS`]. Sends are v0 until an answer turns
-        ///  `v1_send` on, then v1. A chat takes one answer for its lifetime, the
-        ///  first, and a status other than 200, or a body longer than
+        ///  `body_len` is 0. Make the request without credentials once you have set
+        ///  the identity, within [`CHAT_XDK_FEATURES_TIMEOUT_MS`], and again every
+        ///  [`CHAT_XDK_FEATURES_REFRESH_MS`]. Sends are v0 until an answer turns
+        ///  `v1_send` on, then v1, and v0 again if a later answer turns it off. Each
+        ///  answer that is a 200 with a `{"features": {...}}` object replaces the one
+        ///  before. A status other than 200, or a body longer than
         ///  [`CHAT_XDK_FEATURES_MAX_BODY`] or that isn't a `{"features": {...}}`
-        ///  object, leaves every switch off.
+        ///  object, changes nothing: retry the request 1 s later, then after twice
+        ///  the previous wait, never more than [`CHAT_XDK_FEATURES_REFRESH_MS`] apart.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_set_feature_switches", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_set_feature_switches(ChatHandle* handle, int status, byte* body, nuint body_len);
@@ -204,10 +217,13 @@ namespace ChatXdk
         /// <summary>
         ///  Internal, for this repository's bindings; not part of the API.
         ///
-        ///  Start this chat's one read of the feature switches. Returns in `data` the
-        ///  GET to perform, as JSON: `{"id": …, "url": "…", "timeout_ms": …,
-        ///  "max_bytes": …}`. Both fields are NULL when the chat takes the answer of a
-        ///  GET already in flight, or has started its read already.
+        ///  Start this chat's reads of the feature switches for its identity: call it
+        ///  when the chat is created and after each `chat_xdk_set_identity`. Returns
+        ///  in `data` the GET to perform, as JSON: `{"id": …, "url": "…",
+        ///  "timeout_ms": …, "max_bytes": …, "delay_ms": …}`, `delay_ms` being how
+        ///  long to wait before starting it. Both fields are NULL when the chat
+        ///  already reads its identity's URL or takes the answer of a GET already in
+        ///  flight.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_start", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_internal_feature_start(ChatHandle* handle);
@@ -218,19 +234,22 @@ namespace ChatXdk
         ///  Report the result of the feature-switch GET `id`: its HTTP status, 0 when
         ///  no response arrived, and `body_len` bytes of its body, read to the end or
         ///  to one byte past the GET's `max_bytes`. `body` may be NULL when
-        ///  `body_len` is 0.
+        ///  `body_len` is 0. Returns in `data` the next GET to perform, a refresh or
+        ///  a retry, in the JSON shape `chat_xdk_internal_feature_start` returns,
+        ///  while a chat still waits for one; both fields are NULL otherwise.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_complete", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern void chat_xdk_internal_feature_complete(ulong id, int status, byte* body, nuint body_len);
+        internal static extern FfiResult chat_xdk_internal_feature_complete(ulong id, int status, byte* body, nuint body_len);
 
         /// <summary>
         ///  Internal, for this repository's tests; not part of the API.
         ///
         ///  Read this chat's feature switches from `endpoint`, within `timeout_ms`
-        ///  milliseconds, when its read starts.
+        ///  milliseconds, again `refresh_ms` milliseconds after each answer and never
+        ///  more than `refresh_ms` apart while retrying, from the next read it starts.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_internal_feature_configure", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern FfiResult chat_xdk_internal_feature_configure(ChatHandle* handle, byte* endpoint, ulong timeout_ms);
+        internal static extern FfiResult chat_xdk_internal_feature_configure(ChatHandle* handle, byte* endpoint, ulong timeout_ms, ulong refresh_ms);
 
         /// <summary>
         ///  Internal, for this repository's tests; not part of the API.
@@ -346,9 +365,13 @@ namespace ChatXdk
         ///  replied to; the preview is derived from it), with optional
         ///  `reply_to_edit_event` and `reply_to_ckces` (base64 raw key-change events
         ///  needed when the original used a different key version). The explicit
-        ///  `reply_to_sequence_id`, `reply_to_sender_id`, `reply_to_text`,
-        ///  `reply_to_entities`, and `reply_to_attachments` overrides remain for
-        ///  callers that no longer hold the raw event.
+        ///  `reply_to_sequence_id`, `reply_to_message_id`, `reply_to_sender_id`,
+        ///  `reply_to_text`, `reply_to_entities`, and `reply_to_attachments`
+        ///  overrides remain for callers that no longer hold the raw event; such a
+        ///  reply needs `reply_to_message_id`, as recipients treat a v1 reply that
+        ///  names no original as invalid. With `reply_to_event`, a
+        ///  `reply_to_message_id` other than the id the event carries fails with an
+        ///  invalid-input error.
         ///
         ///  Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
         ///  and files work as for `chat_xdk_encrypt_message`.
@@ -386,9 +409,13 @@ namespace ChatXdk
         ///
         ///  `params_json` — single JSON document: `updated_text` plus the edit
         ///  target: preferably `target_event` (base64 raw event being edited; the
-        ///  conversation id and target sequence id are derived from it), with
-        ///  explicit `conversation_id` / `target_message_sequence_id` overrides for
-        ///  callers that no longer hold the raw event. Optional `entities`
+        ///  conversation id, target sequence id and target message id are derived
+        ///  from it), with explicit `conversation_id` / `target_message_sequence_id`
+        ///  / `target_message_id` overrides for callers that no longer hold the raw
+        ///  event; a v1 edit built without `target_event` needs `target_message_id`
+        ///  to name the message it edits. With `target_event`, a `target_message_id`
+        ///  other than the id the event carries fails with an invalid-input error.
+        ///  Optional `entities`
         ///  (`[start, end, type]` tuples for the replacement text), `sender_id` /
         ///  `signing_key_version` (unset resolves from the session identity), and
         ///  `conversation_key` (base64) / `conversation_key_version` (unset resolves
@@ -646,7 +673,7 @@ namespace ChatXdk
         ///  Sign leaving a group.
         ///
         ///  `params_json` — `conversation_id`, plus optional `promote_admin_id`,
-        ///  `conversation_key_version` (absent signs `null` on the removal), and
+        ///  `conversation_key_version` (named on the removal when set), and
         ///  `sender_id` / `signing_key_version`.
         ///
         ///  Returns JSON `PreparedAction`: the removal of the sender, an admin add

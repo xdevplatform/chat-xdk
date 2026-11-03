@@ -121,10 +121,11 @@ pub fn detect_image_dimensions(bytes: &[u8]) -> JsValue {
     }
 }
 
-// Feature switches (GET /2/chat/features). A chat reads them once, when it is
-// created: the core decides what to fetch and what an answer means, and the JS
-// wrapper performs the GET. None of this is API, and all of it is left out of
-// the TypeScript declarations.
+// Feature switches (GET /2/chat/features). A chat reads them when it is
+// created and when its identity is set, and again while it lives: the core
+// decides what to fetch, when to fetch it again and what an answer means,
+// and the JS wrapper performs each GET. None of this is API, and all of it
+// is left out of the TypeScript declarations.
 
 /// Milliseconds from `performance.now()`, or `Date.now()` without it.
 fn feature_clock() -> u64 {
@@ -140,10 +141,31 @@ fn feature_clock() -> u64 {
 }
 
 /// Report the result of the GET `id`: its HTTP status, 0 when no complete
-/// response arrived, and its body.
+/// response arrived, and its body. Returns the next GET to perform, a
+/// refresh or a retry, in the shape `__featureStart` returns, or
+/// `undefined`.
 #[wasm_bindgen(js_name = __featureComplete, skip_typescript)]
-pub fn feature_complete(id: f64, status: u16, body: &[u8]) {
-    bindings::complete_fetch(id as u64, status, body);
+pub fn feature_complete(id: f64, status: u16, body: &[u8]) -> JsValue {
+    feature_request(bindings::complete_fetch(id as u64, status, body))
+}
+
+/// A GET for the wrapper to perform, as `{ id, url, timeoutMs, maxBytes,
+/// delayMs }`, or `undefined` for none.
+fn feature_request(fetch: Option<bindings::Fetch>) -> JsValue {
+    let Some(fetch) = fetch else {
+        return JsValue::UNDEFINED;
+    };
+    let request = js_sys::Object::new();
+    for (name, value) in [
+        ("id", JsValue::from(fetch.id as f64)),
+        ("url", fetch.url.into()),
+        ("timeoutMs", (fetch.timeout_ms as f64).into()),
+        ("maxBytes", (fetch.max_bytes as f64).into()),
+        ("delayMs", (fetch.delay_ms as f64).into()),
+    ] {
+        js_sys::Reflect::set(&request, &name.into(), &value).ok();
+    }
+    request.into()
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
@@ -353,32 +375,21 @@ impl Chat {
     }
 
     /// For this repository's tests: read this chat's feature switches from
-    /// `endpoint`, within `timeoutMs`. Call it before the wrapper starts the
-    /// read. Not API.
+    /// `endpoint`, within `timeoutMs`, again `refreshMs` after each answer.
+    /// Call it before the wrapper starts the read. Not API.
     #[wasm_bindgen(js_name = __configureFeatures, skip_typescript)]
-    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64) {
-        self.inner.configure_features(endpoint, timeout_ms as u64);
+    pub fn configure_features(&self, endpoint: &str, timeout_ms: f64, refresh_ms: f64) {
+        self.inner
+            .configure_features(endpoint, timeout_ms as u64, refresh_ms as u64);
     }
 
-    /// Start this chat's one read of the feature switches:
-    /// `{ id, url, timeoutMs, maxBytes }` for the wrapper to GET, or
-    /// `undefined` when the chat takes the answer of a GET in flight or has
-    /// started its read already. Not API.
+    /// Start this chat's reads of the feature switches for its identity:
+    /// `{ id, url, timeoutMs, maxBytes, delayMs }` for the wrapper to GET,
+    /// or `undefined` when the chat already reads its identity's URL or
+    /// takes the answer of a GET in flight. Not API.
     #[wasm_bindgen(js_name = __featureStart, skip_typescript)]
     pub fn feature_start(&self) -> JsValue {
-        let Some(fetch) = self.inner.start_features() else {
-            return JsValue::UNDEFINED;
-        };
-        let request = js_sys::Object::new();
-        for (name, value) in [
-            ("id", JsValue::from(fetch.id as f64)),
-            ("url", fetch.url.into()),
-            ("timeoutMs", (fetch.timeout_ms as f64).into()),
-            ("maxBytes", (fetch.max_bytes as f64).into()),
-        ] {
-            js_sys::Reflect::set(&request, &name.into(), &value).ok();
-        }
-        request.into()
+        feature_request(self.inner.start_features())
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`
@@ -648,13 +659,17 @@ impl Chat {
     ///
     /// Takes a single params object: the same fields as `encryptMessage` plus
     /// `replyToEvent` — the base64 raw signed event being replied to, from
-    /// which the reply preview (sequence id, sender, text, entities,
-    /// attachments) is derived — with optional `replyToEditEvent`,
+    /// which the reply preview (sequence id, message id, sender, text,
+    /// entities, attachments) is derived — with optional `replyToEditEvent`,
     /// `replyToCkces` (base64 raw key-change events needed to decrypt the
-    /// original), and explicit `replyToSequenceId`, `replyToSenderId`,
-    /// `replyToText`, `replyToEntities`, `replyToAttachments` overrides for
-    /// callers that no longer hold the raw event. The reply's id and files
-    /// work as in `encryptMessage`.
+    /// original), and explicit `replyToSequenceId`, `replyToMessageId`,
+    /// `replyToSenderId`, `replyToText`, `replyToEntities`,
+    /// `replyToAttachments` overrides for callers that no longer hold the raw
+    /// event; such a reply needs `replyToMessageId`, as recipients treat a v1
+    /// reply that names no original as invalid. With `replyToEvent`, a
+    /// `replyToMessageId` other than the id the event carries fails with an
+    /// invalid-input error. The reply's id and files work as in
+    /// `encryptMessage`.
     #[wasm_bindgen(js_name = encryptReply)]
     pub fn encrypt_reply(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsEncryptReplyParams = from_js_params("encryptReply", params)?;
@@ -670,6 +685,7 @@ impl Chat {
         core_params.conversation_key = p.conversation_key;
         core_params.conversation_key_version = p.conversation_key_version;
         core_params.reply_to_sequence_id = p.reply_to_sequence_id;
+        core_params.reply_to_message_id = p.reply_to_message_id;
         core_params.reply_to_sender_id = p.reply_to_sender_id;
         core_params.reply_to_text = p.reply_to_text;
         core_params.entities = p.entities.map(entity_tuples_to_descs);
@@ -724,8 +740,12 @@ impl Chat {
     ///
     /// Takes a single params object with camelCase keys: `updatedText`,
     /// plus `targetEvent` — the base64 raw event being edited, from which the
-    /// conversation id and target sequence id are derived — or explicit
-    /// `conversationId` / `targetMessageSequenceId` overrides. `entities`
+    /// conversation id, the target sequence id and, for a v1 edit, the
+    /// target message id are derived — or explicit `conversationId` /
+    /// `targetMessageSequenceId` / `targetMessageId` overrides; a v1 edit
+    /// built without `targetEvent` needs `targetMessageId`, and with
+    /// `targetEvent` one other than the id the event carries fails with an
+    /// invalid-input error. `entities`
     /// (array of `[start, end, "type"]` tuples) describes the replacement
     /// text; `senderId`, `signingKeyVersion`, `conversationKey` (Uint8Array),
     /// and `conversationKeyVersion` resolve from the session identity and key
@@ -786,7 +806,7 @@ impl Chat {
     ///
     /// `publicKeys` are the identity keys of the members who stay. The
     /// result carries the new key and the action signatures: the removal,
-    /// bound to the new key version, a title and a description change for
+    /// which names the new key version, a title and a description change for
     /// each one the params set, re-encrypted under the new key, and the key
     /// change.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
@@ -1498,6 +1518,7 @@ struct JsEncryptReplyParams {
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
     reply_to_sequence_id: Option<String>,
+    reply_to_message_id: Option<String>,
     #[serde(default, deserialize_with = "reply_to_sender_id_string")]
     reply_to_sender_id: Option<String>,
     reply_to_text: Option<String>,
@@ -1548,6 +1569,7 @@ struct JsEncryptEditParams {
     entities: Option<Vec<(i32, i32, String)>>,
     conversation_id: Option<String>,
     target_message_sequence_id: Option<String>,
+    target_message_id: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
@@ -1563,6 +1585,7 @@ impl JsEncryptEditParams {
         params.entities = self.entities.map(entity_tuples_to_descs);
         params.conversation_id = self.conversation_id;
         params.target_message_sequence_id = self.target_message_sequence_id;
+        params.target_message_id = self.target_message_id;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         params.conversation_key = self.conversation_key;

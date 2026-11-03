@@ -153,30 +153,54 @@ fn the_v0_signature_covers_the_0_5_payload() {
         .unwrap());
 }
 
-/// Point `core`'s read of the feature switches at an endpoint of its own, so
-/// tests running at once never share a GET, and start the read.
+/// An endpoint of its own, so tests running at once never share a GET.
 #[cfg(feature = "bindings")]
-fn start_own_read(core: &ChatCore) -> crate::features::Fetch {
+fn own_endpoint() -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let endpoint = format!(
+    format!(
         "https://features.test/{}/2/chat/features",
         NEXT.fetch_add(1, Ordering::Relaxed)
-    );
-    core.configure_features(&endpoint, 2_000);
-    core.start_features().expect("the chat's read starts a GET")
+    )
+}
+
+/// Point `core`'s reads of the feature switches at `endpoint`, again
+/// `REFRESH_MS` after each answer, and start them.
+#[cfg(feature = "bindings")]
+fn start_read(core: &ChatCore, endpoint: &str) -> Option<crate::features::Fetch> {
+    core.configure_features(endpoint, 2_000, REFRESH_MS);
+    core.start_features()
 }
 
 #[cfg(feature = "bindings")]
-fn complete(fetch: &crate::features::Fetch, status: u16, body: &str) {
-    crate::bindings::complete_fetch(fetch.id, status, body.as_bytes());
+const REFRESH_MS: u64 = 60_000;
+
+#[cfg(feature = "bindings")]
+fn complete(
+    fetch: &crate::features::Fetch,
+    status: u16,
+    body: &str,
+) -> Option<crate::features::Fetch> {
+    crate::bindings::complete_fetch(fetch.id, status, body.as_bytes())
 }
+
+#[cfg(feature = "bindings")]
+const V1_ON: &str = r#"{"features":{"v1_send":true}}"#;
+
+#[cfg(feature = "bindings")]
+const V1_OFF: &str = r#"{"features":{"v1_send":false}}"#;
 
 #[cfg(feature = "bindings")]
 #[test]
 fn sends_are_v0_until_the_answer_turns_v1_on() {
     let party = author();
-    let fetch = start_own_read(&party.core);
+    let endpoint = own_endpoint();
+    let fetch = start_read(&party.core, &endpoint).expect("a GET");
+    assert_eq!(
+        fetch.url,
+        format!("{endpoint}?bucket={AUTHOR}"),
+        "its sender's bucket"
+    );
     let ckey = key(3);
     let first = party
         .core
@@ -184,32 +208,31 @@ fn sends_are_v0_until_the_answer_turns_v1_on() {
         .unwrap();
     assert_v0(&party, &ckey, "before the answer", &first);
 
-    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+    complete(&fetch, 200, V1_ON);
     let second = party
         .core
         .encrypt_message(&message_params("second", &ckey))
         .unwrap();
     assert_v1(&party, &ckey, "after the answer", &second);
-    assert_eq!(party.core.start_features(), None, "a chat reads once");
+    assert_eq!(party.core.start_features(), None, "one read per sender");
 }
 
 #[cfg(feature = "bindings")]
 #[test]
 fn a_chat_created_while_a_read_is_in_flight_takes_its_answer() {
     let party = author();
-    let fetch = start_own_read(&party.core);
-    let twin = Party::new(AUTHOR);
-    twin.core
+    let endpoint = own_endpoint();
+    let fetch = start_read(&party.core, &endpoint).expect("a GET");
+    let twin = author();
+    assert_eq!(start_read(&twin.core, &endpoint), None, "no second GET");
+    let dropped = ChatCore::new();
+    dropped
         .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
         .unwrap();
-    twin.core.configure_features(&fetch.url, 2_000);
-    assert_eq!(twin.core.start_features(), None, "no second GET");
-    let dropped = ChatCore::new();
-    dropped.configure_features(&fetch.url, 2_000);
-    assert_eq!(dropped.start_features(), None);
+    assert_eq!(start_read(&dropped, &endpoint), None);
     drop(dropped);
 
-    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+    complete(&fetch, 200, V1_ON);
     let ckey = key(3);
     for chat in [&party, &twin] {
         let payload = chat
@@ -226,13 +249,13 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
     let ckey = key(3);
     for body in [
         r#"{"features":{}}"#,
-        r#"{"features":{"v1_send":false}}"#,
+        V1_OFF,
         r#"{"features":{"v1_send":"true"}}"#,
         r#"{"features":{"v1_send":1}}"#,
         r#"{"features":{"other":true}}"#,
     ] {
         let party = author();
-        let fetch = start_own_read(&party.core);
+        let fetch = start_read(&party.core, &own_endpoint()).expect("a GET");
         complete(&fetch, 200, body);
         let payload = party
             .core
@@ -244,56 +267,90 @@ fn a_flag_that_is_missing_false_or_not_boolean_sends_v0() {
 
 #[cfg(feature = "bindings")]
 #[test]
-fn a_failed_read_leaves_sends_on_v0_for_the_chats_lifetime() {
+fn a_failed_read_is_retried_and_the_retrys_answer_turns_v1_on() {
     let party = author();
-    let fetch = start_own_read(&party.core);
-    complete(&fetch, 503, r#"{"features":{"v1_send":true}}"#);
-    assert_eq!(party.core.start_features(), None, "no second read");
+    let fetch = start_read(&party.core, &own_endpoint()).expect("a GET");
+    let retry = complete(&fetch, 503, V1_ON).expect("the failed read is retried");
+    assert_eq!(retry.url, fetch.url);
+    assert_eq!(retry.delay_ms, crate::features::RETRY_FIRST_DELAY_MS);
+    assert_eq!(party.core.start_features(), None, "the read goes on");
     let ckey = key(3);
     let payload = party
         .core
         .encrypt_message(&message_params("hi", &ckey))
         .unwrap();
     assert_v0(&party, &ckey, "after a 503", &payload);
+
+    complete(&retry, 200, V1_ON);
+    let payload = party
+        .core
+        .encrypt_message(&message_params("hi", &ckey))
+        .unwrap();
+    assert_v1(&party, &ckey, "after the retry's answer", &payload);
 }
 
 #[cfg(feature = "bindings")]
 #[test]
-fn the_answer_holds_for_the_chats_lifetime() {
+fn a_refresh_reaches_a_running_chat() {
     let party = author();
-    let fetch = start_own_read(&party.core);
-    complete(&fetch, 200, r#"{"features":{"v1_send":true}}"#);
+    let endpoint = own_endpoint();
+    let fetch = start_read(&party.core, &endpoint).expect("a GET");
+    let refresh = complete(&fetch, 200, V1_ON).expect("a refresh");
+    assert_eq!(refresh.delay_ms, REFRESH_MS);
 
-    // A later chat on the same endpoint reads an answer of its own.
     let later = author();
-    later.core.configure_features(&fetch.url, 2_000);
-    let again = later.core.start_features().expect("its own GET");
-    complete(&again, 200, r#"{"features":{"v1_send":false}}"#);
+    assert_eq!(
+        start_read(&later.core, &endpoint),
+        None,
+        "a later chat takes the latest answer"
+    );
+    let ckey = key(3);
+    for chat in [&party, &later] {
+        let payload = chat
+            .core
+            .encrypt_message(&message_params("v1", &ckey))
+            .unwrap();
+        assert_v1(chat, &ckey, "the first answer", &payload);
+    }
 
-    let other = ChatCore::new();
-    other.generate_keypairs().unwrap();
-    party
-        .core
-        .import_keys(&ImportKeysParams::new(
-            other.export_keys().unwrap().to_vec(),
-        ))
-        .unwrap();
+    complete(&refresh, 200, V1_OFF);
+    for chat in [&party, &later] {
+        let payload = chat
+            .core
+            .encrypt_message(&message_params("v0", &ckey))
+            .unwrap();
+        assert_v0(chat, &ckey, "the refresh's answer", &payload);
+    }
+}
+
+#[cfg(feature = "bindings")]
+#[test]
+fn setting_the_identity_moves_the_reads_to_the_senders_bucket() {
+    let party = Party::new(AUTHOR);
+    let endpoint = own_endpoint();
+    let anonymous = start_read(&party.core, &endpoint).expect("a GET");
+    assert_eq!(anonymous.url, endpoint, "no identity, no bucket");
+    complete(&anonymous, 200, V1_ON);
+    assert!(party.core.send_version() == crate::pipeline::SendVersion::V1);
+
     party
         .core
         .set_identity(&SetIdentityParams::new(AUTHOR, SIGNING_KEY_VERSION))
         .unwrap();
-    assert_eq!(party.core.start_features(), None, "new keys read nothing");
+    let bucketed = party.core.start_features().expect("its bucket's GET");
+    assert_eq!(bucketed.url, format!("{endpoint}?bucket={AUTHOR}"));
     let ckey = key(3);
     let payload = party
         .core
-        .encrypt_message(&message_params("still v1", &ckey))
+        .encrypt_message(&message_params("waiting", &ckey))
         .unwrap();
-    assert_eq!(payload.signature_info.signature_version, "10");
-    let payload = later
+    assert_v0(&party, &ckey, "until its bucket answers", &payload);
+    complete(&bucketed, 200, V1_ON);
+    let payload = party
         .core
-        .encrypt_message(&message_params("v0", &ckey))
+        .encrypt_message(&message_params("bucketed", &ckey))
         .unwrap();
-    assert_v0(&later, &ckey, "the later chat's answer", &payload);
+    assert_v1(&party, &ckey, "its bucket's answer", &payload);
 }
 
 #[cfg(not(feature = "bindings"))]
@@ -324,6 +381,7 @@ fn files_of_a_v0_message_use_the_conversation_key() {
         filename: "f.bin".to_string(),
         media_type: Some(5),
         duration_millis: None,
+        plaintext_sha256: None,
     }]);
     let payload = party.core.encrypt_message(&params).unwrap();
     assert_v0(&party, &ckey, "message with a file", &payload);
@@ -371,6 +429,7 @@ fn with_photos(text: &str, ckey: &XChatConversationKey) -> EncryptMessageParams 
         filename: format!("{media_hash_key}.jpg"),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     };
     let mut params = message_params(text, ckey);
     params.attachments = Some(vec![photo("photo-a"), photo("photo-b")]);
@@ -512,8 +571,299 @@ fn a_decrypted_v1_edit_names_the_message_it_edits() {
     );
 }
 
+/// The message id a v1 edit built by `params` names, read from its opened
+/// contents.
+fn edited_message_id(
+    party: &Party,
+    ckey: &XChatConversationKey,
+    params: &EncryptEditParams,
+) -> Option<String> {
+    let edit = party.core.encrypt_edit(params).unwrap();
+    let key = match create_event(&delivered(&edit, "200")).contents_encryption_version {
+        Some(_) => message_key(&edit, ckey),
+        None => ckey.clone(),
+    };
+    let Contents::MessageEdit(contents) = opened_contents(&edit, &key) else {
+        panic!("expected an edit");
+    };
+    contents.message_id
+}
+
 #[test]
-fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
+fn a_v1_edit_built_without_its_target_event_names_the_message_its_params_name() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let explicit = EncryptEditParams::new("", "edited")
+        .with_conversation_id(CONVERSATION)
+        .with_target_message_sequence_id("100")
+        .with_target_message_id(original.message_id.clone())
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+
+    assert_eq!(edited_message_id(&party, &ckey, &explicit), None);
+    enable_v1_send(&party.core);
+    assert_eq!(
+        edited_message_id(&party, &ckey, &explicit),
+        Some(original.message_id.clone())
+    );
+    let unnamed = EncryptEditParams::new("", "edited")
+        .with_conversation_id(CONVERSATION)
+        .with_target_message_sequence_id("100")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    assert_eq!(edited_message_id(&party, &ckey, &unnamed), None);
+}
+
+#[test]
+fn a_target_message_id_must_be_the_one_the_target_event_carries() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let target = frame(&delivered(&original, "100"));
+    let edit = |message_id: &str| {
+        EncryptEditParams::new(target.clone(), "edited")
+            .with_target_message_id(message_id)
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION)
+    };
+    let other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+    let expected = format!(
+        "target_message_id '{other}' is not the message_id '{}' that \
+         target_event carries: pass that id or leave target_message_id unset",
+        original.message_id
+    );
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        let error = party.core.encrypt_edit(&edit(other)).unwrap_err();
+        assert!(matches!(error, SdkError::InvalidInput(_)), "v1 {v1}");
+        assert_eq!(error.to_string(), expected, "v1 {v1}");
+    }
+    assert_eq!(
+        edited_message_id(&party, &ckey, &edit(&original.message_id)),
+        Some(original.message_id.clone()),
+        "the id the event carries is accepted"
+    );
+}
+
+/// The `replying_to_message_id` of the preview a reply built by `params`
+/// carries, read from its opened contents.
+fn quoted_message_id(
+    party: &Party,
+    ckey: &XChatConversationKey,
+    params: &EncryptReplyParams,
+) -> Option<String> {
+    let reply = party.core.encrypt_reply(params).unwrap();
+    let key = match create_event(&delivered(&reply, "200")).contents_encryption_version {
+        Some(_) => message_key(&reply, ckey),
+        None => ckey.clone(),
+    };
+    let Contents::Message(contents) = opened_contents(&reply, &key) else {
+        panic!("expected a message");
+    };
+    contents
+        .replying_to_preview
+        .and_then(|preview| preview.replying_to_message_id)
+}
+
+#[test]
+fn a_reply_built_from_explicit_fields_names_the_message_its_params_name() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let explicit = |message_id: Option<&str>| {
+        let params = EncryptReplyParams::new(CONVERSATION, "reply", "")
+            .with_reply_to_sequence_id("100")
+            .with_reply_to_sender_id(AUTHOR)
+            .with_reply_to_text("original")
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        match message_id {
+            Some(id) => params.with_reply_to_message_id(id),
+            None => params,
+        }
+    };
+
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &explicit(Some(&original.message_id))),
+            Some(original.message_id.clone()),
+            "v1 {v1}"
+        );
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &explicit(None)),
+            None,
+            "v1 {v1}"
+        );
+    }
+}
+
+#[test]
+fn a_reply_to_message_id_must_be_the_one_the_reply_to_event_carries() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let event = frame(&delivered(&original, "100"));
+    let reply = |message_id: Option<&str>| {
+        let params = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        match message_id {
+            Some(id) => params.with_reply_to_message_id(id),
+            None => params,
+        }
+    };
+    let other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+    let error = party.core.encrypt_reply(&reply(Some(other))).unwrap_err();
+    assert!(matches!(error, SdkError::InvalidInput(_)));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "reply_to_message_id '{other}' is not the message_id '{}' that \
+             reply_to_event carries: pass that id or leave reply_to_message_id unset",
+            original.message_id
+        )
+    );
+    for message_id in [None, Some(original.message_id.as_str())] {
+        assert_eq!(
+            quoted_message_id(&party, &ckey, &reply(message_id)),
+            Some(original.message_id.clone()),
+            "{message_id:?}"
+        );
+    }
+}
+
+fn photo_with_hash(media_hash_key: &str, plaintext_sha256: Option<&str>) -> AttachmentDescriptor {
+    AttachmentDescriptor::Media {
+        media_hash_key: media_hash_key.to_string(),
+        width: 640,
+        height: 480,
+        filesize_bytes: 4096,
+        filename: format!("{media_hash_key}.jpg"),
+        media_type: Some(1),
+        duration_millis: None,
+        plaintext_sha256: plaintext_sha256.map(str::to_string),
+    }
+}
+
+#[test]
+fn a_media_attachment_carries_and_decrypts_its_plaintext_sha256() {
+    use sha2::{Digest, Sha256};
+    let party = author();
+    let ckey = key(3);
+    let digest = Sha256::digest(b"the photo's plaintext bytes").to_vec();
+    let hash = base64_encode(&digest);
+    for v1 in [false, true] {
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        let mut params = message_params("photo", &ckey);
+        params.attachments = Some(vec![
+            photo_with_hash("photo-a", Some(&hash)),
+            photo_with_hash("photo-b", None),
+        ]);
+        let payload = party.core.encrypt_message(&params).unwrap();
+        let key = if v1 {
+            message_key(&payload, &ckey)
+        } else {
+            ckey.clone()
+        };
+        let Contents::Message(contents) = opened_contents(&payload, &key) else {
+            panic!("expected a message");
+        };
+        let sent: Vec<Option<Vec<u8>>> = contents
+            .attachments
+            .unwrap_or_default()
+            .iter()
+            .map(|attachment| match attachment.as_ref() {
+                ThriftAttachment::Media(media) => media.plaintext_sha256.clone(),
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(sent, [Some(digest.clone()), None], "v1 {v1}");
+
+        let message = decrypt_message(
+            &ChatCore::new(),
+            &delivered(&payload, "100"),
+            &keys(KEY_VERSION, &ckey),
+            std::slice::from_ref(&party.entry),
+        )
+        .unwrap();
+        assert!(message.verified, "v1 {v1}");
+        let infos: Vec<Option<String>> = message
+            .attachments
+            .iter()
+            .map(|attachment| match attachment {
+                AttachmentInfo::Media(media) => media.plaintext_sha256.clone(),
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(infos, [Some(hash.clone()), None], "v1 {v1}");
+        let MessageContent::Text { attachments, .. } = message.content else {
+            panic!("expected text content");
+        };
+        let content: Vec<Option<String>> = attachments
+            .unwrap_or_default()
+            .into_iter()
+            .map(|attachment| match attachment {
+                MessageAttachment::Media { media } => media.plaintext_sha256,
+                other => panic!("unexpected attachment {:?}", other),
+            })
+            .collect();
+        assert_eq!(content, [Some(hash.clone()), None], "v1 {v1}");
+    }
+}
+
+#[test]
+fn a_plaintext_sha256_that_is_not_a_base64_sha256_fails_the_send() {
+    let party = author();
+    let ckey = key(3);
+    let original = party
+        .core
+        .encrypt_message(&message_params("original", &ckey))
+        .unwrap();
+    let event = frame(&delivered(&original, "100"));
+    for bad in ["not base64!", "c2hvcnQ=", &base64_encode(&[7u8; 33])] {
+        let expected = format!("media_hash_key 'photo-a' has plaintext_sha256 '{bad}'");
+        let mut message = message_params("photo", &ckey);
+        message.attachments = Some(vec![photo_with_hash("photo-a", Some(bad))]);
+        let reply = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_attachments(vec![photo_with_hash("photo-a", Some(bad))])
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let quoting = EncryptReplyParams::new(CONVERSATION, "reply", event.clone())
+            .with_reply_to_attachments(vec![photo_with_hash("photo-a", Some(bad))])
+            .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        let errors = [
+            party.core.encrypt_message(&message).unwrap_err(),
+            party.core.encrypt_reply(&reply).unwrap_err(),
+            party.core.encrypt_reply(&quoting).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                matches!(&error, SdkError::InvalidInput(m) if m.starts_with(&expected)),
+                "{bad}: {error:?}"
+            );
+        }
+    }
+    let mut empty = message_params("photo", &ckey);
+    empty.attachments = Some(vec![photo_with_hash("photo-a", Some(""))]);
+    assert!(party.core.encrypt_message(&empty).is_ok());
+}
+
+#[test]
+fn each_answer_a_caller_hands_over_sets_the_send_format() {
     let ckey = key(1);
     let send = |party: &Party| {
         party
@@ -523,34 +873,119 @@ fn the_answer_a_caller_hands_over_sets_the_send_format_once() {
             .signature_info
             .signature_version
     };
+    let on = br#"{"features":{"v1_send":true}}"#;
+    let off = br#"{"features":{"v1_send":false}}"#;
 
     let party = author();
     assert_eq!(send(&party), "7", "no answer: v0");
-    party
-        .core
-        .set_feature_switches(200, br#"{"features":{"v1_send":true}}"#);
+    party.core.set_feature_switches(200, on);
     assert_eq!(send(&party), "10");
-    party
-        .core
-        .set_feature_switches(200, br#"{"features":{"v1_send":false}}"#);
-    assert_eq!(send(&party), "10", "a chat takes one answer");
-    assert_eq!(
-        party.core.start_features(),
-        None,
-        "nor reads the switches again"
-    );
+    party.core.set_feature_switches(200, off);
+    assert_eq!(send(&party), "7", "a later answer replaces it");
+    party.core.set_feature_switches(503, on);
+    assert_eq!(send(&party), "7", "a failed read changes nothing");
+    party.core.set_feature_switches(200, on);
+    assert_eq!(send(&party), "10");
 
-    let on = br#"{"features":{"v1_send":true}}"#;
     let mut oversized = on.to_vec();
     oversized.resize(crate::FEATURES_MAX_BODY + 1, b' ');
     for (status, body) in [
         (404, on.as_slice()),
         (200, b"not json".as_slice()),
-        (200, br#"{"features":{"v1_send":"true"}}"#.as_slice()),
         (200, oversized.as_slice()),
     ] {
         let party = author();
         party.core.set_feature_switches(status, body);
         assert_eq!(send(&party), "7", "{status} {}", body.len());
+        party.core.set_feature_switches(200, on);
+        assert_eq!(
+            send(&party),
+            "10",
+            "the retried GET's answer after {status}"
+        );
+    }
+
+    let party = author();
+    party
+        .core
+        .set_feature_switches(200, br#"{"features":{"v1_send":"true"}}"#);
+    assert_eq!(send(&party), "7", "a flag that is not a boolean reads off");
+}
+
+#[test]
+fn the_feature_switch_url_carries_the_senders_bucket() {
+    assert_eq!(
+        ChatCore::new().feature_switches_url(),
+        crate::FEATURES_ENDPOINT
+    );
+    let party = Party::new("1234567890");
+    party
+        .core
+        .set_identity(&SetIdentityParams::new("1234567890", SIGNING_KEY_VERSION))
+        .unwrap();
+    assert_eq!(
+        party.core.feature_switches_url(),
+        format!("{}?bucket=7890", crate::FEATURES_ENDPOINT)
+    );
+}
+
+/// Whether each of a reaction add, a reaction removal and an edit `party`
+/// sends in `conversation_id` asks for a notification, read from the
+/// payload and from the `MessageCreateEvent` it carries.
+fn notifies(party: &Party, conversation_id: &str) -> [bool; 3] {
+    let ckey = key(3);
+    let target = |params: EncryptReactionParams| {
+        let mut params = params.with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+        params.conversation_id = Some(conversation_id.to_string());
+        params.target_message_sequence_id = Some("100".to_string());
+        params
+    };
+    let mut edit =
+        EncryptEditParams::new("", "edited").with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    edit.conversation_id = Some(conversation_id.to_string());
+    edit.target_message_sequence_id = Some("100".to_string());
+    [
+        party
+            .core
+            .encrypt_add_reaction(&target(EncryptReactionParams::new("", "👍")))
+            .unwrap(),
+        party
+            .core
+            .encrypt_remove_reaction(&target(EncryptReactionParams::new("", "👍")))
+            .unwrap(),
+        party.core.encrypt_edit(&edit).unwrap(),
+    ]
+    .map(|payload| {
+        let event = sent_event(&payload, AUTHOR, conversation_id);
+        assert_eq!(
+            create_event(&event).should_notify,
+            Some(payload.should_notify)
+        );
+        payload.should_notify
+    })
+}
+
+#[test]
+fn a_v1_reaction_notifies_only_in_a_one_to_one_conversation_and_never_on_removal() {
+    let party = author();
+    enable_v1_send(&party.core);
+    for one_to_one in [CONVERSATION, "1491585161162473473-2", "2"] {
+        assert_eq!(
+            notifies(&party, one_to_one),
+            [true, false, false],
+            "{one_to_one}"
+        );
+    }
+    assert_eq!(
+        notifies(&party, "g2031597666757378493"),
+        [false, false, false]
+    );
+}
+
+#[test]
+fn v0_reactions_and_edits_notify_as_0_5_did() {
+    let party = author();
+    for conversation_id in [CONVERSATION, "g2031597666757378493"] {
+        assert_eq!(notifies(&party, conversation_id), [true, true, true]);
     }
 }

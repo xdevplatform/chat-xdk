@@ -370,9 +370,11 @@ attachment_key = HKDF-SHA256(ikm  = message_key,
 
 `attachment_id` is the attachment's `attachment_id` when set (an empty string
 counts as set); otherwise it is the message id for the first attachment and
-`{message_id}#{index}` for later ones, by position in the message's attachment
-list, counting every attachment, including kinds the SDK does not surface. A
-URL card's banner and favicon images share the card's key.
+`{message_id}#{index}` for later ones, by position in the message's
+attachment list. The count includes every attachment, kinds the SDK does
+not surface too, except payment receipts, which X clients leave out before
+they number the rest. A URL card's banner and favicon images share the
+card's key.
 
 On send, the message is built before its files are encrypted. Each file of
 the message names the media hash key its upload started with. `encrypt_file`
@@ -480,8 +482,8 @@ as `message_event_signature.signature_version`).
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends: the first version that signs `contents_encryption_version` |
-| `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and on the action signatures the SDK produces (conversation-key changes, group changes, deletes, read receipts) |
+| `MESSAGE_SIGNATURE_VERSION` | `10` | Stamped on every v1 message the SDK sends, the first version that signs `contents_encryption_version`, and on every action signature (conversation-key changes, group changes, deletes, read receipts) while the chat sends v1, apart from a key change in a conversation where the chat signed or verified one at a higher version (that version) |
+| `SIGNATURE_VERSION` | `"7"` | Stamped on v0 messages and, while the chat sends v0, on its action signatures, apart from a member add that carries a description (version 8) and a key change in a conversation where the chat signed or verified one at a higher version (that version) |
 | `MIN_SIGNATURE_VERSION` | `2` | Oldest version accepted on verification; older payloads omit the event-type discriminant and conversation-key version, so they are rejected to prevent downgrade |
 | `MAX_SIGNATURE_VERSION` (internal) | `11` | Newest version accepted on verification; a signature labeled with a newer version is rejected, since its payload layout is unknown |
 | `CKEY_PLAINTEXT_SIGNATURE_VERSION` | `6` | First version whose conversation-key-change payload signs the plaintext conversation key (so a recipient can reproduce and verify it) |
@@ -501,8 +503,8 @@ over the raw ciphertext. A v1 send signs:
 
 `conversation_key_version` is signed as an integer, and `1` is the
 `contents_encryption_version`, so the choice of key for the contents is
-covered by the signature. A v0 send signs the version 7 layout, which signs
-the key version as carried and has neither trailing component:
+covered by the signature. A v0 send signs the version 7 layout, which has
+neither trailing component:
 
 ```
 "MessageCreateEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{contents_b64_no_pad}"
@@ -524,7 +526,19 @@ that carry the same uploads share an id; each upload belongs to one message.
 #### Action signatures
 
 Group operations and read receipts are signed the same way, over their own
-comma-separated payloads (`signatures.rs`):
+comma-separated payloads (`signatures.rs`), at the version the chat's sends
+sign at, as X clients sign every event at their messages' version: version 7
+while it sends v0, in the layouts below, and version 10 while it sends v1,
+where each layout gains the components versions 8 through 10 add (see
+[Verifying newer versions](#verifying-newer-versions)). A conversation-key
+change never signs below the highest version of a key change the chat has
+signed or verified in that conversation: X clients that enforce a key-change
+signature-version floor reject a key change signed below the newest one
+before it as a downgrade. Without the floor, a chat that signed a key change
+at 10 while it sent v1 would sign the next one at 7 while it sends v0, as it
+does until its feature read answers. Decrypting a conversation's key changes
+before changing its key lets the chat see them; the floor lives in memory
+for the chat's lifetime, like the conversation-key high-water mark.
 
 - **GroupCreate** (from `prepare_group_create`, v4+):
   ```
@@ -532,10 +546,10 @@ comma-separated payloads (`signatures.rs`):
   ```
   `title` is the group's title encrypted under the conversation key the
   create seeds, as the event detail carries it; the SDK's creates set no
-  avatar, so `avatar_url` is `null`. The conversation id, admin ids, and TTL
-  are carried in the event detail but are **not** part of the signed
-  payload; absent `is_legacy_group_upgrade` and `title` render as the
-  literal `null`.
+  avatar, so `avatar_url` is `null`. The conversation id and admin ids are
+  carried in the event detail but are **not** part of the signed payload,
+  and neither is the TTL below v10; absent `is_legacy_group_upgrade` and
+  `title` render as the literal `null`.
 - **GroupMemberAdd** (from `prepare_group_members_change`, v7 field layout,
   v8 with a description):
   ```
@@ -548,8 +562,10 @@ comma-separated payloads (`signatures.rs`):
   render as the literal `null`. The screen-capture slot is the
   caller-supplied `current_screen_capture_blocking_enabled` flag — the group's
   current screen-capture-blocking state — and renders as `null` when unset.
-  An add that carries a description appends it and signs at v8, the first
-  version that covers it; any other add signs at v7.
+  While the chat sends v0, an add that carries a description appends it and
+  signs at v8, the first version that covers it, and any other add signs at
+  v7; while it sends v1, every add signs at v10, its description slot `null`
+  when unset.
 - **ConversationKeyChange** (from `prepare_conversation_key_change`, v6+):
   ```
   "ConversationKeyChangeEvent,{message_id},{sender_id},{conversation_id},{conversation_key_version},{conversation_key_b64_no_pad}"
@@ -567,21 +583,23 @@ Both `prepare_group_create` and `prepare_group_members_change` emit **two**
 action signatures — a `ConversationKeyChangeEvent` plus the group change —
 since the backend validates the pair together.
 `prepare_group_members_remove` always rotates the conversation key for the
-remaining members: it emits the removal at signature version 11, bound to
-the new key version; a title and a description change for each one the
+remaining members: it emits the removal, signed at the chat's action version
+over the removed members, while the new key version the event names is
+signed by the key change (version 11 is the first that signs it in a
+removal); a title and a description change for each one the
 caller passes, encrypted under the new key, with `for_key_rotation` set on
 the event so X clients don't show the re-encryption as a change; then the
 `ConversationKeyChangeEvent`:
 
 ```
-"GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...},{conversation_key_version},signature_version=11"
+"GroupChangeEvent.GroupMemberRemoveChange,{message_id},{sender_id},{conversation_id},{user_ids...}"
 ```
 
 `prepare_group_leave` signs that same removal of the sender, without
-rotating the key, so its key version is the one the caller passes or `null`;
-then a `GroupAdminAddChange` when a member is promoted, then
+rotating the key, so the key version its event names is the one the caller
+passes, if any; then a `GroupAdminAddChange` when a member is promoted, then
 `ConversationDeleteEvent,{message_id},{sender_id},{conversation_id}`. The
-other group and metadata prepares sign one version-7 payload: title
+other group and metadata prepares sign one payload: title
 (`GroupTitleChange`, key version then the encrypted title), avatar
 (`GroupAvatarUrlChange`, the version of the key the image is encrypted under
 then the media URL), description (`GroupDescriptionChange`, key version then
@@ -595,15 +613,13 @@ further fields.
 
 #### Verifying newer versions
 
-The action layouts above are the ones the SDK signs, at v7 (v8 for a member
-add with a description, v11 for a removal); messages are signed at v10 (v1
-sends) or v7 (v0 sends). Verification rebuilds each payload in the layout of
-the version its signature carries, 2 through 11:
+The action layouts above are the ones the SDK signs at v7, while the chat
+sends v0 (v8 for a member add with a description); while it sends v1,
+messages and actions alike are signed at v10. A key change can sign higher
+in either case, at its conversation's key-change floor. Verification rebuilds each
+payload in the layout of the version its signature carries, 2 through 11:
 
-- **v8**: the message payload's conversation-key-version component is the
-  version parsed as an integer, `null` when missing or not an integer (v7 and
-  below sign the carried string, empty when missing). GroupMemberAdd appends
-  `current_description`.
+- **v8**: GroupMemberAdd appends `current_description`.
 - **v9**: every payload — messages, conversation-key changes, and group
   actions — ends with `,signature_version={n}`. GroupCreate appends the number
   of its `group_type`.
@@ -614,7 +630,13 @@ the version its signature carries, 2 through 11:
   member ids.
 
 Unset optional components render as `null`, so a v10 message without a
-message key signs `null` where the SDK's messages sign `1`.
+message key signs `null` where the SDK's messages sign `1`. At every version
+a message's conversation-key version signs as an integer, `null` when
+missing or not an integer, and a key change's as an integer, so a key change
+whose version isn't one doesn't verify; a title, description or avatar
+change that removes the value signs `null` in its place. A signature without
+a version, or with one that isn't an integer, doesn't verify, since the
+version picks the layout.
 
 These payloads are comma-joined with no escaping, and the verifier rejects
 any component containing a comma. String fields signed inline — an avatar
@@ -875,9 +897,10 @@ The SDK closes this on both sides:
 
 - **Send** (`encrypt_reply` with a raw event): the preview fields are derived
   from the decrypted original, and the original's **raw signed event** is
-  embedded in the preview (`raw_event_message_create`), together with any
-  key-change events needed to decrypt it (`raw_event_ckces`) when the original
-  was encrypted under a different conversation-key version than the reply.
+  embedded in the preview (`raw_event_message_create`). Key-change events
+  passed to open an original under another conversation-key version
+  (`reply_to_ckces`) are not embedded (`raw_event_ckces` stays unset):
+  recipients open the original with their own keys.
   When the original was **edited**, pass the raw edit event
   (`reply_to_edit_event`): it is embedded as `raw_event_edit_message` and the
   preview's text and entities derive from the edit's contents — the preview
@@ -893,12 +916,15 @@ The SDK closes this on both sides:
      the same per-sender filtering and version selection as top-level events;
      a key carried inside the event is never used.
   3. Its contents are **decrypted** (a message-key event with the 32-byte key
-     carried for it, otherwise with the supplied conversation keys, the
-     embedded key-change events, or the opt-in key cache) and every claim the
-     preview makes is compared against the decrypted contents: sender id,
-     sequence id, message id, text (truncation-tolerant — the claimed text
-     must match the quoted contents up to the preview's own length on a
-     character boundary), entities, and attachments.
+     carried for it, otherwise with the supplied conversation keys or the
+     opt-in key cache; key-change events embedded in a preview are never
+     read) and every claim the preview makes is compared against the
+     decrypted contents: sender id, sequence id, message id, text (the first
+     140 characters of the claimed and the quoted text, counted in UTF-16
+     code units as X clients count them, must be equal, so a preview may
+     cut the text after those 140), entities (the claimed list must be the
+     quoted one exactly, and an absent list matches only an absent one), and
+     attachments.
   4. When an **edit event is embedded**, it must verify the same way and come
      from the original's author, and the text and entity claims are checked
      against the edit's updated contents instead of the original's; the

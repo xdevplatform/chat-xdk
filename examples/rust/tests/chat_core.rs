@@ -350,6 +350,7 @@ fn media_encrypt_decrypt_roundtrip() {
                     filename: "photo.bin".to_string(),
                     media_type: Some(5),
                     duration_millis: None,
+                    plaintext_sha256: None,
                 }]),
                 ..Default::default()
             }

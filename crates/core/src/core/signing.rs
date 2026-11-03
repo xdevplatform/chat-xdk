@@ -56,90 +56,114 @@ impl ChatCore {
         Ok(KeyFactory::verify(&public_key, signature, data)?)
     }
 
-    /// Build and sign a GroupMemberAdd action signature.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sign_add_members(
-        &self,
-        public_key_version: &str,
-        message_id: &str,
-        sender_id: &str,
-        conversation_id: &str,
-        new_member_ids: &[String],
-        current_member_ids: &[String],
-        current_admin_ids: &[String],
-        conversation_key_version: &str,
-        current_title: Option<&str>,
-        current_avatar_url: Option<&str>,
-        current_description: Option<&str>,
-        current_ttl_msec: Option<i64>,
-        current_screen_capture_blocking_enabled: Option<bool>,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
-        let signing_key = self.get_signing_private_key()?;
-        crate::signatures::sign_group_member_add(
-            &signing_key,
-            public_key_version,
-            message_id,
-            sender_id,
-            conversation_id,
-            new_member_ids,
-            current_member_ids,
-            current_admin_ids,
-            current_title,
-            current_avatar_url,
-            current_ttl_msec,
-            current_screen_capture_blocking_enabled,
-            conversation_key_version,
-            current_description,
-        )
+    /// The signature version of a signed action under the current send
+    /// format; see [`action_signature_version`].
+    pub(crate) fn action_signature_version(&self, legacy: i32) -> i32 {
+        action_signature_version(self.send_version(), legacy)
     }
 
-    /// Build and sign a GroupCreate action signature, which sets no avatar.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sign_group_create(
+    /// The signature version of a new key change in `conversation_id` signed
+    /// under `send_version`: [`action_signature_version`], raised to the
+    /// highest version of a key change this instance signed or verified in
+    /// that conversation.
+    pub(crate) fn key_change_signature_version(
         &self,
-        public_key_version: &str,
-        message_id: &str,
-        sender_id: &str,
-        member_ids: &[String],
-        title: Option<&str>,
-        conversation_key_version: &str,
-        is_legacy_group_upgrade: Option<bool>,
-    ) -> Result<crate::signatures::ActionSignature, SdkError> {
-        let signing_key = self.get_signing_private_key()?;
-        crate::signatures::build_group_create_signature(
-            &signing_key,
-            public_key_version,
-            message_id,
-            sender_id,
-            member_ids,
-            title,
-            None,
-            conversation_key_version,
-            is_legacy_group_upgrade,
-        )
+        conversation_id: &str,
+        send_version: crate::pipeline::SendVersion,
+    ) -> i32 {
+        let version =
+            action_signature_version(send_version, crate::signatures::CURRENT_SIGNATURE_VERSION);
+        let floors = self
+            .key_change_signature_floor
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        floors
+            .get(conversation_id)
+            .map_or(version, |floor| version.max(*floor))
     }
 
-    /// Build and sign a ConversationKeyChange action signature (v7).
-    ///
-    /// `conversation_key` is the raw 32-byte conversation key.
-    pub(crate) fn sign_key_change(
+    /// Record a key change in `conversation_id` signed or verified at
+    /// `version`, so no later one this instance signs there goes below it.
+    pub(crate) fn raise_key_change_signature_floor(&self, conversation_id: &str, version: i32) {
+        let mut floors = self
+            .key_change_signature_floor
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let floor = floors.entry(conversation_id.to_string()).or_insert(version);
+        *floor = (*floor).max(version);
+    }
+
+    /// Record `key_change`, a key change whose signature verified, in its
+    /// conversation's floor.
+    pub(crate) fn raise_key_change_signature_floor_for(&self, key_change: &MessageEvent) {
+        if let (Some(conversation_id), Some(version)) = (
+            key_change.conversation_id.as_deref(),
+            signature_version(key_change),
+        ) {
+            self.raise_key_change_signature_floor(conversation_id, version);
+        }
+    }
+
+    /// Sign `detail`, the event of a new action from `sender_id` in
+    /// `conversation_id`, at [`Self::action_signature_version`] of `legacy`.
+    /// `conversation_key` is the raw key a key change carries.
+    pub(crate) fn sign_action_event(
         &self,
         public_key_version: &str,
-        message_id: &str,
         sender_id: &str,
         conversation_id: &str,
-        conversation_key_version: &str,
-        conversation_key: &[u8],
+        legacy: i32,
+        detail: crate::thrift::event::MessageEventDetail,
+        conversation_key: Option<&[u8]>,
     ) -> Result<crate::signatures::ActionSignature, SdkError> {
-        let signing_key = self.get_signing_private_key()?;
-        crate::signatures::build_ckey_change_signature(
-            &signing_key,
+        self.sign_action_event_at(
             public_key_version,
-            message_id,
             sender_id,
             conversation_id,
-            conversation_key_version,
+            self.action_signature_version(legacy),
+            detail,
             conversation_key,
         )
+    }
+
+    /// Sign `detail` as [`Self::sign_action_event`] does, at
+    /// `signature_version`.
+    pub(crate) fn sign_action_event_at(
+        &self,
+        public_key_version: &str,
+        sender_id: &str,
+        conversation_id: &str,
+        signature_version: i32,
+        detail: crate::thrift::event::MessageEventDetail,
+        conversation_key: Option<&[u8]>,
+    ) -> Result<crate::signatures::ActionSignature, SdkError> {
+        let signing_key = self.get_signing_private_key()?;
+        let ckey_b64 =
+            conversation_key.map(|key| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(key)));
+        crate::signatures::sign_event(
+            &signing_key,
+            public_key_version,
+            &Self::generate_message_id(),
+            sender_id,
+            conversation_id,
+            signature_version,
+            detail,
+            ckey_b64.as_deref().map(String::as_str),
+        )
+    }
+}
+
+/// The signature version of a signed action under `send_version`: `legacy`,
+/// the action's own version, while sends are v0, and
+/// [`crate::signatures::MESSAGE_SIGNATURE_VERSION`] while they are v1. A
+/// call that signs several actions reads the send format once, so a feature
+/// refresh between its signatures can't split them across formats.
+pub(crate) fn action_signature_version(
+    send_version: crate::pipeline::SendVersion,
+    legacy: i32,
+) -> i32 {
+    match send_version {
+        crate::pipeline::SendVersion::V0 => legacy,
+        crate::pipeline::SendVersion::V1 => crate::signatures::MESSAGE_SIGNATURE_VERSION,
     }
 }

@@ -963,10 +963,9 @@ namespace ChatXdk.Tests
             Assert.Equal(32, rotated.ConversationKey.Length);
             Assert.Single(rotated.ConversationParticipantKeys);
             Assert.Equal(2, rotated.ActionSignatures.Count);
-            Assert.Equal("11", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
+            Assert.Equal("7", rotated.ActionSignatures[0].MessageEventSignature.SignatureVersion);
             var removal = rotated.ActionSignatures[0];
-            Assert.True(Signs(chat, removal, $"GroupChangeEvent.GroupMemberRemoveChange,{removal.MessageId},111,g100,910007," +
-                $"{rotated.ConversationKeyVersion},signature_version=11"));
+            Assert.True(Signs(chat, removal, $"GroupChangeEvent.GroupMemberRemoveChange,{removal.MessageId},111,g100,910007"));
             var noKeys = Assert.Throws<ChatXdkException>(() => chat.PrepareGroupMembersRemove(
                 new GroupMembersRemoveParams(Array.Empty<PublicKeyInput>(), "g100", new[] { "910007" })
                 {
@@ -984,8 +983,22 @@ namespace ChatXdk.Tests
             });
             Assert.Equal(3, left.ActionSignatures.Count);
             var (leaving, promoting, deleting) = (left.ActionSignatures[0], left.ActionSignatures[1], left.ActionSignatures[2]);
+            Assert.Equal("7", leaving.MessageEventSignature.SignatureVersion);
             Assert.True(Signs(chat, leaving,
-                $"GroupChangeEvent.GroupMemberRemoveChange,{leaving.MessageId},111,g100,111,7,signature_version=11"));
+                $"GroupChangeEvent.GroupMemberRemoveChange,{leaving.MessageId},111,g100,111"));
+
+            using (var v1 = FeatureTestEnvironment.V1Chat())
+            {
+                v1.ImportKeys(new ImportKeysParams(chat.ExportKeys()!));
+                FeatureTestEnvironment.WaitForV1(v1);
+                var v1Left = v1.PrepareGroupLeave(new GroupLeaveParams("g100") { SenderId = "111", SigningKeyVersion = "1" });
+                var (v1Removal, v1Delete) = (v1Left.ActionSignatures[0], v1Left.ActionSignatures[1]);
+                Assert.Equal("10", v1Removal.MessageEventSignature.SignatureVersion);
+                Assert.True(Signs(v1, v1Removal,
+                    $"GroupChangeEvent.GroupMemberRemoveChange,{v1Removal.MessageId},111,g100,111,signature_version=10"));
+                Assert.Equal("10", v1Delete.MessageEventSignature.SignatureVersion);
+                Assert.True(Signs(v1, v1Delete, $"ConversationDeleteEvent,{v1Delete.MessageId},111,g100,signature_version=10"));
+            }
             Assert.True(Signs(chat, promoting, $"GroupChangeEvent.GroupAdminAddChange,{promoting.MessageId},111,g100,910008"));
             Assert.True(Signs(chat, deleting, $"ConversationDeleteEvent,{deleting.MessageId},111,g100"));
 
@@ -1938,6 +1951,90 @@ namespace ChatXdk.Tests
             Assert.Equal("1", edited.GetProperty("target_message_sequence_id").GetString());
             Assert.Equal("fixed", edited.GetProperty("updated_text").GetString());
             Assert.False(edited.TryGetProperty("target_message_id", out _));
+        }
+
+        // A v1 send built without the original event names it through the explicit fields,
+        // and a media attachment carries the SHA-256 of its plaintext file: ReplyToMessageId,
+        // TargetMessageId and PlaintextSha256 each read back from the decrypted send.
+        [Fact]
+        public void V1Sends_NameTheOriginalAndCarryTheFileHash_FromExplicitFields()
+        {
+            var v = LoadVectors();
+            using var chat = QuickReplyChat(v, v1: true);
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes("the photo's plaintext bytes")));
+
+            var sent = SendFiles(chat, v, "a photo",
+                AttachmentDescriptor.Media("hashed", 4, 3, 64, "hashed.jpg", 1, null, hash),
+                Photo("unhashed"));
+            var evt = chat.DecryptEvent(new DecryptEventParams(sent.EventB64, ConversationKeys(v))
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            var attachments = evt.GetProperty("attachments");
+            Assert.Equal(hash, attachments[0].GetProperty("plaintext_sha256").GetString());
+            Assert.Equal(JsonValueKind.Null, attachments[1].GetProperty("plaintext_sha256").ValueKind);
+
+            var replied = DecryptOwnContent(chat, v, chat.EncryptReply(
+                new EncryptReplyParams(v.EventConversationId, "nice", null)
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    ReplyToSequenceId = "100",
+                    ReplyToMessageId = sent.MessageId,
+                    ReplyToSenderId = v.EventSenderId,
+                    ReplyToText = "a photo",
+                }));
+            Assert.Equal(sent.MessageId,
+                replied.GetProperty("replying_to_preview").GetProperty("replying_to_message_id").GetString());
+
+            var edited = DecryptOwnContent(chat, v, chat.EncryptEdit(new EncryptEditParams(null, "a better photo")
+            {
+                ConversationId = v.EventConversationId,
+                TargetMessageSequenceId = "100",
+                TargetMessageId = sent.MessageId,
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            }));
+            Assert.Equal(sent.MessageId, edited.GetProperty("target_message_id").GetString());
+
+            // With the original's event, an explicit id must be the one it carries.
+            const string other = "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f";
+            var replyError = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
+                new EncryptReplyParams(v.EventConversationId, "nice", sent.EventB64)
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    ReplyToSequenceId = "100",
+                    ReplyToMessageId = other,
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, replyError.Kind);
+            Assert.Equal($"reply_to_message_id '{other}' is not the message_id '{sent.MessageId}' that "
+                + "reply_to_event carries: pass that id or leave reply_to_message_id unset", replyError.Message);
+            var editError = Assert.Throws<ChatXdkException>(() => chat.EncryptEdit(
+                new EncryptEditParams(sent.EventB64, "a better photo")
+                {
+                    ConversationId = v.EventConversationId,
+                    TargetMessageSequenceId = "100",
+                    TargetMessageId = other,
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, editError.Kind);
+            Assert.Equal($"target_message_id '{other}' is not the message_id '{sent.MessageId}' that "
+                + "target_event carries: pass that id or leave target_message_id unset", editError.Message);
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptMessage(
+                new EncryptMessageParams(v.EventConversationId, "a photo")
+                {
+                    ConversationKey = key,
+                    ConversationKeyVersion = v.EventConversationKeyVersion,
+                    Attachments = new[] { AttachmentDescriptor.Media("hashed", 4, 3, 64, "hashed.jpg", 1, null, "c2hvcnQ=") },
+                }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, ex.Kind);
+            Assert.Equal("media_hash_key 'hashed' has plaintext_sha256 'c2hvcnQ=': pass the base64 SHA-256 of the "
+                + "file's plaintext bytes (32 bytes)", ex.Message);
         }
 
         // A signed group description change: DecryptEvent returns the

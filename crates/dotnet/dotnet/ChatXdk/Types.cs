@@ -490,6 +490,17 @@ namespace ChatXdk
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? DurationMillis { get; private init; }
 
+        /// <summary>
+        /// Base64 SHA-256 of the media file's plaintext bytes, which recipients can check the
+        /// decrypted file against. The message carries and signs it, and the message is built
+        /// before its files are encrypted, so the caller hashes the file. One that is not the
+        /// base64 of 32 bytes fails the send with a <see cref="ChatXdkException"/> of kind
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        [JsonPropertyName("plaintext_sha256")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? PlaintextSha256 { get; private init; }
+
         // URL fields
         /// <summary>Target URL for a "url" card attachment.</summary>
         [JsonPropertyName("url")]
@@ -537,7 +548,25 @@ namespace ChatXdk
             long filesizeBytes,
             string filename,
             int? mediaType = null,
-            long? durationMillis = null)
+            long? durationMillis = null) =>
+            Media(mediaHashKey, width, height, filesizeBytes, filename, mediaType, durationMillis, null);
+
+        /// <summary>
+        /// Create a media attachment that carries the base64 SHA-256 of the file's plaintext
+        /// bytes, and is otherwise the attachment the seven-argument overload creates. A
+        /// <paramref name="plaintextSha256"/> that is not the base64 of 32 bytes
+        /// fails the send with a <see cref="ChatXdkException"/> of kind
+        /// <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public static AttachmentDescriptor Media(
+            string mediaHashKey,
+            long width,
+            long height,
+            long filesizeBytes,
+            string filename,
+            int? mediaType,
+            long? durationMillis,
+            string? plaintextSha256)
         {
             ArgumentNullException.ThrowIfNull(mediaHashKey);
             ArgumentNullException.ThrowIfNull(filename);
@@ -550,6 +579,7 @@ namespace ChatXdk
                 Filename = filename,
                 MediaType = mediaType,
                 DurationMillis = durationMillis,
+                PlaintextSha256 = plaintextSha256,
             };
         }
 
@@ -804,8 +834,9 @@ namespace ChatXdk
         public string Text { get; }
         /// <summary>
         /// Base64 raw signed event being replied to. The reply preview
-        /// (sequence id, sender, text, entities, attachments) is derived from
-        /// it and the raw event is embedded so recipients can validate the preview.
+        /// (sequence id, message id, sender, text, entities, attachments) is
+        /// derived from it and the raw event is embedded so recipients can
+        /// validate the preview.
         /// </summary>
         public string? ReplyToEvent { get; }
         /// <summary>Base64 raw signed edit event, when the original was edited.</summary>
@@ -828,6 +859,15 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
         /// <summary>Sequence ID of the message being replied to; derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToSequenceId { get; init; }
+        /// <summary>
+        /// Signed message ID of the message being replied to; derived from
+        /// <see cref="ReplyToEvent"/> when null. A reply built without
+        /// <see cref="ReplyToEvent"/> needs it: recipients treat a v1 reply that
+        /// names no original as invalid. With <see cref="ReplyToEvent"/>, one other
+        /// than the id the event carries fails with a <see cref="ChatXdkException"/>
+        /// of kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public string? ReplyToMessageId { get; init; }
         /// <summary>User ID of the message's sender, as digits (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public string? ReplyToSenderId { get; init; }
         /// <summary>Text of the message being replied to (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
@@ -894,16 +934,18 @@ namespace ChatXdk
     /// <summary>
     /// Parameters for <see cref="Chat.EncryptEdit"/>.
     /// The preferred form passes the raw event of the message being edited
-    /// (<see cref="TargetEvent"/>) and lets the SDK derive the conversation id
-    /// and target sequence id from it; the explicit field overrides remain for
-    /// callers that no longer hold the raw event.
+    /// (<see cref="TargetEvent"/>) and lets the SDK derive the conversation id,
+    /// the target sequence id and, for a v1 edit, the target message id from
+    /// it; the explicit field overrides remain for callers that no longer hold
+    /// the raw event.
     /// </summary>
     public sealed class EncryptEditParams
     {
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
         /// <param name="targetEvent">
         /// Base64 raw event being edited. Pass null or "" only when supplying
-        /// <see cref="ConversationId"/> and <see cref="TargetMessageSequenceId"/> directly instead.
+        /// <see cref="ConversationId"/>, <see cref="TargetMessageSequenceId"/> and, for a v1 edit,
+        /// <see cref="TargetMessageId"/> directly instead.
         /// </param>
         /// <param name="updatedText">The replacement message text.</param>
         public EncryptEditParams(string? targetEvent, string updatedText)
@@ -912,7 +954,10 @@ namespace ChatXdk
             UpdatedText = updatedText;
         }
 
-        /// <summary>Base64 raw event being edited; the conversation id and target sequence id are derived from it.</summary>
+        /// <summary>
+        /// Base64 raw event being edited; the conversation id, the target sequence id and, for a
+        /// v1 edit, the target message id are derived from it.
+        /// </summary>
         public string? TargetEvent { get; }
         /// <summary>The replacement message text.</summary>
         public string UpdatedText { get; }
@@ -922,6 +967,15 @@ namespace ChatXdk
         public string? ConversationId { get; init; }
         /// <summary>Sequence ID of the message being edited; derived from <see cref="TargetEvent"/> when null.</summary>
         public string? TargetMessageSequenceId { get; init; }
+        /// <summary>
+        /// Signed message ID of the message being edited; derived from
+        /// <see cref="TargetEvent"/> when null. A v1 edit names the message it
+        /// edits, so a v1 edit built without <see cref="TargetEvent"/> needs it;
+        /// a v0 edit names none. With <see cref="TargetEvent"/>, one other than
+        /// the id the event carries fails with a <see cref="ChatXdkException"/> of
+        /// kind <see cref="ChatXdkErrorKind.InvalidInput"/>.
+        /// </summary>
+        public string? TargetMessageId { get; init; }
         /// <summary>User ID of the sender; resolves from the session identity when null.</summary>
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>

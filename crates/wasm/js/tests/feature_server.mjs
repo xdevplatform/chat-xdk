@@ -37,21 +37,29 @@ export const REDIRECT_TARGET = "/followed/2/chat/features";
 /**
  * A local GET /2/chat/features that records each request's query string and
  * headers. Set `location` to answer with a redirect there; requests that reach
- * REDIRECT_TARGET are counted in `followed`.
+ * REDIRECT_TARGET are counted in `followed`. A request for another path, such
+ * as a retried read meant for an earlier server on this port, gets a 404 and
+ * is not recorded.
  */
 export async function featureServer(body = '{"features":{"v1_send":true}}') {
   const state = { status: 200, body, delayMs: 0, location: null, setCookie: null, queries: [], headers: [], followed: 0 };
   const server = http.createServer((req, res) => {
-    if (new URL(req.url, "http://localhost").pathname === REDIRECT_TARGET) {
+    const path = new URL(req.url, "http://localhost").pathname;
+    if (path === REDIRECT_TARGET) {
       state.followed++;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end('{"features":{"v1_send":true}}');
       return;
     }
+    if (path !== state.path) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     // The answer is fixed before the request is recorded, so a test that
     // sees the request can change the next answer.
     const { status, body, delayMs, location, setCookie } = state;
-    state.queries.push(new URL(req.url, "http://localhost").search);
+    state.queries.push(new URL(req.url, "http://localhost").search.slice(1));
     state.headers.push({ ...req.headers });
     const reply = () => {
       const headers = { "Content-Type": "application/json" };
@@ -69,7 +77,8 @@ export async function featureServer(body = '{"features":{"v1_send":true}}') {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   state.origin = `http://127.0.0.1:${server.address().port}`;
-  state.endpoint = `${state.origin}/${++lastServerId}/2/chat/features`;
+  state.path = `/${++lastServerId}/2/chat/features`;
+  state.endpoint = state.origin + state.path;
   state.unref = () => server.unref();
   state.close = () =>
     new Promise((resolve) => {
@@ -81,11 +90,12 @@ export async function featureServer(body = '{"features":{"v1_send":true}}') {
 
 /**
  * A wasm Chat that reads its feature switches from `endpoint`, within
- * `timeoutMs`: the wrapper around it starts the read, as createChat's does.
+ * `timeoutMs`, again `refreshMs` after each answer: the wrapper around it
+ * starts the read, as createChat's does.
  */
-export function reading(endpoint, timeoutMs = 2000) {
+export function reading(endpoint, timeoutMs = 2000, refreshMs = 300_000) {
   const chat = new Chat();
-  chat.__configureFeatures(endpoint, timeoutMs);
+  chat.__configureFeatures(endpoint, timeoutMs, refreshMs);
   new ChatWithJuicebox(chat, null, undefined, null, null, null);
   return chat;
 }

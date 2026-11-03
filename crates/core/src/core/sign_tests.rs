@@ -384,17 +384,16 @@ fn sign_cannot_forge_a_key_change() {
     };
 
     // A signature over exactly this payload is what a recipient accepts.
-    let genuine = alice
-        .core
-        .sign_key_change(
-            SIGNING_KEY_VERSION,
-            "mk1",
-            "1001",
-            CONVERSATION,
-            version,
-            relay_key.encoded(),
-        )
-        .unwrap();
+    let genuine = super::test_support::key_change_signature(
+        &alice.core,
+        SIGNING_KEY_VERSION,
+        "mk1",
+        "1001",
+        CONVERSATION,
+        version,
+        relay_key.encoded(),
+    )
+    .unwrap();
     let genuine = base64_decode(&genuine.message_event_signature.signature).unwrap();
     let bob = recipient();
     assert!(accepted(&bob, key_change_to(&bob, genuine)));

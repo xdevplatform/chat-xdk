@@ -634,6 +634,7 @@ fn encrypt_message_rejects_disallowed_attachment_combos() {
         filename: "file".into(),
         media_type: mt,
         duration_millis: None,
+        plaintext_sha256: None,
     };
     let url = || crate::AttachmentDescriptor::Url {
         url: "https://example.com".into(),
@@ -697,6 +698,7 @@ fn encrypt_reply_rejects_disallowed_attachment_combos() {
             filename: "pic.jpg".into(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         },
     ]);
     let err = core.encrypt_reply(&params).unwrap_err();
@@ -839,6 +841,7 @@ fn every_send_rejects_an_empty_link_a_post_without_an_id_and_negative_dimensions
         filename: "photo.jpg".into(),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     };
     let card = |url: &str, banner: Option<UrlAttachmentImageDescriptor>| {
         crate::AttachmentDescriptor::Url {
@@ -921,6 +924,7 @@ fn every_send_rejects_a_file_without_a_name_or_a_size() {
         filename: filename.into(),
         media_type: Some(1),
         duration_millis: None,
+        plaintext_sha256: None,
     };
     let card = |banner: Option<UrlAttachmentImageDescriptor>,
                 favicon: Option<UrlAttachmentImageDescriptor>| {

@@ -464,6 +464,7 @@ fn main() {
             filename: "fixture.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
     let ckey_media_payload = core
         .encrypt_message(&ckey_media_params)

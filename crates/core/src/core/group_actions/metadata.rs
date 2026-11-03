@@ -6,11 +6,10 @@ use crate::error::SdkError;
 use crate::params::{
     GroupAvatarChangeParams, GroupDescriptionChangeParams, GroupTitleChangeParams,
 };
-use crate::signatures::CURRENT_SIGNATURE_VERSION;
 use crate::thrift::event::{GroupAvatarUrlChange, GroupChange};
 use crate::types::{PreparedAction, PreparedGroupMetadataChange};
 
-use super::{group_detail, one_action, require_text, sign_metadata, sign_named, GroupMetadata};
+use super::{group_detail, one_action, require_text, sign_change, sign_metadata, GroupMetadata};
 
 /// The inputs of a title or description change.
 struct MetadataChange<'a> {
@@ -69,15 +68,12 @@ impl ChatCore {
         let avatar_url = require_text("new_avatar_url", &params.new_avatar_url)?;
         let key_version = params.conversation_key_version.as_str();
         crate::pipeline::validate_key_version("conversation_key_version", key_version)?;
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "GroupChangeEvent.GroupAvatarUrlChange",
-            &[key_version, avatar_url],
-            CURRENT_SIGNATURE_VERSION,
             group_detail(GroupChange::GroupAvatarChange(GroupAvatarUrlChange {
                 custom_avatar_url: Some(avatar_url.to_string()),
                 conversation_key_version: Some(key_version.to_string()),
-            }))?,
+            })),
         )?;
         Ok(one_action(signature))
     }

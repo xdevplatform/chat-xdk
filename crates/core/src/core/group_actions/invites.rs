@@ -6,13 +6,12 @@ use crate::params::{
     GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
     GroupJoinRequestParams,
 };
-use crate::signatures::CURRENT_SIGNATURE_VERSION;
 use crate::thrift::event::{
     GroupChange, GroupInviteDisable, GroupInviteEnable, GroupJoinReject, GroupJoinRequest,
 };
 use crate::types::PreparedAction;
 
-use super::{group_detail, nullable_str, one_action, require_text, sign_named};
+use super::{group_detail, one_action, require_text, sign_change};
 
 impl ChatCore {
     /// Sign enabling a group invite.
@@ -31,18 +30,13 @@ impl ChatCore {
         let invite_url = require_text("invite_url", &params.invite_url)?;
         let expires = params.expires_at_msec.filter(|msec| *msec >= 0);
         let affiliate = params.affiliate_id.as_deref().filter(|id| !id.is_empty());
-        let expires_text = nullable_i64(expires);
-        let affiliate_text = nullable_str(affiliate);
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "GroupChangeEvent.GroupInviteEnable",
-            &[invite_url, &expires_text, &affiliate_text],
-            CURRENT_SIGNATURE_VERSION,
             group_detail(GroupChange::GroupInviteEnable(GroupInviteEnable {
                 expires_at_msec: expires,
                 invite_url: Some(invite_url.to_string()),
                 affiliate_id: affiliate.map(str::to_string),
-            }))?,
+            })),
         )?;
         Ok(one_action(signature))
     }
@@ -66,15 +60,11 @@ impl ChatCore {
             }
             None => ctx.sender_id.clone(),
         };
-        let detail = group_detail(GroupChange::GroupInviteDisable(GroupInviteDisable {
-            disabled_by_member_id: Some(disabled_by.clone()),
-        }))?;
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "GroupChangeEvent.GroupInviteDisable",
-            &[&disabled_by],
-            CURRENT_SIGNATURE_VERSION,
-            detail,
+            group_detail(GroupChange::GroupInviteDisable(GroupInviteDisable {
+                disabled_by_member_id: Some(disabled_by),
+            })),
         )?;
         Ok(one_action(signature))
     }
@@ -103,15 +93,11 @@ impl ChatCore {
             }
             None => ctx.sender_id.clone(),
         };
-        let detail = group_detail(GroupChange::GroupJoinRequest(GroupJoinRequest {
-            requesting_user_id: Some(requesting.clone()),
-        }))?;
-        let signature = sign_named(
+        let signature = sign_change(
             &ctx,
-            "GroupChangeEvent.GroupJoinRequest",
-            &[&requesting],
-            CURRENT_SIGNATURE_VERSION,
-            detail,
+            group_detail(GroupChange::GroupJoinRequest(GroupJoinRequest {
+                requesting_user_id: Some(requesting),
+            })),
         )?;
         Ok(one_action(signature))
     }
@@ -127,18 +113,11 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
             "user_ids",
             &params.user_ids,
-            "GroupChangeEvent.GroupJoinReject",
             |ids| {
-                group_detail(GroupChange::GroupJoinReject(GroupJoinReject {
+                GroupChange::GroupJoinReject(GroupJoinReject {
                     rejected_user_ids: Some(ids.to_vec()),
-                }))
+                })
             },
         )
     }
-}
-
-fn nullable_i64(value: Option<i64>) -> String {
-    value
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "null".to_string())
 }

@@ -1,12 +1,17 @@
 //! Feature switches for this repository's language bindings.
 //!
-//! Not part of the public API. A chat reads `GET /2/chat/features` once, when
-//! it is created, and keeps the answer for its lifetime (see
-//! `crate::features`). The core decides what to fetch and what an answer
-//! means; a binding only performs the GET, with its own HTTP stack. Its chat
-//! constructor calls [`FeatureSwitches::start_features`], performs the GET it
-//! returns, if any, in the background, and reports the result with
-//! [`complete_fetch`].
+//! Not part of the public API. A chat reads `GET /2/chat/features` when it is
+//! created and again when its session identity gives it a new URL, retries a
+//! read that fails, and reads again [`crate::FEATURES_REFRESH_MS`] after each
+//! answer while it lives (see `crate::features`). The core decides what to
+//! fetch, when to fetch it again and what an answer means; a binding only
+//! performs the GETs, with its own HTTP stack. A binding's chat constructor,
+//! and its `set_identity` once the core's has returned, call
+//! [`FeatureSwitches::start_features`]. The binding performs the GET that
+//! returns, if any, in the background after the GET's `delay_ms`, reports its
+//! result with [`complete_fetch`], and performs the GET `complete_fetch`
+//! returns, if any, the same way; it ends a GET it cannot start with
+//! [`abandon_fetch`].
 
 pub use crate::features::Fetch;
 
@@ -110,9 +115,17 @@ pub fn set_clock(clock: fn() -> u64) {
 /// Report the result of the GET `id`: its HTTP status, 0 when no response
 /// arrived, and the body, read to its end or to [`Fetch::max_bytes`] plus one
 /// byte, whichever comes first. A request that ended any other way reports
-/// status 0.
-pub fn complete_fetch(id: u64, status: u16, body: &[u8]) {
-    shared::complete_fetch(id, status, body);
+/// status 0. Returns the next GET to perform, a refresh or a retry, while a
+/// chat still waits for one.
+pub fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
+    shared::complete_fetch(id, status, body)
+}
+
+/// End the GET `id`, which the binding could not start, without a retry: the
+/// next chat that reads the same URL starts a GET of its own, which also
+/// answers the chats waiting for this one.
+pub fn abandon_fetch(id: u64) {
+    shared::abandon_fetch(id);
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
@@ -124,19 +137,21 @@ pub fn set_default_endpoint(endpoint: Option<&str>) {
 /// A chat's part in the feature switches, as the bindings drive it.
 pub trait FeatureSwitches {
     /// For this repository's tests: read this chat's switches from
-    /// `endpoint`, within `timeout_ms`. Only a read started after this call
-    /// uses them.
-    fn configure_features(&self, endpoint: &str, timeout_ms: u64);
+    /// `endpoint`, within `timeout_ms`, again `refresh_ms` after each answer
+    /// and never more than `refresh_ms` apart while retrying. Only a read
+    /// this chat starts after this call uses them.
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64, refresh_ms: u64);
 
-    /// Start this chat's one read of the switches: the GET to perform, or
-    /// `None` when the chat takes the answer of a GET already in flight or
-    /// has started its read already.
+    /// Start this chat's reads of the switches for its session identity,
+    /// when it is created and again after `set_identity`: the GET to
+    /// perform, or `None` when the chat shares a read of its identity's URL
+    /// in flight or waiting to start.
     fn start_features(&self) -> Option<Fetch>;
 }
 
 impl FeatureSwitches for crate::ChatCore {
-    fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
-        crate::ChatCore::configure_features(self, endpoint, timeout_ms);
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64, refresh_ms: u64) {
+        crate::ChatCore::configure_features(self, endpoint, timeout_ms, refresh_ms);
     }
 
     fn start_features(&self) -> Option<Fetch> {
@@ -146,8 +161,8 @@ impl FeatureSwitches for crate::ChatCore {
 
 #[cfg(feature = "juicebox")]
 impl FeatureSwitches for crate::Chat {
-    fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
-        FeatureSwitches::configure_features(self.core(), endpoint, timeout_ms);
+    fn configure_features(&self, endpoint: &str, timeout_ms: u64, refresh_ms: u64) {
+        FeatureSwitches::configure_features(self.core(), endpoint, timeout_ms, refresh_ms);
     }
 
     fn start_features(&self) -> Option<Fetch> {

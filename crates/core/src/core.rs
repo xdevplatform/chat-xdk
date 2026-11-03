@@ -60,6 +60,11 @@ pub struct ChatCore {
     keypair_manager: KeypairManager,
     reject_unverified: std::sync::atomic::AtomicBool,
     conversation_key_high_water: std::sync::RwLock<HashMap<String, u64>>,
+    /// Per conversation, the highest signature version of a key change this
+    /// instance signed or verified. A receiver rejects a key change signed
+    /// below an earlier one in its conversation as a downgrade, so none this
+    /// instance signs goes below it.
+    key_change_signature_floor: std::sync::RwLock<HashMap<String, i32>>,
     /// User id of this instance's owner, set by [`Self::set_identity`] and
     /// used as the default `sender_id` for signed actions.
     owner_user_id: std::sync::RwLock<Option<String>>,
@@ -106,6 +111,7 @@ impl ChatCore {
             keypair_manager: KeypairManager::new(),
             reject_unverified: std::sync::atomic::AtomicBool::new(true),
             conversation_key_high_water: std::sync::RwLock::new(HashMap::new()),
+            key_change_signature_floor: std::sync::RwLock::new(HashMap::new()),
             owner_user_id: std::sync::RwLock::new(None),
             cache_keys: std::sync::atomic::AtomicBool::new(false),
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),
@@ -208,6 +214,9 @@ impl ChatCore {
     ///
     /// A resolved default and an explicitly passed value produce
     /// byte-identical signed output for the same logical inputs.
+    ///
+    /// The user id also sets the bucket [`Self::feature_switches_url`] asks
+    /// the feature switches for.
     pub fn set_identity(&self, params: &SetIdentityParams) -> Result<(), SdkError> {
         crate::pipeline::validate_user_id("user_id", &params.user_id)?;
         crate::pipeline::validate_key_version("signing_key_version", &params.signing_key_version)?;
@@ -465,19 +474,36 @@ impl ChatCore {
 
     // Feature switches (see `crate::features`).
 
-    /// Set this instance's feature switches from the answer to `GET
-    /// /2/chat/features` ([`crate::FEATURES_ENDPOINT`]): the response's HTTP
-    /// status and body. The SDK never makes the request: GET it yourself
-    /// once, when you create the instance, without credentials or query
-    /// parameters, within [`crate::FEATURES_TIMEOUT_MS`], reading at most
-    /// [`crate::FEATURES_MAX_BODY`] plus one byte of the body.
+    /// The URL of this instance's feature switches:
+    /// [`crate::FEATURES_ENDPOINT`] with the bucket of its session identity's
+    /// sender, the last four digits of the user id, once
+    /// [`Self::set_identity`] has set one. The bucket gives every chat of one
+    /// sender the same answer wherever it runs.
+    pub fn feature_switches_url(&self) -> String {
+        crate::features::features_url(
+            crate::features::FEATURES_ENDPOINT,
+            self.session_user_id().as_deref(),
+        )
+    }
+
+    /// Set this instance's feature switches from the answer to `GET`
+    /// [`Self::feature_switches_url`]: the response's HTTP status and body.
+    /// This crate never makes the request: GET it yourself, without
+    /// credentials, once you have set the identity, within
+    /// [`crate::FEATURES_TIMEOUT_MS`], reading at most
+    /// [`crate::FEATURES_MAX_BODY`] plus one byte of the body, and again
+    /// every [`crate::FEATURES_REFRESH_MS`] so a change reaches the
+    /// instance.
     ///
-    /// Sends are v0 (the format 0.5.x sends) until the answer turns
-    /// `v1_send` on, then v1 (per-message keys). Every switch stays off when
-    /// the status is not 200 or the body is longer than
-    /// [`crate::FEATURES_MAX_BODY`] or is not a `{"features": {...}}` object;
-    /// a switch whose value is not `true` reads off. An instance takes one
-    /// answer for its lifetime: later calls change nothing.
+    /// Sends are v0 (the format 0.5.x sends) until an answer turns
+    /// `v1_send` on, then v1 (per-message keys), and v0 again if a later
+    /// answer turns it off. Each answer that is a 200 with a
+    /// `{"features": {...}}` object replaces the one before; a switch whose
+    /// value is not `true` reads off. An answer whose status is not 200, or
+    /// whose body is longer than [`crate::FEATURES_MAX_BODY`] or is not a
+    /// `{"features": {...}}` object, changes nothing: retry the GET 1 s
+    /// later, then after twice the previous wait, never more than
+    /// [`crate::FEATURES_REFRESH_MS`] apart.
     pub fn set_feature_switches(&self, status: u16, body: &[u8]) {
         self.features
             .lock()
@@ -494,24 +520,34 @@ impl ChatCore {
     }
 
     /// Read this instance's feature switches from `endpoint`, within
-    /// `timeout_ms`, when its read starts.
+    /// `timeout_ms`, again `refresh_ms` after each answer and never more than
+    /// `refresh_ms` apart while retrying, from the next read it starts.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
-    pub(crate) fn configure_features(&self, endpoint: &str, timeout_ms: u64) {
+    pub(crate) fn configure_features(&self, endpoint: &str, timeout_ms: u64, refresh_ms: u64) {
         self.features
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(endpoint, timeout_ms);
+            .configure(endpoint, timeout_ms, refresh_ms);
     }
 
-    /// Start this instance's one read of the feature switches: the GET to
-    /// perform, or `None` when it shares a GET in flight or has started its
-    /// read already.
+    /// Start this instance's reads of the feature switches for its session
+    /// identity, or move them there when a new identity gives them a new
+    /// URL: the GET to perform, or `None` when it shares a read of that URL
+    /// in flight or waiting to start.
     #[cfg_attr(not(feature = "bindings"), allow(dead_code))]
     pub(crate) fn start_features(&self) -> Option<crate::features::Fetch> {
-        self.features
-            .lock()
+        let mut features = self.features.lock().unwrap_or_else(|e| e.into_inner());
+        // Read under the lock, so of two `set_identity` calls racing, the
+        // start that runs last reads the identity set last.
+        features.start(self.session_user_id().as_deref())
+    }
+
+    /// The user id [`Self::set_identity`] set, if any.
+    fn session_user_id(&self) -> Option<String> {
+        self.owner_user_id
+            .read()
             .unwrap_or_else(|e| e.into_inner())
-            .start()
+            .clone()
     }
 
     /// Read exactly `on` as on from now on, without any fetch.
@@ -599,12 +635,9 @@ impl ChatCore {
             None => return Ok(false),
         };
 
-        // Missing version is treated as current.
-        let sig_version = sig_data
-            .signature_version
-            .as_deref()
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+        let Some(sig_version) = signature_version(parsed) else {
+            return Err("signature_version is missing or not an integer".to_string());
+        };
         if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
             return Err(format!(
                 "signature_version {} is no longer accepted (minimum: {})",
@@ -701,6 +734,18 @@ fn now_msec() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
+/// The signature version an event's signature carries; `None` when it
+/// carries none or one that is not an integer.
+pub(crate) fn signature_version(event: &MessageEvent) -> Option<i32> {
+    event
+        .message_event_signature
+        .as_ref()?
+        .signature_version
+        .as_deref()?
+        .parse::<i32>()
+        .ok()
+}
+
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {
     let cursor = Cursor::new(data);
     let mut raw = TBinaryInputProtocol::new(cursor, true);
@@ -715,7 +760,8 @@ pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError>
 /// of the signature version the event carries.
 ///
 /// Returns `None` for event types that are not signed (typing, failure,
-/// member account delete).
+/// member account delete), and for an event whose signature carries no
+/// version or one that is not an integer.
 ///
 /// `plaintext_ckey_b64` is required for CKCE v6+ verification — pass the
 /// base64-no-padding encoding of the decrypted conversation key bytes.
@@ -735,12 +781,7 @@ pub fn build_event_signature_payload(
     let sender_id = event.sender_id.as_deref()?;
     let conv_id = event.conversation_id.as_deref();
 
-    let sig_version = event
-        .message_event_signature
-        .as_ref()
-        .and_then(|s| s.signature_version.as_deref())
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(crate::signatures::CURRENT_SIGNATURE_VERSION);
+    let sig_version = signature_version(event)?;
 
     let mut payload = match detail {
         MessageEventDetail::MessageCreateEvent(mce) => {
@@ -751,18 +792,13 @@ pub fn build_event_signature_payload(
             }
             let contents = mce.contents.as_ref()?;
             let contents_b64 = STANDARD_NO_PAD.encode(contents);
-            // v8+ signs the key version as a canonical integer, "null" when
-            // absent or not an integer. Earlier versions sign it as carried,
-            // empty when absent.
-            let ckey_ver = if sig_version >= 8 {
-                nullable_i64(
-                    mce.conversation_key_version
-                        .as_deref()
-                        .and_then(|v| v.parse::<i64>().ok()),
-                )
-            } else {
-                mce.conversation_key_version.clone().unwrap_or_default()
-            };
+            // The key version signs as its integer value, "null" when absent
+            // or not an integer.
+            let ckey_ver = nullable_i64(
+                mce.conversation_key_version
+                    .as_deref()
+                    .and_then(|v| v.parse::<i64>().ok()),
+            );
             let mut extra = vec![ckey_ver, contents_b64];
             // v10+: contents_encryption_version
             if sig_version >= 10 {
@@ -778,7 +814,14 @@ pub fn build_event_signature_payload(
             )
         }
         MessageEventDetail::ConversationKeyChangeEvent(ckce) => {
-            let ckey_ver = ckce.conversation_key_version.as_deref()?;
+            // The key version signs as its integer value; a key change
+            // without one has no payload.
+            let ckey_ver = ckce
+                .conversation_key_version
+                .as_deref()?
+                .parse::<i64>()
+                .ok()?
+                .to_string();
 
             if sig_version >= crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION {
                 // sign the plaintext conversation key bytes (base64 no-padding).
@@ -788,24 +831,22 @@ pub fn build_event_signature_payload(
                     msg_id,
                     sender_id,
                     conv_id,
-                    &[ckey_ver, ckey_b64],
+                    &[&ckey_ver, ckey_b64],
                 )
             } else {
-                // pre-v6: sign the per-participant encrypted key triplets.
+                // pre-v6: sign the per-participant encrypted key triplets,
+                // leaving out the fields an entry lacks.
                 let keys = ckce.conversation_participant_keys.as_ref()?;
-                let mut extra: Vec<&str> = vec![ckey_ver];
-                let parts: Vec<String> = keys
-                    .iter()
-                    .flat_map(|pk| {
-                        vec![
-                            pk.user_id.clone().unwrap_or_default(),
-                            pk.encrypted_conversation_key.clone().unwrap_or_default(),
-                            pk.public_key_version.clone().unwrap_or_default(),
-                        ]
-                    })
-                    .collect();
-                let part_refs: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
-                extra.extend(part_refs);
+                let mut extra: Vec<&str> = vec![&ckey_ver];
+                extra.extend(keys.iter().flat_map(|pk| {
+                    [
+                        pk.user_id.as_deref(),
+                        pk.encrypted_conversation_key.as_deref(),
+                        pk.public_key_version.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                }));
                 build_component_payload(
                     "ConversationKeyChangeEvent",
                     msg_id,
@@ -962,26 +1003,30 @@ pub fn build_event_signature_payload(
                         &refs,
                     )
                 }
+                // Key version, then the title: "null" for a change that
+                // removes it.
                 GenGC::GroupTitleChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let title = c.custom_title.as_deref().unwrap_or("");
+                    let title = nullable_str(c.custom_title.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupTitleChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, title],
+                        &[ckey_ver, &title],
                     )
                 }
+                // Key version, then the avatar URL, as a title change signs
+                // its title.
                 GenGC::GroupAvatarChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let avatar = c.custom_avatar_url.as_deref().unwrap_or("");
+                    let avatar = nullable_str(c.custom_avatar_url.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupAvatarUrlChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, avatar],
+                        &[ckey_ver, &avatar],
                     )
                 }
                 GenGC::GroupCreate(c) => {
@@ -1057,17 +1102,17 @@ pub fn build_event_signature_payload(
                 }
                 // Not part of the signed payload.
                 GenGC::GroupAdminSettingsChange(_) => None,
-                // Key version, then the description. An absent description
-                // signs as empty, the same way a title change signs its title.
+                // Key version, then the description, as a title change signs
+                // its title.
                 GenGC::GroupDescriptionChange(c) => {
                     let ckey_ver = c.conversation_key_version.as_deref()?;
-                    let description = c.custom_description.as_deref().unwrap_or("");
+                    let description = nullable_str(c.custom_description.as_deref());
                     build_component_payload(
                         "GroupChangeEvent.GroupDescriptionChange",
                         msg_id,
                         sender_id,
                         conv_id,
-                        &[ckey_ver, description],
+                        &[ckey_ver, &description],
                     )
                 }
             }
@@ -1297,6 +1342,7 @@ fn collect_attachments(
                     attachment_id: media.attachment_id.clone(),
                     legacy_media_url_https: media.legacy_media_url_https.clone(),
                     legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+                    plaintext_sha256: media.plaintext_sha256.as_deref().map(base64_encode),
                 };
                 parsed.push(AttachmentInfo::Media(info));
             }
@@ -1526,6 +1572,7 @@ fn map_media_attachment(media: &crate::thrift::product::MediaAttachment) -> Medi
         attachment_id: media.attachment_id.clone(),
         legacy_media_url_https: media.legacy_media_url_https.clone(),
         legacy_media_preview_url: media.legacy_media_preview_url.clone(),
+        plaintext_sha256: media.plaintext_sha256.as_deref().map(base64_encode),
     }
 }
 
@@ -1813,6 +1860,9 @@ mod test_support;
 
 #[cfg(test)]
 mod signature_version_tests;
+
+#[cfg(test)]
+mod action_version_tests;
 
 #[cfg(test)]
 mod message_key_tests;

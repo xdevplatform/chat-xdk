@@ -154,13 +154,13 @@ def main() -> None:
     # Canonical conversation_id + partner id from the decrypted events.
     canonical_conv = conversation_id
     partner_id = next(iter(ids - {my_id}), None)
-    last_inbound_seq = None
+    last_inbound_event = None
     for m in batch["events"]:
         ev = m["event"] or {}
         if ev.get("conversation_id"):
             canonical_conv = ev["conversation_id"]
         if ev.get("type") == "Message" and str(ev.get("sender_id")) != my_id:
-            last_inbound_seq = ev.get("sequence_id") or last_inbound_seq
+            last_inbound_event = m.get("original_b64") or last_inbound_event
     assert partner_id, "expected a conversation partner among the senders"
 
     # -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE ---------
@@ -200,7 +200,11 @@ def main() -> None:
         text=f"@user {marker}",
         conversation_key=key,
         conversation_key_version=kv,
-        reply_to_sequence_id=last_inbound_seq,
+        # Threading by raw event: the SDK derives the preview from it and
+        # embeds it; the key changes open an original sent under an older
+        # key version.
+        reply_to_event=last_inbound_event,
+        reply_to_ckces=key_events_b64 or None,
         entities=[(0, 5, "mention")],
         ttl_msec=24 * 60 * 60 * 1000,
     )

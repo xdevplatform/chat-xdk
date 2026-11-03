@@ -69,6 +69,29 @@ impl Party {
     }
 }
 
+/// A version-7 signature by `core`'s signing key over the key change
+/// `message_id`, which carries `conversation_key` at
+/// `conversation_key_version`.
+pub(super) fn key_change_signature(
+    core: &ChatCore,
+    public_key_version: &str,
+    message_id: &str,
+    sender_id: &str,
+    conversation_id: &str,
+    conversation_key_version: &str,
+    conversation_key: &[u8],
+) -> Result<crate::signatures::ActionSignature, SdkError> {
+    crate::signatures::build_ckey_change_signature(
+        &core.get_signing_private_key()?,
+        public_key_version,
+        message_id,
+        sender_id,
+        conversation_id,
+        conversation_key_version,
+        conversation_key,
+    )
+}
+
 pub(super) fn key(byte: u8) -> XChatConversationKey {
     XChatConversationKey::from_bytes(vec![byte; 32]).unwrap()
 }
@@ -145,21 +168,29 @@ pub(super) fn sent_event(
     sender_id: &str,
     conversation_id: &str,
 ) -> ThriftEvent {
-    let bytes = base64_decode(&payload.encoded_message_create_event).unwrap();
-    let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
-    let mut protocol = BoundedProtocol::new(&mut raw);
-    let mce = MessageCreateEvent::read_from_in_protocol(&mut protocol).unwrap();
+    fn read<T: TSerializable>(b64: &str) -> T {
+        let bytes = base64_decode(b64).unwrap();
+        let mut raw = TBinaryInputProtocol::new(Cursor::new(bytes), true);
+        let mut protocol = BoundedProtocol::new(&mut raw);
+        T::read_from_in_protocol(&mut protocol).unwrap()
+    }
+    let mce: MessageCreateEvent = read(&payload.encoded_message_create_event);
+    let signature: MessageEventSignature = read(&payload.encoded_message_event_signature);
+    assert_eq!(signature.signature.as_ref(), Some(&payload.signature));
+    assert_eq!(
+        signature.public_key_version.as_ref(),
+        Some(&payload.signature_info.public_key_version)
+    );
+    assert_eq!(
+        signature.signature_version.as_ref(),
+        Some(&payload.signature_info.signature_version)
+    );
     ThriftEvent {
         message_id: Some(payload.message_id.clone()),
         sender_id: Some(sender_id.to_string()),
         conversation_id: Some(conversation_id.to_string()),
         detail: Some(Detail::MessageCreateEvent(mce)),
-        message_event_signature: Some(MessageEventSignature {
-            signature: Some(payload.signature.clone()),
-            public_key_version: Some(payload.signature_info.public_key_version.clone()),
-            signature_version: Some(payload.signature_info.signature_version.clone()),
-            ..Default::default()
-        }),
+        message_event_signature: Some(signature),
         ..Default::default()
     }
 }
@@ -183,7 +214,8 @@ pub(super) fn envelope(
     }
 }
 
-/// The signed payload of a `MessageCreateEvent` at `version` (2 or later).
+/// The signed payload of a `MessageCreateEvent` at `version` (2 or later):
+/// the key version as its integer value, `null` when it is not one.
 pub(super) fn message_payload(
     message_id: &str,
     sender_id: &str,
@@ -197,7 +229,9 @@ pub(super) fn message_payload(
         message_id,
         sender_id,
         CONVERSATION,
-        key_version,
+        key_version
+            .parse::<i64>()
+            .map_or("null".to_string(), |v| v.to_string()),
         STANDARD_NO_PAD.encode(contents)
     );
     if version >= 10 {

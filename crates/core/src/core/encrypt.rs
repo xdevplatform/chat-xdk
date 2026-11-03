@@ -77,10 +77,12 @@ impl ChatCore {
 
     /// Encrypt a reply.
     ///
-    /// When `reply_to_event` is set, the reply preview (sequence id, sender,
-    /// text, entities, attachments) is derived from that raw signed event and
-    /// the event itself is embedded so recipients can validate the preview.
-    /// Explicit `reply_to_*` fields override the derived values.
+    /// When `reply_to_event` is set, the reply preview (sequence id, message
+    /// id, sender, text, entities, attachments) is derived from that raw
+    /// signed event and the event itself is embedded so recipients can
+    /// validate the preview. Explicit `reply_to_*` fields override the
+    /// derived values, apart from `reply_to_message_id`, which must be the id
+    /// the event carries.
     pub fn encrypt_reply(&self, params: &EncryptReplyParams) -> Result<SendPayload, SdkError> {
         let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
         let signing_key_version =
@@ -120,7 +122,8 @@ impl ChatCore {
             .as_ref()
             .map(crate::pipeline::build_thrift_quick_reply);
 
-        let preview = self.build_reply_preview(params, &ckey, &conversation_key_version)?;
+        let (preview, embedded_signers) =
+            self.build_reply_preview(params, &ckey, &conversation_key_version)?;
 
         let content_bytes = crate::pipeline::build_message_content_with_preview(
             &params.text,
@@ -140,7 +143,8 @@ impl ChatCore {
             &conversation_key_version,
             &signing_key_version,
         )
-        .send_version(send_version);
+        .send_version(send_version)
+        .embedded_signers(embedded_signers);
         api_params.should_notify = params.should_notify;
         api_params.ttl_msec = params.ttl_msec;
         crate::pipeline::encrypt_and_sign(api_params)
@@ -168,19 +172,23 @@ impl ChatCore {
         let content_bytes =
             crate::pipeline::build_reaction_add_content(&target_sequence_id, &params.emoji)?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(self.send_version()),
+        let send_version = self.send_version();
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify =
+                Some(crate::pipeline::is_one_to_one(&conversation_id, &sender_id));
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Encrypt a reaction-remove.
@@ -205,19 +213,22 @@ impl ChatCore {
         let content_bytes =
             crate::pipeline::build_reaction_remove_content(&target_sequence_id, &params.emoji)?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(self.send_version()),
+        let send_version = self.send_version();
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify = Some(false);
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Encrypt a message edit.
@@ -226,8 +237,10 @@ impl ChatCore {
     /// recipient; it is sent through the same message-create channel as a
     /// regular message and carries its own fresh message id.
     ///
-    /// When `target_event` is set, the conversation id and target sequence id
-    /// are derived from that raw event; explicit fields override them.
+    /// When `target_event` is set, the conversation id, the target sequence
+    /// id and, for a v1 edit, the target message id are derived from that raw
+    /// event; explicit fields override them, apart from `target_message_id`,
+    /// which must be the id the event carries.
     pub fn encrypt_edit(&self, params: &EncryptEditParams) -> Result<SendPayload, SdkError> {
         let (conversation_id, target_sequence_id) = Self::resolve_event_target(
             params.target_event.as_deref(),
@@ -244,18 +257,25 @@ impl ChatCore {
             &sender_id,
         )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        // Only v1 edits name the message they edit; v0 edits are built as
-        // 0.5.x built them. Read leniently: an unparsable target event already
-        // fails above unless explicit fields made it unnecessary, and then
-        // only the message id is lost.
+        // The target event is read leniently: an unparsable one already fails
+        // above unless explicit fields made it unnecessary, and then only the
+        // message id it would give is lost.
+        let target_message_id = same_message_id(
+            "target_message_id",
+            params.target_message_id.clone().filter(|v| !v.is_empty()),
+            "target_event",
+            params
+                .target_event
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .and_then(|b64| Self::parse_event_b64(b64).ok())
+                .and_then(|event| event.message_id),
+        )?;
+        // Only v1 edits name the message they edit; a v0 edit carries no
+        // target message id.
         let send_version = self.send_version();
-        let target_message_id = params
-            .target_event
-            .as_deref()
-            .filter(|_| send_version == crate::pipeline::SendVersion::V1)
-            .filter(|v| !v.is_empty())
-            .and_then(|b64| Self::parse_event_b64(b64).ok())
-            .and_then(|event| event.message_id);
+        let target_message_id =
+            target_message_id.filter(|_| send_version == crate::pipeline::SendVersion::V1);
         let content_bytes = crate::pipeline::build_message_edit_content(
             &target_sequence_id,
             &params.updated_text,
@@ -263,19 +283,21 @@ impl ChatCore {
             target_message_id.as_deref(),
         )?;
         let message_id = Self::generate_message_id();
-        crate::pipeline::encrypt_and_sign(
-            crate::pipeline::EncryptAndSignParams::new(
-                &ckey,
-                &signing_kp.private,
-                &message_id,
-                &sender_id,
-                &conversation_id,
-                &content_bytes,
-                &conversation_key_version,
-                &signing_key_version,
-            )
-            .send_version(send_version),
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
         )
+        .send_version(send_version);
+        if send_version == crate::pipeline::SendVersion::V1 {
+            api_params.should_notify = Some(false);
+        }
+        crate::pipeline::encrypt_and_sign(api_params)
     }
 
     /// Build the signed action for deleting messages from a conversation.
@@ -309,46 +331,30 @@ impl ChatCore {
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
         let conversation_id =
             crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
-        let signing_key = self.get_signing_private_key()?;
 
         let delete_action = if params.delete_for_all {
             crate::thrift::event::DeleteMessageAction::DELETE_FOR_ALL
         } else {
             crate::thrift::event::DeleteMessageAction::DELETE_FOR_SELF
         };
-        let message_id = Self::generate_message_id();
-        let mut signature = crate::signatures::build_message_delete_signature(
-            &signing_key,
-            &signing_key_version,
-            &message_id,
-            &sender_id,
-            &conversation_id,
-            &params.sequence_ids,
-            delete_action.0,
-        )?;
-        signature.encoded_message_event_detail =
-            Self::encode_message_delete_detail(&params.sequence_ids, delete_action)?;
-        Ok(PreparedAction {
-            action_signatures: vec![signature],
-        })
-    }
-
-    /// Serialize the `MessageDeleteEvent` the API validates and relays.
-    ///
-    /// Encoded as a base64 `MessageEventDetail` carrying the sequence ids and
-    /// the delete action.
-    pub(super) fn encode_message_delete_detail(
-        sequence_ids: &[String],
-        delete_action: crate::thrift::event::DeleteMessageAction,
-    ) -> Result<String, SdkError> {
         let detail = crate::thrift::event::MessageEventDetail::MessageDeleteEvent(
             crate::thrift::event::MessageDeleteEvent {
-                sequence_ids: Some(sequence_ids.to_vec()),
+                sequence_ids: Some(params.sequence_ids.clone()),
                 delete_message_action: Some(delete_action),
                 pme_sequence_ids: None,
             },
         );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        let signature = self.sign_action_event(
+            &signing_key_version,
+            &sender_id,
+            &conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            detail,
+            None,
+        )?;
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Build the signed action for marking a conversation read.
@@ -380,42 +386,26 @@ impl ChatCore {
             self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
         let conversation_id =
             crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id);
-        let signing_key = self.get_signing_private_key()?;
         let seen_at_msec = params.seen_at_msec.unwrap_or_else(now_msec);
 
-        let message_id = Self::generate_message_id();
-        let mut signature = crate::signatures::build_mark_conversation_read_signature(
-            &signing_key,
-            &signing_key_version,
-            &message_id,
-            &sender_id,
-            &conversation_id,
-            &params.seen_until_sequence_id,
-            seen_at_msec,
-        )?;
-        signature.encoded_message_event_detail = Self::encode_mark_conversation_read_detail(
-            &params.seen_until_sequence_id,
-            seen_at_msec,
-        )?;
-        Ok(PreparedAction {
-            action_signatures: vec![signature],
-        })
-    }
-
-    /// Serialize the `MarkConversationReadEvent` as a base64
-    /// `MessageEventDetail` carrying the read point and its time.
-    pub(super) fn encode_mark_conversation_read_detail(
-        seen_until_sequence_id: &str,
-        seen_at_msec: i64,
-    ) -> Result<String, SdkError> {
         let detail = crate::thrift::event::MessageEventDetail::MarkConversationReadEvent(
             crate::thrift::event::MarkConversationReadEvent {
-                seen_until_sequence_id: Some(seen_until_sequence_id.to_string()),
+                seen_until_sequence_id: Some(params.seen_until_sequence_id.clone()),
                 seen_at_millis: Some(seen_at_msec),
                 is_grok: None,
             },
         );
-        Ok(base64_encode(&crate::pipeline::serialize_thrift(&detail)?))
+        let signature = self.sign_action_event(
+            &signing_key_version,
+            &sender_id,
+            &conversation_id,
+            crate::signatures::CURRENT_SIGNATURE_VERSION,
+            detail,
+            None,
+        )?;
+        Ok(PreparedAction {
+            action_signatures: vec![signature],
+        })
     }
 
     /// Resolve a reaction's conversation id and target sequence id from the
@@ -635,41 +625,46 @@ impl ChatCore {
     /// Decrypt an event quoted by a received reply. A message-key event
     /// opens with the key the reply carries for it when there is one, which
     /// must be a 32-byte key; otherwise its key is resolved like any raw
-    /// event's. Returns the plaintext and, for a message-key event, the
-    /// message key that opened it.
+    /// event's, from the receiver's own keys. Returns the plaintext and, for
+    /// a message-key event, the message key that opened it.
     pub(super) fn open_quoted_event(
         &self,
         raw: &MessageEvent,
         carried_key: Option<&[u8]>,
-        key_changes: &[MessageEvent],
         conversation_keys: &HashMap<String, XChatConversationKey>,
     ) -> Result<(Vec<u8>, Option<XChatConversationKey>), SdkError> {
         let uses_message_key = Self::uses_message_key(raw);
-        let key = match carried_key.filter(|_| uses_message_key) {
-            Some(bytes) => Some(
-                XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(|| {
-                    SdkError::Parse("carried message key must be 32 bytes".into())
-                })?,
-            ),
-            None => self.raw_event_contents_key(raw, None, None, key_changes, conversation_keys)?,
-        };
+        let key =
+            match carried_key.filter(|_| uses_message_key) {
+                Some(bytes) => Some(XChatConversationKey::from_bytes(bytes.to_vec()).ok_or_else(
+                    || SdkError::Parse("carried message key must be 32 bytes".into()),
+                )?),
+                None => self.raw_event_contents_key(raw, None, None, &[], conversation_keys)?,
+            };
         let plaintext = Self::open_raw_event(raw, key.as_ref())?;
         Ok((plaintext, key.filter(|_| uses_message_key)))
     }
 
-    /// Build the wire `ReplyingToPreview` for an outgoing reply.
+    /// Build the wire `ReplyingToPreview` for an outgoing reply, with the
+    /// signers of the events it embeds.
     ///
     /// When `reply_to_event` is set, the preview fields are derived from the
     /// decrypted original and the raw signed event is embedded so recipients
     /// can validate the preview; explicit `reply_to_*` fields override the
     /// derived values. Without it, the preview is built from the explicit
-    /// fields alone.
+    /// fields alone and embeds no event.
     pub(super) fn build_reply_preview(
         &self,
         params: &EncryptReplyParams,
         outer_key: &XChatConversationKey,
         outer_version: &str,
-    ) -> Result<crate::thrift::product::ReplyingToPreview, SdkError> {
+    ) -> Result<
+        (
+            crate::thrift::product::ReplyingToPreview,
+            Vec<crate::pipeline::EmbeddedSigner>,
+        ),
+        SdkError,
+    > {
         // A preview's entities index the quoted message's text, which the
         // preview may carry only the start of, so their end isn't bounded by
         // the preview's text.
@@ -679,10 +674,14 @@ impl ChatCore {
             .map(|entities| crate::pipeline::build_thrift_entities(entities, None))
             .transpose()?
             .map(|v| v.into_iter().map(|b| *b).collect::<Vec<_>>());
-        // The attachment-combination guard deliberately does not apply here:
-        // a reply preview mirrors an already-sent original (which receivers
-        // validate against the embedded raw event), so rejecting it would
-        // block replying to messages from clients that sent such lists.
+        // Only the attachments' plaintext hashes are checked here. The
+        // attachment-combination guard deliberately does not apply: a reply
+        // preview mirrors an already-sent original (which receivers validate
+        // against the embedded raw event), so rejecting it would block
+        // replying to messages that carry such lists.
+        if let Some(attachments) = params.reply_to_attachments.as_deref() {
+            crate::pipeline::validate_plaintext_sha256s(attachments)?;
+        }
         let thrift_reply_attachments = params
             .reply_to_attachments
             .as_deref()
@@ -691,6 +690,7 @@ impl ChatCore {
             .reply_to_sequence_id
             .clone()
             .filter(|v| !v.is_empty());
+        let explicit_message_id = params.reply_to_message_id.clone().filter(|v| !v.is_empty());
         let explicit_sender_id = match params
             .reply_to_sender_id
             .as_deref()
@@ -709,14 +709,14 @@ impl ChatCore {
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
                 )
             })?;
-            return Ok(crate::thrift::product::ReplyingToPreview::new(
+            let preview = crate::thrift::product::ReplyingToPreview::new(
                 explicit_sender_id,
                 params.reply_to_text.clone(),
                 thrift_reply_entities,
                 thrift_reply_attachments,
                 None::<String>,
                 Some(sequence_id),
-                None::<String>,
+                explicit_message_id,
                 None,
                 None,
                 None,
@@ -724,7 +724,8 @@ impl ChatCore {
                 None,
                 None,
                 None,
-            ));
+            );
+            return Ok((preview, Vec::new()));
         };
 
         let raw = Self::parse_event_b64(raw_b64)?;
@@ -836,34 +837,37 @@ impl ChatCore {
         let attachments = thrift_reply_attachments
             .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
 
-        // A key-change event is only useful to a recipient when it carries a
-        // key version this reply's own version does not already imply.
-        let embedded_ckces: Vec<MessageEvent> = key_changes
-            .into_iter()
-            .filter(|e| match &e.detail {
-                Some(MessageEventDetail::ConversationKeyChangeEvent(kce)) => {
-                    kce.conversation_key_version.as_deref() != Some(outer_version)
-                }
-                _ => false,
-            })
+        let embedded_signers = std::iter::once(&raw)
+            .chain(edit_event.as_ref())
+            .filter_map(crate::pipeline::EmbeddedSigner::of)
             .collect();
+        let message_id = same_message_id(
+            "reply_to_message_id",
+            explicit_message_id,
+            "reply_to_event",
+            raw.message_id.clone(),
+        )?;
 
-        Ok(crate::thrift::product::ReplyingToPreview::new(
+        // The preview embeds no key change: the ones `reply_to_ckces` carries
+        // open the original only for this sender, and recipients open it with
+        // their own keys.
+        let preview = crate::thrift::product::ReplyingToPreview::new(
             sender_id,
             message_text,
             entities,
             attachments,
             None::<String>,
             Some(sequence_id),
-            raw.message_id.clone(),
+            message_id,
             raw,
             edit_event,
-            (!embedded_ckces.is_empty()).then_some(embedded_ckces),
+            None::<Vec<MessageEvent>>,
             None,
             None,
             raw_event_message_key,
             raw_event_edit_message_key,
-        ))
+        );
+        Ok((preview, embedded_signers))
     }
 
     /// Validate a received reply preview against the raw signed original
@@ -908,11 +912,9 @@ impl ChatCore {
             return ReplyPreviewValidation::Invalid;
         }
 
-        let embedded_ckces: Vec<MessageEvent> = preview.raw_event_ckces.clone().unwrap_or_default();
         let Ok((plaintext, original_message_key)) = self.open_quoted_event(
             raw,
             preview.raw_event_message_key.as_deref(),
-            &embedded_ckces,
             conversation_keys,
         ) else {
             return ReplyPreviewValidation::Invalid;
@@ -967,7 +969,6 @@ impl ChatCore {
                 let Ok((edit_plaintext, _)) = self.open_quoted_event(
                     edit,
                     preview.raw_event_edit_message_key.as_deref(),
-                    &embedded_ckces,
                     conversation_keys,
                 ) else {
                     return ReplyPreviewValidation::Invalid;
@@ -987,37 +988,29 @@ impl ChatCore {
                 Some(edit_contents)
             }
         };
-        let quoted_text = match &edited {
-            Some(edit) => edit.updated_text.as_deref(),
-            None => original.message_text.as_deref(),
+        let (quoted_text, entities_match) = match &edited {
+            Some(edit) => (
+                edit.updated_text.as_deref(),
+                preview.entities == edit.entities,
+            ),
+            None => (
+                original.message_text.as_deref(),
+                match (&preview.entities, &original.entities) {
+                    (None, None) => true,
+                    (Some(claimed), Some(quoted)) => {
+                        claimed.iter().eq(quoted.iter().map(|entity| &**entity))
+                    }
+                    _ => false,
+                },
+            ),
         };
-        let quoted_entities: Vec<&crate::thrift::product::RichTextEntity> = match &edited {
-            Some(edit) => edit.entities.iter().flatten().collect(),
-            None => original
-                .entities
-                .iter()
-                .flatten()
-                .map(|b| b.as_ref())
-                .collect(),
-        };
-
-        if let Some(claimed_text) = preview.message_text.as_deref() {
-            let quoted_text = quoted_text.unwrap_or("");
-            // Previews may be truncated on the wire, so a claim is valid when
-            // it matches the quoted contents up to the preview's own length
-            // (on a character boundary).
-            if !quoted_text.is_char_boundary(claimed_text.len())
-                || !quoted_text.starts_with(claimed_text)
-            {
-                return ReplyPreviewValidation::Invalid;
-            }
-        }
-        if let Some(claimed_entities) = preview.entities.as_ref() {
-            for entity in claimed_entities {
-                if !quoted_entities.contains(&entity) {
-                    return ReplyPreviewValidation::Invalid;
-                }
-            }
+        // A preview carries only the start of the quoted text, so the texts
+        // are compared on their first `PREVIEW_TEXT_UNITS` UTF-16 code units;
+        // the preview's entities must equal the quoted message's exactly.
+        if preview_text(preview.message_text.as_deref()) != preview_text(quoted_text)
+            || !entities_match
+        {
+            return ReplyPreviewValidation::Invalid;
         }
         if let Some(claimed_attachments) = preview.attachments.as_ref() {
             let original_attachments: Vec<ThriftMessageAttachment> = original
@@ -1037,4 +1030,40 @@ impl ChatCore {
         }
         ReplyPreviewValidation::Valid
     }
+}
+
+/// The message id a reply or edit names: the one its `event_field` event
+/// carries, or `explicit` (from `explicit_field`) when the event carries
+/// none. An `explicit` id that differs from the event's fails: recipients
+/// reject a reply preview whose id is not its embedded original's, and an
+/// edit's event and id must name the same message.
+fn same_message_id(
+    explicit_field: &str,
+    explicit: Option<String>,
+    event_field: &str,
+    carried: Option<String>,
+) -> Result<Option<String>, SdkError> {
+    match (explicit, carried) {
+        (Some(explicit), Some(carried)) if explicit != carried => {
+            Err(SdkError::InvalidInput(format!(
+                "{explicit_field} '{explicit}' is not the message_id '{carried}' that \
+                 {event_field} carries: pass that id or leave {explicit_field} unset"
+            )))
+        }
+        (explicit, carried) => Ok(carried.or(explicit)),
+    }
+}
+
+/// How much of the quoted text a reply preview's text is compared on: the
+/// first 140 UTF-16 code units, so a surrogate pair that straddles the
+/// limit is cut in half.
+const PREVIEW_TEXT_UNITS: usize = 140;
+
+/// The start of `text` a reply preview's text is compared on; an absent text
+/// counts as empty.
+fn preview_text(text: Option<&str>) -> Vec<u16> {
+    text.unwrap_or_default()
+        .encode_utf16()
+        .take(PREVIEW_TEXT_UNITS)
+        .collect()
 }

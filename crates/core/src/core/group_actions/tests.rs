@@ -10,7 +10,6 @@ use crate::params::{
 };
 use crate::protocol::safe_reader::BoundedProtocol;
 use crate::protocol::serialization::base64_decode;
-use crate::signatures::MEMBER_REMOVE_SIGNATURE_VERSION;
 use crate::types::{
     Event, GroupChange as Change, GroupText, PublicKeyInput, ScreenCaptureChange, SigningKeyEntry,
 };
@@ -364,11 +363,18 @@ fn member_remove_signs_the_new_key_then_the_key_change() {
     let removal = &prepared.action_signatures[0];
     assert_eq!(
         removal.message_event_signature.signature_version,
-        MEMBER_REMOVE_SIGNATURE_VERSION.to_string()
+        CURRENT_SIGNATURE_VERSION.to_string()
     );
-    assert!(removal
-        .signature_payload
-        .contains(",910007,42,signature_version=11"));
+    // Version 7 signs the removed members only; the event still names the
+    // new key version.
+    assert_eq!(
+        removal.signature_payload,
+        format!(
+            "GroupChangeEvent.GroupMemberRemoveChange,{},{sender},111:222,910007",
+            removal.message_id
+        )
+    );
+    assert_eq!(removed_key_version(removal), Some("42".to_string()));
     assert!(prepared.action_signatures[1].signature_payload.is_empty());
     assert_eq!(
         prepared.action_signatures[1]
@@ -402,10 +408,76 @@ fn member_remove_rotates_with_the_clock_version() {
         .unwrap();
     let key_version = &prepared.conversation_key_version;
     assert!(key_version.parse::<u64>().unwrap() > 0, "{key_version}");
-    assert!(prepared.action_signatures[0]
-        .signature_payload
-        .ends_with(&format!(",910007,{key_version},signature_version=11")));
+    assert_eq!(
+        removed_key_version(&prepared.action_signatures[0]),
+        Some(key_version.clone())
+    );
     assert_eq!(prepared.action_signatures.len(), 2);
+}
+
+/// The conversation-key version a signed member removal's event names.
+fn removed_key_version(signature: &ActionSignature) -> Option<String> {
+    match decode_detail(&signature.encoded_message_event_detail) {
+        MessageEventDetail::GroupChangeEvent(GroupChangeEvent {
+            group_change: Some(GroupChange::GroupMemberRemove(change)),
+            ..
+        }) => change.conversation_key_version,
+        other => panic!("expected a member removal, got {other:?}"),
+    }
+}
+
+#[test]
+fn every_action_of_a_member_removal_signs_at_10_while_sends_are_v1() {
+    let (core, signing_keys) = ready_core_and_signing_keys();
+    crate::core::test_support::enable_v1_send(&core);
+    let (sender, version) = identity();
+    let prepared = core
+        .prepare_group_members_remove_with_version(
+            &GroupMembersRemoveParams::new(
+                remaining_keys(&core, &sender),
+                "g100",
+                vec!["910007".into()],
+            )
+            .with_identity(&sender, &version)
+            .with_title("Board"),
+            "42",
+        )
+        .unwrap();
+    let versions: Vec<&str> = prepared
+        .action_signatures
+        .iter()
+        .map(|s| s.message_event_signature.signature_version.as_str())
+        .collect();
+    assert_eq!(versions, ["10", "10", "10"]);
+    let removal = &prepared.action_signatures[0];
+    // Version 10 does not sign the key version either: 11 is the first.
+    assert_eq!(
+        removal.signature_payload,
+        format!(
+            "GroupChangeEvent.GroupMemberRemoveChange,{},{sender},g100,910007,signature_version=10",
+            removal.message_id
+        )
+    );
+    let ckey_b64 = STANDARD_NO_PAD.encode(prepared.conversation_key.as_ref().unwrap().encoded());
+    assert_actions(
+        &core,
+        &prepared.action_signatures,
+        &sender,
+        "g100",
+        Some(&ckey_b64),
+    );
+    let keys = HashMap::from([("42".to_string(), prepared.conversation_key.clone().unwrap())]);
+    let event = core
+        .decrypt_event_with(
+            &signed_event_b64(removal, &sender, "g100"),
+            &keys,
+            &signing_keys,
+        )
+        .unwrap();
+    assert!(matches!(
+        decrypted_change(event),
+        Change::MembersRemoved { .. }
+    ));
 }
 
 #[test]
@@ -451,12 +523,16 @@ fn leave_appends_a_conversation_delete_and_optional_admin_add() {
         .with_promote_admin_id("910008");
     let prepared = core.prepare_group_leave(&params).unwrap();
     assert_eq!(prepared.action_signatures.len(), 3);
-    assert!(prepared.action_signatures[0]
-        .signature_payload
-        .starts_with("GroupChangeEvent.GroupMemberRemoveChange,"));
-    assert!(prepared.action_signatures[0]
-        .signature_payload
-        .contains(&format!(",{sender},g100,{sender},7,signature_version=11")));
+    let removal = &prepared.action_signatures[0];
+    assert_eq!(removal.message_event_signature.signature_version, "7");
+    assert_eq!(
+        removal.signature_payload,
+        format!(
+            "GroupChangeEvent.GroupMemberRemoveChange,{},{sender},g100,{sender}",
+            removal.message_id
+        )
+    );
+    assert_eq!(removed_key_version(removal), Some("7".to_string()));
     assert!(prepared.action_signatures[1]
         .signature_payload
         .ends_with(",910008"));
@@ -480,9 +556,27 @@ fn leave_appends_a_conversation_delete_and_optional_admin_add() {
         .prepare_group_leave(&GroupLeaveParams::new("g100").with_identity(&sender, &version))
         .unwrap();
     assert_eq!(plain.action_signatures.len(), 2);
+    assert_eq!(removed_key_version(&plain.action_signatures[0]), None);
     assert!(plain.action_signatures[0]
         .signature_payload
-        .ends_with(",null,signature_version=11"));
+        .ends_with(&format!(",g100,{sender}")));
+
+    crate::core::test_support::enable_v1_send(&core);
+    let v1 = core.prepare_group_leave(&params).unwrap();
+    for signature in &v1.action_signatures {
+        assert_eq!(signature.message_event_signature.signature_version, "10");
+        assert!(signature
+            .signature_payload
+            .ends_with(",signature_version=10"));
+    }
+    assert_eq!(
+        v1.action_signatures[2].signature_payload,
+        format!(
+            "ConversationDeleteEvent,{},{sender},g100,signature_version=10",
+            v1.action_signatures[2].message_id
+        )
+    );
+    assert_actions(&core, &v1.action_signatures, &sender, "g100", None);
 }
 
 #[test]

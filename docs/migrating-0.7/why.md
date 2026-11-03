@@ -1,13 +1,13 @@
-# Why 0.7.1 changes
+# Why 0.7.2 changes
 
-This page explains why each change from 0.5.x to chat-xdk 0.7.1 was made,
+This page explains why each change from 0.5.x to chat-xdk 0.7.2 was made,
 and links to the lines to change in each binding's guide. The
 [index](README.md) lists the guides, and the [CHANGELOG](../../CHANGELOG.md)
 lists every change.
 
 ## Sends can use per-message keys
 
-0.7.1 sends each message, reply, reaction and edit in one of two formats.
+0.7.2 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends: contents encrypted under the conversation key,
 signed at signature version 7. v1 encrypts each message under its own
 message key, derived with HKDF-SHA256 from the conversation key, the sender
@@ -19,20 +19,37 @@ never the conversation key. Version 10 signs `contents_encryption_version`,
 so a message's choice of key can't be changed or stripped without breaking
 its signature. Message keys derive from the conversation key, so the
 protocol's [known limitations](../CRYPTO.md#known-limitations), no forward
-secrecy and no post-compromise security, still apply. 0.7.1 reads both
-formats.
+secrecy and no post-compromise security, still apply. A v1 send carries what
+X clients' v1 sends carry: its encoded signature lists the signing keys the
+message relies on, by user id and key version, its sender's and, for a
+reply, those of the quoted message's sender and of its edit's, and a
+reaction asks for a notification only in a one-to-one conversation, a
+reaction removal or an edit never. 0.7.2 reads both formats.
 
 ## v0 is the default, and the X API's `v1_send` switch turns on v1
 
 0.5.x decrypts message contents with the conversation key and doesn't know
 signature version 10, so it rejects every v1 send as a signature
-verification failure. 0.7.1 therefore sends v0, which every reader opens,
+verification failure. 0.7.2 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
 chat that can't read the switch keeps sending v0. The Rust crate and the C
 ABI make no requests: a Rust app, or code that calls the C ABI directly,
-makes the one request itself and hands the chat its answer, under the same
-rules the bindings follow, so it sends v1 when the switch says so too.
+makes the request itself and hands the chat its answer, under the same rules
+the bindings follow, so it sends v1 when the switch says so too. The switch
+sets the version of every event a chat signs, as X clients sign each event
+at the version their messages sign at: while a chat sends v1, its key
+changes, group changes, deletes and read receipts sign at version 10 too,
+and while it sends v0 they sign at version 7, which 0.5.x verifies, apart
+from a member add that carries a description, which signs at version 8, the
+first that covers one. A member removal or a leave signs at those versions
+too, as X clients' do, so its signature doesn't cover the key version the
+removal names, which version 11 is the first to sign; a member removal's key
+change, which carries the new key, signs its version. A conversation-key
+change never signs below the highest version of a key change the chat has
+signed or verified in that conversation, since X clients that enforce that
+floor reject one signed below the newest before it as a downgrade; so while
+a chat sends v0 it can sign one above 7, which 0.5.x readers can't verify.
 Upgrade the apps that read your conversations first:
 [Rust](rust.md#upgrade-readers-first),
 [Python](python.md#upgrade-readers-first),
@@ -46,20 +63,30 @@ Upgrade the apps that read your conversations first:
 
 The bindings read the switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, in the background. It carries no
-credentials and no query parameters. Each chat reads the switches once, when
-it is created, and keeps the answer for its lifetime, so a change to a switch
-reaches the chats created after it; chats created while a request is in
-flight share it. Every switch is off until the answer arrives, so a chat
-whose `v1_send` switch is on sends v0 first and v1 from then on. Files
-encrypted from a v0 build of a message don't open with a v1 build of it, so
-encrypt each file from the payload you send. The request never delays or
-fails a call, and any failure
-leaves every switch off for the chat's lifetime, so its sends stay in v0, the
-format every reader opens. The SDK decides what an answer means in one
-place, its Rust core: a binding only performs the request, and a body is
-read only up to its size limit, never whole first. A Rust app, or code
-that calls the C ABI directly, hands the core the answer to a request it
-made, and the core applies the same rules to it:
+credentials. Each chat reads the switches when it is created, again once
+`set_identity` gives it a sender, and again 5 minutes after each answer, so
+a change to a switch reaches running chats with no restart and no new chat.
+The sender's request carries its bucket, the last four digits of the user
+id, so a ramp of `v1_send` picks the same senders wherever they run and
+whatever address they send from; before the sender is set, the X API buckets
+the request by its address. Chats that read the same URL share one request,
+so a process with many chats of one sender makes one request every 5
+minutes. Each answer replaces the one before. Every switch is off until an
+answer arrives, so a chat whose `v1_send` switch is on sends v0 first and v1
+from then on, until an answer turns it off. Files encrypted from a v0 build
+of a message don't open with a v1 build of it, so encrypt each file from the
+payload you send. The request never delays or fails a call. One that fails
+is retried in the background while a chat waits for its answer, 1 second
+later, then after twice the previous wait, at most 5 minutes apart, so a
+chat that loses the X API briefly still follows the switch, and an endpoint
+that stays blocked gets one request every 5 minutes. A failure keeps the
+answer a chat has; until one arrives every switch stays off, so its sends
+stay in v0, the format every reader opens. The SDK decides when to read and
+what an answer means in one place, its Rust core: a binding only performs
+the requests, and a body is read only up to its size limit, never whole
+first. A Rust app, or code that calls the C ABI directly, hands the core the
+answer to each request it makes on the same schedule, and the core applies
+the same rules to it:
 [Rust](rust.md#the-feature-switch-request),
 [Python](python.md#the-feature-switch-request),
 [JavaScript](javascript.md#the-feature-switch-request),
@@ -72,12 +99,12 @@ made, and the core applies the same rules to it:
 
 Signatures cover user ids as the sender wrote them, while recipients rebuild
 the signed payload from the numeric ids of the delivered event, and derive
-v1 message keys from the sender's. Recipients look keys up by the key version
-as the event carries it, while signatures from version 8 on cover its
-integer value, so `01` and `1` sign alike but name different keys. Any
-other spelling yields a send no recipient can verify or decrypt, so 0.7.1
-checks every user id and key version, in both formats, and fails with an
-error naming the field:
+v1 message keys from the sender's. Recipients look keys up by the key
+version as the event carries it, while the signatures of messages and key
+changes cover its integer value, so `01` and `1` sign alike but name
+different keys. Any other spelling yields a send no recipient can verify or
+decrypt, so 0.7.2 checks every user id and key version, in both formats, and
+fails with an error naming the field:
 [Rust](rust.md#user-ids-are-strings-of-digits),
 [Python](python.md#user-ids-are-strings-of-digits),
 [JavaScript](javascript.md#user-ids-are-strings-of-digits),
@@ -114,7 +141,9 @@ the message, then encrypt and upload the file. A v1 message with files takes
 an id derived from them, so building the same message again gives the same
 id and keeps its encrypted files valid. A file with an empty filename or a
 size of 0 or less fails before anything is encrypted, since receiving
-clients discard it, and so does one with a negative width or height.
+clients discard it, and so does one with a negative width or height. An
+attachment without an id of its own is keyed by its position in the message,
+counted as X clients count it, without payment receipts.
 `decrypt_file` takes the event of the message that carries the file, which
 gives the key for the message's format and version and covers media quoted
 in a reply preview. v0 files use the conversation key, and the same calls
@@ -331,20 +360,53 @@ edit, delete and read-receipt params take. An edit's text is
 [.NET](dotnet.md#decrypted-events-use-the-names-the-calls-take),
 [C ABI](c-abi.md#decrypted-events-use-the-names-the-calls-take).
 
+## A reply preview quotes its message exactly
+
+A reply carries a preview of the message it quotes inside its encrypted
+contents, where only recipients can check it, and embeds the quoted
+message's signed event so they can. X clients mark a preview invalid unless
+the first 140 characters of its text, counted in UTF-16 code units, are
+those of the quoted text, and its entities are exactly the quoted message's,
+or its edit's. 0.5.x accepted any start of the quoted text and entities
+among the quoted message's, so it showed previews as valid that X clients
+mark invalid, such as one that quotes a message's first word as all of it.
+0.7.2 checks a preview as X clients do, and the previews it builds pass that
+check. X clients also check a v1 reply against the message it names, so each
+guide builds replies from the event they quote, and a reply built from the
+explicit preview fields names the quoted message by its `message_id`, as
+`reply_to_message_id`. A reply embeds no key change, as X
+clients' replies don't: every member receives the conversation's key
+changes, so recipients open the quoted message with their own conversation
+keys, or with the message key a reply carries for a v1 message, and decrypt
+reads no key from inside a reply:
+[Rust](rust.md#a-reply-preview-quotes-its-message-exactly),
+[Python](python.md#a-reply-preview-quotes-its-message-exactly),
+[JavaScript](javascript.md#a-reply-preview-quotes-its-message-exactly),
+[Go](go.md#a-reply-preview-quotes-its-message-exactly),
+[JVM](jvm.md#a-reply-preview-quotes-its-message-exactly),
+[.NET](dotnet.md#a-reply-preview-quotes-its-message-exactly),
+[C ABI](c-abi.md#a-reply-preview-quotes-its-message-exactly).
+
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload
-layout: version 8 signs key versions as integers and adds a group's
-description to member adds, 9 appends the signature version, 10 covers
-`contents_encryption_version`, and 11 adds the key version to group member
-removals. 0.7.1 rebuilds each payload in the layout of the version its
-signature carries, so events signed at 8 through 11 verify, including the v1
-sends it signs at 10 and the member adds with a description it signs at 8.
-Versions above 11 are rejected, since their layout is unknown
-([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)). There's no code to
-change to read them. 0.5.x readers rebuild the layouts up to 7 only, so they
-can't verify v1 sends, member removals and leaves, or member adds with a
-description: each guide says to upgrade readers first.
+layout: version 8 adds a group's description to member adds, 9 appends the
+signature version and a group create's type, 10 covers
+`contents_encryption_version` and a group create's TTL, and 11 adds the key
+version to group member removals. Every version signs the key version of a
+message or key change as an integer, a message's as `null` when it isn't
+one, and a removed group title, description or avatar as `null`, as X
+clients sign them. 0.7.2 rebuilds each payload in the layout of the version
+its signature carries, so events signed at 8 through 11 verify, including
+the events it signs at 10 while it sends v1 and the member adds with a
+description it signs at 8. Versions above 11 are rejected, since their
+layout is unknown ([CRYPTO.md](../CRYPTO.md#verifying-newer-versions)), and
+so is a signature without a version, or with one that isn't an integer,
+which 0.5.x verified as version 7: the version picks the layout, so a
+missing one names none. There's no code to change to read them. 0.5.x
+readers rebuild the layouts up to 7 only, so they can't verify what a chat
+signs while it sends v1, or member adds with a description while it sends
+v0: each guide says to upgrade readers first.
 
 ## Read receipts are signed
 
@@ -411,9 +473,10 @@ decrypt, because its key is missing or it doesn't decrypt under it, comes
 back unavailable with the value as carried instead of failing the event, so
 the rest of the event, such as a create's members and admins, still reads.
 0.5.x apps signed titles as plaintext while naming a key version, so an app
-shows the raw value when a title isn't decryptable. Each guide shows the
-calls and how to read a `GroupText`:
-[Rust](rust.md#group-changes-are-signed),
+shows the raw value when a title isn't decryptable. A change that removes
+the title, description or avatar, which X clients sign with `null` in its
+place, decrypts to an empty value. Each guide shows the calls and how to
+read a `GroupText`: [Rust](rust.md#group-changes-are-signed),
 [Python](python.md#group-changes-are-signed),
 [JavaScript](javascript.md#group-changes-are-signed),
 [Go](go.md#group-changes-are-signed),
@@ -553,6 +616,6 @@ events on its own path:
   ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
-  export the entry points 0.7.1 calls
+  export the entry points 0.7.2 calls
   ([JVM](jvm.md#the-jar-bundles-the-linux-arm64-native-library),
   [.NET](dotnet.md#the-package-bundles-the-linux-arm64-native-library)).

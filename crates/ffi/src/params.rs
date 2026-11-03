@@ -55,6 +55,8 @@ pub(crate) struct FfiEncryptReplyParams {
     pub(crate) conversation_key_version: Option<String>,
     #[serde(default)]
     pub(crate) reply_to_sequence_id: Option<String>,
+    #[serde(default)]
+    pub(crate) reply_to_message_id: Option<String>,
     pub(crate) reply_to_sender_id: Option<String>,
     pub(crate) reply_to_text: Option<String>,
     pub(crate) entities: Option<Vec<(i32, i32, String)>>,
@@ -96,6 +98,8 @@ pub(crate) struct FfiEncryptEditParams {
     pub(crate) conversation_id: Option<String>,
     #[serde(default)]
     pub(crate) target_message_sequence_id: Option<String>,
+    #[serde(default)]
+    pub(crate) target_message_id: Option<String>,
     #[serde(default)]
     pub(crate) sender_id: Option<String>,
     #[serde(default)]

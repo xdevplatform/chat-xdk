@@ -269,6 +269,7 @@ class EncryptReplyParams:
     conversation_key: Optional[bytes]
     conversation_key_version: Optional[str]
     reply_to_sequence_id: Optional[str]
+    reply_to_message_id: Optional[str]
     reply_to_sender_id: Optional[str]
     reply_to_text: Optional[str]
     entities: Optional[list[tuple[int, int, str]]]
@@ -291,6 +292,7 @@ class EncryptReplyParams:
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
         reply_to_sequence_id: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
         reply_to_sender_id: Optional[str] = None,
         reply_to_text: Optional[str] = None,
         entities: Optional[list[tuple[int, int, str]]] = None,
@@ -330,6 +332,7 @@ class EncryptEditParams:
     entities: Optional[list[tuple[int, int, str]]]
     conversation_id: Optional[str]
     target_message_sequence_id: Optional[str]
+    target_message_id: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     conversation_key: Optional[bytes]
@@ -342,6 +345,7 @@ class EncryptEditParams:
         entities: Optional[list[tuple[int, int, str]]] = None,
         conversation_id: Optional[str] = None,
         target_message_sequence_id: Optional[str] = None,
+        target_message_id: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,

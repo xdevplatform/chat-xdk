@@ -225,16 +225,16 @@ fn build_signed_self_keychange_event(
         .encrypt_conversation_key_for_recipients(ckey, &recipients)
         .unwrap();
 
-    let action_sig = core
-        .sign_key_change(
-            signing_key_version,
-            "msg-kc",
-            sender_id,
-            "conv-1",
-            ckey_version,
-            ckey.encoded(),
-        )
-        .unwrap();
+    let action_sig = super::test_support::key_change_signature(
+        core,
+        signing_key_version,
+        "msg-kc",
+        sender_id,
+        "conv-1",
+        ckey_version,
+        ckey.encoded(),
+    )
+    .unwrap();
 
     let kce = ThriftCKCE::new(
         Some(ckey_version.to_string()),

@@ -30,6 +30,7 @@ fn sent_file_message(
         filename: "photo.png".to_string(),
         media_type: None,
         duration_millis: None,
+        plaintext_sha256: None,
     }]);
     let payload = core.encrypt_message(&params).unwrap();
     (

@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,15 +30,18 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// defaultRefresh is how long after an answer a chat reads its switches again.
+const defaultRefresh = 5 * time.Minute
+
 // newChatReading is a chat that reads its feature switches from endpoint,
-// within timeout; for tests only.
-func newChatReading(t *testing.T, endpoint string, timeout time.Duration) *Chat {
+// within timeout, again refresh after each answer; for tests only.
+func newChatReading(t *testing.T, endpoint string, timeout, refresh time.Duration) *Chat {
 	t.Helper()
 	chat, err := newChat(nil)
 	if err != nil {
 		t.Fatalf("newChat failed: %v", err)
 	}
-	if err := ffiFeatureConfigure(chat.h, endpoint, timeout); err != nil {
+	if err := ffiFeatureConfigure(chat.h, endpoint, timeout, refresh); err != nil {
 		chat.Close()
 		t.Fatalf("ffiFeatureConfigure failed: %v", err)
 	}
@@ -59,7 +64,7 @@ func newV1Chat(t *testing.T) *Chat {
 			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
 		}))
 	})
-	return newChatReading(t, v1Server.URL, 2*time.Second)
+	return newChatReading(t, v1Server.URL, 2*time.Second, defaultRefresh)
 }
 
 // waitForV1 sends from chat, which has keys, until a send is v1.
@@ -84,7 +89,9 @@ func waitForV1(t *testing.T, chat *Chat) {
 
 // featureServer is a local GET /2/chat/features that records each request's
 // query string and headers. Its redirectTarget path answers that v1_send is
-// on, for the tests that check a redirect to it is not followed.
+// on, for the tests that check a redirect to it is not followed. A request
+// for another path, such as a retried read meant for an earlier server on
+// this port, gets a 404 and is not recorded.
 type featureServer struct {
 	*httptest.Server
 	id        int64
@@ -110,6 +117,10 @@ func newFeatureServer(t *testing.T) *featureServer {
 			s.followed++
 			s.mu.Unlock()
 			_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
+			return
+		}
+		if r.URL.Path != s.path() {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		// The answer is fixed when the request is recorded, so a test that
@@ -145,8 +156,12 @@ func newFeatureServer(t *testing.T) *featureServer {
 // the port of one that came before it.
 var featureServerIDs atomic.Int64
 
+func (s *featureServer) path() string {
+	return "/" + strconv.FormatInt(s.id, 10) + "/2/chat/features"
+}
+
 func (s *featureServer) endpoint() string {
-	return s.URL + "/" + strconv.FormatInt(s.id, 10) + "/2/chat/features"
+	return s.URL + s.path()
 }
 
 func (s *featureServer) set(status int, body string) {
@@ -180,24 +195,39 @@ func (s *featureServer) followedRedirects() int {
 }
 
 // featureChat is a keyed chat that reads its feature switches from endpoint,
-// within timeout.
+// within timeout, again every defaultRefresh. It has no session identity, so
+// it reads no bucket.
 func featureChat(t *testing.T, v sdkVectors, endpoint string, timeout time.Duration) *Chat {
 	t.Helper()
-	chat := newChatReading(t, endpoint, timeout)
+	return featureChatEvery(t, v, endpoint, timeout, defaultRefresh)
+}
+
+// featureChatEvery is featureChat, reading again refresh after each answer.
+func featureChatEvery(t *testing.T, v sdkVectors, endpoint string, timeout, refresh time.Duration) *Chat {
+	t.Helper()
+	chat := newChatReading(t, endpoint, timeout, refresh)
 	t.Cleanup(chat.Close)
 	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
 		t.Fatalf("ImportKeys failed: %v", err)
 	}
-	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+	return chat
+}
+
+// setIdentity sets chat's session identity to userID, which moves its reads
+// to the sender's bucket.
+func setIdentity(t *testing.T, chat *Chat, v sdkVectors, userID string) {
+	t.Helper()
+	if err := chat.SetIdentity(SetIdentityParams{UserID: userID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
 		t.Fatalf("SetIdentity failed: %v", err)
 	}
-	return chat
 }
 
 // sendVersion is the signature version of a send: "7" for v0, "10" for v1.
 func sendVersion(t *testing.T, chat *Chat, v sdkVectors) string {
 	t.Helper()
 	payload, err := chat.EncryptMessage(EncryptMessageParams{
+		SenderID:               v.EventSenderID,
+		SigningKeyVersion:      v.EventSigningKeyVersion,
 		ConversationID:         v.EventConversationID,
 		Text:                   "hello",
 		ConversationKey:        v.conversationKey(t),
@@ -259,28 +289,70 @@ func TestFeatureSwitchesAreNotPublicAPI(t *testing.T) {
 	}
 }
 
-func TestANewChatReadsTheSwitchesOnce(t *testing.T) {
+func TestAChatReadsItsSendersBucketOnceItsIdentityIsSet(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
 	waitFor(t, "the request", func() bool { return len(server.seen()) == 1 })
 	if got := server.seen()[0]; got != "" {
-		t.Fatalf("query %q, want none", got)
+		t.Fatalf("query %q, want none: no identity, no bucket", got)
 	}
 	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
-	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
-		t.Fatalf("ImportKeys failed: %v", err)
+	setIdentity(t, chat, v, "1234561001")
+	waitFor(t, "the bucket's request", func() bool { return len(server.seen()) == 2 })
+	if got := server.seen()[1]; got != "bucket=1001" {
+		t.Fatalf("query %q, want bucket=1001: the user ID's last four digits", got)
 	}
-	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
-		t.Fatalf("SetIdentity failed: %v", err)
-	}
+	waitFor(t, "v1 for the bucket", func() bool { return sendVersion(t, chat, v) == "10" })
+	setIdentity(t, chat, v, "9991001")
 	for i := 0; i < 5; i++ {
 		sendVersion(t, chat, v)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if got := server.seen(); len(got) != 1 {
-		t.Fatalf("requests: %d, want 1", len(got))
+	if got := server.seen(); len(got) != 2 {
+		t.Fatalf("requests: %d, want 2: the same bucket reads nothing new", len(got))
 	}
+}
+
+func TestChatsOfOneSenderShareTheirBucketsRead(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(500 * time.Millisecond)
+	first := featureChat(t, v, server.endpoint(), 2*time.Second)
+	second := featureChat(t, v, server.endpoint(), 2*time.Second)
+	other := featureChat(t, v, server.endpoint(), 2*time.Second)
+	setIdentity(t, first, v, "1001")
+	setIdentity(t, second, v, "51001")
+	setIdentity(t, other, v, "2002")
+	waitFor(t, "v1 everywhere", func() bool {
+		for _, chat := range []*Chat{first, second, other} {
+			if sendVersion(t, chat, v) != "10" {
+				return false
+			}
+		}
+		return true
+	})
+	var bucketed []string
+	for _, query := range server.seen() {
+		if query != "" {
+			bucketed = append(bucketed, query)
+		}
+	}
+	sort.Strings(bucketed)
+	if want := []string{"bucket=1001", "bucket=2002"}; !reflect.DeepEqual(bucketed, want) {
+		t.Fatalf("bucketed requests %v, want %v", bucketed, want)
+	}
+}
+
+func TestARefreshReachesARunningChat(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	chat := featureChatEvery(t, v, server.endpoint(), 2*time.Second, 300*time.Millisecond)
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+	server.set(http.StatusOK, `{"features":{}}`)
+	waitFor(t, "v0 after the refresh", func() bool { return sendVersion(t, chat, v) == "7" })
+	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
+	waitFor(t, "v1 again", func() bool { return sendVersion(t, chat, v) == "10" })
 }
 
 func TestNewReadsTheDefaultEndpoint(t *testing.T) {
@@ -341,11 +413,16 @@ func TestChatsCreatedWhileARequestIsInFlightShareIt(t *testing.T) {
 	}
 
 	later := featureChat(t, v, server.endpoint(), 2*time.Second)
-	waitFor(t, "the later chat's own request", func() bool { return len(server.seen()) == 2 })
-	waitFor(t, "v1 for the later chat", func() bool { return sendVersion(t, later, v) == "10" })
+	if got := sendVersion(t, later, v); got != "10" {
+		t.Fatalf("the later chat sends %q, want 10: it takes the latest answer at once", got)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
+	}
 }
 
-func TestTheAnswerHoldsForTheChatsLifetime(t *testing.T) {
+func TestTheAnswerHoldsUntilTheNextRefresh(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
@@ -353,13 +430,15 @@ func TestTheAnswerHoldsForTheChatsLifetime(t *testing.T) {
 
 	server.set(http.StatusOK, `{"features":{}}`)
 	other := featureChat(t, v, server.endpoint(), 2*time.Second)
-	waitFor(t, "the second request", func() bool { return len(server.seen()) == 2 })
-	time.Sleep(200 * time.Millisecond)
-	if got := sendVersion(t, other, v); got != "7" {
-		t.Fatalf("the second chat sends %q, want 7: it reads its own answer", got)
+	time.Sleep(300 * time.Millisecond)
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
+	}
+	if got := sendVersion(t, other, v); got != "10" {
+		t.Fatalf("the later chat sends %q, want 10: it takes the latest answer", got)
 	}
 	if got := sendVersion(t, chat, v); got != "10" {
-		t.Fatalf("the first chat sends %q, want 10: its answer holds", got)
+		t.Fatalf("the first chat sends %q, want 10: its answer holds until the refresh", got)
 	}
 }
 
@@ -389,10 +468,23 @@ func TestAnyFailureLeavesSendsOnV0(t *testing.T) {
 			if got := sendVersion(t, chat, v); got != "7" {
 				t.Fatalf("send is %q, want 7", got)
 			}
-			if got := server.seen(); len(got) != 1 {
-				t.Fatalf("requests: %d, want 1: a failure is not retried", len(got))
-			}
 		})
+	}
+}
+
+func TestAFailedReadIsRetriedAndTheRetrysAnswerTurnsV1On(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.set(http.StatusServiceUnavailable, `{"features":{"v1_send":true}}`)
+	chat := featureChat(t, v, server.endpoint(), 2*time.Second)
+	waitFor(t, "the first request", func() bool { return len(server.seen()) == 1 })
+	server.set(http.StatusOK, `{"features":{"v1_send":true}}`)
+	if got := sendVersion(t, chat, v); got != "7" {
+		t.Fatalf("send is %q, want 7: the failed read leaves sends on v0", got)
+	}
+	waitFor(t, "v1 from the retry", func() bool { return sendVersion(t, chat, v) == "10" })
+	if got := server.seen(); len(got) != 2 {
+		t.Fatalf("requests: %d, want 2", len(got))
 	}
 }
 
@@ -425,7 +517,7 @@ func TestARequestStillOpenAtItsTimeoutFails(t *testing.T) {
 // startUnreferencedChat leaves a chat that nothing references, with its
 // request in flight.
 func startUnreferencedChat(t *testing.T, endpoint string) {
-	newChatReading(t, endpoint, 2*time.Second)
+	newChatReading(t, endpoint, 2*time.Second, defaultRefresh)
 }
 
 func TestARequestEndsSafelyForAClosedOrCollectedChat(t *testing.T) {
@@ -452,11 +544,9 @@ func TestTheReadSendsNoCookiesOrCredentials(t *testing.T) {
 	server.mu.Lock()
 	server.setCookie = "session=from-the-first-answer; Path=/"
 	server.mu.Unlock()
-	first := featureChat(t, v, server.endpoint(), 2*time.Second)
-	waitFor(t, "the first answer", func() bool { return sendVersion(t, first, v) == "10" })
-	second := featureChat(t, v, server.endpoint(), 2*time.Second)
-	waitFor(t, "the second request", func() bool { return len(server.seen()) == 2 })
-	waitFor(t, "the second answer", func() bool { return sendVersion(t, second, v) == "10" })
+	chat := featureChatEvery(t, v, server.endpoint(), 2*time.Second, 200*time.Millisecond)
+	waitFor(t, "the first answer", func() bool { return sendVersion(t, chat, v) == "10" })
+	waitFor(t, "a refresh after the cookie", func() bool { return len(server.seen()) >= 2 })
 	for i, header := range server.seenHeaders() {
 		for _, name := range []string{"Cookie", "Authorization"} {
 			if got := header.Get(name); got != "" {

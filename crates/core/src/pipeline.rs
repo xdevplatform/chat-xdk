@@ -11,10 +11,11 @@ use crate::crypto::key_factory::KeyFactory;
 use crate::crypto::keys::{XChatConversationKey, XChatPrivateKey};
 use crate::crypto::message_keys;
 use crate::error::SdkError;
-use crate::protocol::serialization::base64_encode;
+use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::signatures::{MESSAGE_SIGNATURE_VERSION, SIGNATURE_VERSION};
 use crate::thrift::event::{
     MessageCreateEvent, MessageEvent, MessageEventDetail, MessageEventSignature,
+    MessageSigningKeyInfo,
 };
 use crate::thrift::product::{
     AddressRichTextContent, CashtagRichTextContent, EmailRichTextContent, HashtagRichTextContent,
@@ -70,6 +71,32 @@ pub enum SendVersion {
     V1,
 }
 
+/// The author and signing-key version of an event a send embeds, such as a
+/// reply's quoted original, for the X API to fill in that author's signing
+/// key for recipients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddedSigner {
+    pub sender_id: i64,
+    pub public_key_version: i64,
+}
+
+impl EmbeddedSigner {
+    /// The signer of `event`, when it carries a numeric sender id and
+    /// signing-key version.
+    pub(crate) fn of(event: &MessageEvent) -> Option<Self> {
+        Some(Self {
+            sender_id: event.sender_id.as_deref()?.parse().ok()?,
+            public_key_version: event
+                .message_event_signature
+                .as_ref()?
+                .public_key_version
+                .as_deref()?
+                .parse()
+                .ok()?,
+        })
+    }
+}
+
 /// Parameters for [`encrypt_and_sign`].
 ///
 /// Use [`new()`](Self::new) for required fields, then chain optional setters.
@@ -88,6 +115,9 @@ pub struct EncryptAndSignParams<'a> {
     pub ttl_msec: Option<i64>,
     /// Wire format to send in; defaults to [`SendVersion::V0`].
     pub send_version: SendVersion,
+    /// The signers of the events the contents embed (a reply's quoted
+    /// original and edit), listed in a v1 send's signature.
+    pub embedded_signers: Vec<EmbeddedSigner>,
 }
 
 impl<'a> EncryptAndSignParams<'a> {
@@ -116,12 +146,19 @@ impl<'a> EncryptAndSignParams<'a> {
             should_notify: None,
             ttl_msec: None,
             send_version: SendVersion::V0,
+            embedded_signers: Vec::new(),
         }
     }
 
     /// Set the wire format to send in (default: [`SendVersion::V0`]).
     pub fn send_version(mut self, send_version: SendVersion) -> Self {
         self.send_version = send_version;
+        self
+    }
+
+    /// Set the signers of the events the contents embed.
+    pub fn embedded_signers(mut self, signers: Vec<EmbeddedSigner>) -> Self {
+        self.embedded_signers = signers;
         self
     }
 
@@ -175,9 +212,6 @@ pub(crate) fn canonical_conversation_id<'a>(
     id: &'a str,
     sender_id: &str,
 ) -> std::borrow::Cow<'a, str> {
-    fn is_digits(s: &str) -> bool {
-        !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
-    }
     if let Some((a, b)) = id.split_once([':', '-']) {
         if is_digits(a) && is_digits(b) {
             return std::borrow::Cow::Owned(join_sorted_pair(a, b));
@@ -273,12 +307,16 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
 
     let signature = KeyFactory::sign(params.signing_key, &payload)?;
     let signature_b64 = STANDARD_NO_PAD.encode(&signature);
+    let signing_key_infos = match params.send_version {
+        SendVersion::V0 => None,
+        SendVersion::V1 => Some(signing_key_infos(&params)),
+    };
     let signature_struct = MessageEventSignature::new(
         Some(signature_b64.clone()),
         Some(params.signing_key_version.to_string()),
         Some(signature_version.clone()),
         None,
-        None,
+        signing_key_infos,
     );
     let signature_bytes = serialize_thrift(&signature_struct)?;
     let encoded_message_event_signature = base64_encode(&signature_bytes);
@@ -300,6 +338,49 @@ pub fn encrypt_and_sign(params: EncryptAndSignParams<'_>) -> Result<SendPayload,
         should_notify,
         xdk_version: crate::XDK_VERSION.to_string(),
     })
+}
+
+/// The signing keys a v1 send asks the X API to fill in for recipients: those
+/// of the events its contents embed, then the sender's own, each listed once,
+/// by member id and signing-key version.
+fn signing_key_infos(params: &EncryptAndSignParams<'_>) -> Vec<MessageSigningKeyInfo> {
+    let own = params
+        .sender_id
+        .parse()
+        .ok()
+        .zip(params.signing_key_version.parse().ok())
+        .map(|(sender_id, public_key_version)| EmbeddedSigner {
+            sender_id,
+            public_key_version,
+        });
+    let mut signers: Vec<EmbeddedSigner> = Vec::new();
+    for signer in params.embedded_signers.iter().copied().chain(own) {
+        if !signers.contains(&signer) {
+            signers.push(signer);
+        }
+    }
+    signers
+        .into_iter()
+        .map(|signer| {
+            MessageSigningKeyInfo::new(
+                Some(signer.sender_id.to_string()),
+                Some(signer.public_key_version.to_string()),
+                None::<String>,
+            )
+        })
+        .collect()
+}
+
+/// Whether `conversation_id`, in any form a caller holds it, names a
+/// one-to-one conversation rather than a group.
+pub(crate) fn is_one_to_one(conversation_id: &str, sender_id: &str) -> bool {
+    canonical_conversation_id(conversation_id, sender_id)
+        .split_once(':')
+        .is_some_and(|(a, b)| is_digits(a) && is_digits(b))
+}
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
 }
 
 /// Check that `user_id` is a user id in canonical decimal form: digits only,
@@ -601,12 +682,18 @@ pub fn build_thrift_attachments(
                 filename,
                 media_type,
                 duration_millis,
+                plaintext_sha256,
             } => {
                 let dimensions = ThriftMediaDimensions::new(Some(*width), Some(*height));
                 let resolved_media_type = match media_type {
                     Some(i) => ThriftMediaType::from(*i),
                     None => ThriftMediaType::IMAGE,
                 };
+                // Callers validate first (validate_plaintext_sha256s).
+                let plaintext_sha256 = plaintext_sha256
+                    .as_deref()
+                    .filter(|v| !v.is_empty())
+                    .and_then(|v| base64_decode(v).ok());
                 let media = ThriftMediaAttachmentStruct::new(
                     Some(media_hash_key.clone()),
                     Some(Box::new(dimensions)),
@@ -618,7 +705,7 @@ pub fn build_thrift_attachments(
                     None::<String>,
                     None::<String>,
                     None::<String>,
-                    None::<Vec<u8>>,
+                    plaintext_sha256,
                 );
                 Box::new(ThriftMessageAttachment::Media(Box::new(media)))
             }
@@ -745,7 +832,8 @@ pub(crate) fn file_media_hash_keys(descs: &[AttachmentDescriptor]) -> Vec<&str> 
 /// Check the fields of the attachments a message sends: a URL card has a
 /// url, a post a `rest_id` or a `post_url`, and every file one references
 /// has a media hash key, a filename, a size above 0 and no negative width or
-/// height, with no two attachments referencing the same media hash key. A
+/// height, with no two attachments referencing the same media hash key, and
+/// a media attachment's `plaintext_sha256`, when set, is a base64 SHA-256. A
 /// file is uploaded once, under its media hash key, encrypted under the key
 /// of the one attachment that references it, and receivers discard a file
 /// sent without its name or size.
@@ -813,6 +901,31 @@ pub(crate) fn validate_attachment_fields(descs: &[AttachmentDescriptor]) -> Resu
                      the file once for each attachment"
                 )));
             }
+        }
+    }
+    validate_plaintext_sha256s(descs)
+}
+
+/// Check that each media attachment's `plaintext_sha256`, when set, is the
+/// base64 of a SHA-256: 32 bytes.
+pub(crate) fn validate_plaintext_sha256s(descs: &[AttachmentDescriptor]) -> Result<(), SdkError> {
+    for desc in descs {
+        let AttachmentDescriptor::Media {
+            media_hash_key,
+            plaintext_sha256: Some(hash),
+            ..
+        } = desc
+        else {
+            continue;
+        };
+        if hash.is_empty() {
+            continue;
+        }
+        if base64_decode(hash).map(|bytes| bytes.len()).ok() != Some(32) {
+            return Err(SdkError::InvalidInput(format!(
+                "media_hash_key '{media_hash_key}' has plaintext_sha256 '{hash}': pass the \
+                 base64 SHA-256 of the file's plaintext bytes (32 bytes)"
+            )));
         }
     }
     Ok(())
@@ -1059,6 +1172,7 @@ mod tests {
             height: 1080,
             media_type: Some(1), // image
             duration_millis: None,
+            plaintext_sha256: None,
             filesize_bytes: 150000,
             filename: "photo.jpg".to_string(),
         }]);
@@ -1231,6 +1345,7 @@ mod tests {
             filename: "image.png".to_string(),
             media_type: None, // should default to IMAGE
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1245,6 +1360,7 @@ mod tests {
             filename: "clip.mp4".to_string(),
             media_type: Some(3), // video
             duration_millis: Some(15000),
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1259,6 +1375,7 @@ mod tests {
             filename: "funny.gif".to_string(),
             media_type: Some(2), // gif
             duration_millis: Some(3000),
+            plaintext_sha256: None,
         }]);
         assert_eq!(attachments.len(), 1);
     }
@@ -1276,6 +1393,7 @@ mod tests {
                 filename: "thumb.jpg".to_string(),
                 media_type: Some(1),
                 duration_millis: None,
+                plaintext_sha256: None,
             },
             AttachmentDescriptor::Url {
                 url: "https://example.com".to_string(),
@@ -1308,6 +1426,7 @@ mod tests {
             filename: "file".to_string(),
             media_type,
             duration_millis: None,
+            plaintext_sha256: None,
         }
     }
 
@@ -1517,6 +1636,7 @@ mod tests {
             filename: "pic.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content =
             build_message_content("Check this out", None, Some(attachments), None).unwrap();
@@ -1556,6 +1676,7 @@ mod tests {
             filename: "reply.png".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "Here's a photo reply",
@@ -1645,6 +1766,7 @@ mod tests {
             filename: "original.jpg".to_string(),
             media_type: Some(1),
             duration_millis: None,
+            plaintext_sha256: None,
         }]);
         let content = build_message_content_with_preview(
             "@user check https://reply-link.com",

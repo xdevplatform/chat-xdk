@@ -196,41 +196,55 @@ go/chatxdk/                       # Go bindings (cgo over the ffi static archive
 
 The X API serves boolean feature switches at `GET /2/chat/features`, for
 example `{"features":{"v1_send":false}}`. `v1_send` picks the send format: v0,
-the format 0.5.x sends, while it is off, and v1 (per-message keys) while it is on.
-The core holds the whole policy: when to fetch, how chats share an answer,
-response validation and the fail-closed default. It never makes the request
-itself. Each language binding performs the GET the core hands it, with its own
-HTTP stack (`fetch` in a browser), and hands the status and body back. A Rust
-app, or code that calls the C ABI directly, is its own binding: it performs
-the GET and hands the status and body to `set_feature_switches`
-(`chat_xdk_set_feature_switches` in the C ABI, whose header defines the
-endpoint, timeout and body limit as `CHAT_XDK_FEATURES_*`), which applies
-the same validation and the one answer per chat; without it, every switch
-stays off:
+the format 0.5.x sends, while it is off, and v1 (per-message keys) while it
+is on. The core holds the whole policy: what to fetch, when to refresh and
+when to retry, how chats share an answer, response validation and the
+fail-closed default. It never makes the request itself. Each language
+binding performs each GET the core hands it, after the delay the core sets
+for a refresh or a retry, with its own HTTP stack (`fetch` in a browser),
+and hands the status and body back. A Rust app, or code that calls the C ABI
+directly, is its own binding: it GETs the URL `feature_switches_url`
+(`chat_xdk_feature_switches_url`) returns, on the same schedule, and hands
+the status and body to `set_feature_switches` (`chat_xdk_set_feature_switches`
+in the C ABI, whose header defines the endpoint, timeout, body limit and
+refresh interval as `CHAT_XDK_FEATURES_*`), which applies the same
+validation; without it, every switch stays off:
 
-- **When:** a chat reads the switches once, when it is created, and keeps the
-  answer for its lifetime. Nothing reads them again; a chat created later
-  makes its own request. Chats created while a request for the same endpoint
-  is in flight share it. Until the answer arrives every switch reads off for
-  the chat, so its first sends can be v0.
-- **What it sends:** a GET with no query parameters, no credentials and no
-  user data. It sends and stores no cookies and follows no redirect: a 3xx
-  answer is a status other than 200.
+- **When:** a chat reads the switches when it is created, again when
+  `set_identity` gives it a sender whose bucket differs from the one it
+  reads, and again 5 minutes after each answer while it lives, so a change at
+  the X API reaches a running chat. Each answer replaces the one before. Chats
+  that read the same URL share one request; a chat that joins it takes the
+  latest answer at once. Until an answer for its URL arrives every switch
+  reads off for the chat, so its first sends can be v0.
+- **Retries:** a request that fails is retried 1 s later, then after twice
+  the previous wait, never more than 5 minutes apart, while a chat still
+  waits for its answer. A failure keeps the answer the chats already have.
+  The core sets each delay, and the binding waits it out before the GET.
+  Reads stop once no chat that shares them is alive.
+- **What it sends:** a GET with no credentials. Once `set_identity` has set
+  the session identity, its URL carries the sender's bucket, the last four
+  digits of the user id (`?bucket=1234`), and no other user data; the X API
+  buckets a request without one by its address. Every chat of one sender
+  reads the same bucket, so a ramp of `v1_send` turns it on for the same
+  senders wherever they run. The GET sends and stores no cookies and follows
+  no redirect: a 3xx answer is a status other than 200.
 - **Fail-closed:** a network error, a request that takes more than 2 s in
-  all, a status other than 200, a body over 64 KiB, malformed JSON, or a
-  missing or non-boolean key leaves every switch off for the chat's lifetime,
-  so its sends stay v0. A failed request is not repeated, and the request
-  never blocks or fails an SDK call.
+  all, a status other than 200, a body over 64 KiB, or a body that isn't JSON
+  with a `features` object changes no switch, and the request is retried. A
+  switch whose value isn't a boolean reads off. No request blocks or fails an
+  SDK call.
 - **Where it runs:** in the background, so creating a chat never waits for
   it: a daemon thread in Python, a goroutine in Go, `HttpClient.sendAsync` in
   the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
   20.16 the request's socket and timer are unref'd, so it never keeps a
   process alive; on older Node, `fetch()` can hold the process open until the
-  request ends, at most 2 s. At exit, Python cuts short a request still under
-  way and waits for it, so no thread is inside OpenSSL while OpenSSL cleans
-  up. Every binding reads the body as it streams, up to one byte past
-  64 KiB, so a long body is never held whole; where a runtime can't stream
-  it, the request fails.
+  request ends, at most 2 s. A refresh or a retry waits on a timer that never
+  keeps a process alive either. At exit, Python cuts short a request still
+  under way, or a wait for the next one, and waits for it, so no thread is
+  inside OpenSSL while OpenSSL cleans up. Every binding reads the body as it
+  streams, up to one byte past 64 KiB, so a long body is never held whole;
+  where a runtime can't stream it, the request fails.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the

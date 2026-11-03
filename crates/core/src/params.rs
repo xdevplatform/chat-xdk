@@ -288,8 +288,9 @@ pub struct EncryptReplyParams {
     /// The plaintext reply text.
     pub text: String,
     /// Base64 of the raw signed event being replied to. The reply preview
-    /// (sequence id, sender, text, entities, attachments) is derived from it
-    /// and the raw event is embedded so recipients can validate the preview.
+    /// (sequence id, message id, sender, text, entities, attachments) is
+    /// derived from it and the raw event is embedded so recipients can
+    /// validate the preview.
     pub reply_to_event: Option<String>,
     /// Base64 of the raw signed edit event, when the original was edited.
     pub reply_to_edit_event: Option<String>,
@@ -311,6 +312,12 @@ pub struct EncryptReplyParams {
     /// The `sequence_id` of the message being replied to; derived from
     /// `reply_to_event` when unset.
     pub reply_to_sequence_id: Option<String>,
+    /// The signed `message_id` of the message being replied to; derived from
+    /// `reply_to_event` when unset. A reply built without `reply_to_event`
+    /// needs it: recipients treat a v1 reply that names no original as
+    /// invalid. With `reply_to_event`, one that is not the id the event
+    /// carries fails the call with an `InvalidInput` error.
+    pub reply_to_message_id: Option<String>,
     /// The user ID of the message's sender, as digits (for the preview);
     /// derived from `reply_to_event` when unset.
     pub reply_to_sender_id: Option<String>,
@@ -359,6 +366,7 @@ impl EncryptReplyParams {
             conversation_key: None,
             conversation_key_version: None,
             reply_to_sequence_id: None,
+            reply_to_message_id: None,
             reply_to_sender_id: None,
             reply_to_text: None,
             entities: None,
@@ -388,6 +396,13 @@ impl EncryptReplyParams {
     /// the one `reply_to_event` carries.
     pub fn with_reply_to_sequence_id(mut self, reply_to_sequence_id: impl Into<String>) -> Self {
         self.reply_to_sequence_id = non_empty(reply_to_sequence_id);
+        self
+    }
+
+    /// Set the signed `message_id` of the message being replied to, for a
+    /// reply built without `reply_to_event`.
+    pub fn with_reply_to_message_id(mut self, reply_to_message_id: impl Into<String>) -> Self {
+        self.reply_to_message_id = non_empty(reply_to_message_id);
         self
     }
 
@@ -502,6 +517,7 @@ impl std::fmt::Debug for EncryptReplyParams {
             )
             .field("conversation_key_version", &self.conversation_key_version)
             .field("reply_to_sequence_id", &self.reply_to_sequence_id)
+            .field("reply_to_message_id", &self.reply_to_message_id)
             .field("reply_to_sender_id", &self.reply_to_sender_id)
             .field("reply_to_text", &self.reply_to_text)
             .field("entities", &self.entities)
@@ -670,6 +686,12 @@ pub struct EncryptEditParams {
     /// The `sequence_id` of the message being edited; derived from
     /// `target_event` when unset.
     pub target_message_sequence_id: Option<String>,
+    /// The signed `message_id` of the message being edited; derived from
+    /// `target_event` when unset. A v1 edit names the message it edits, so a
+    /// v1 edit built without `target_event` needs it; a v0 edit names none.
+    /// With `target_event`, one that is not the id the event carries fails
+    /// the call with an `InvalidInput` error.
+    pub target_message_id: Option<String>,
     /// User ID of the sender; resolves from the session identity when unset.
     pub sender_id: Option<String>,
     /// Version of the signing key used to sign the edit; resolves from the
@@ -696,6 +718,7 @@ impl EncryptEditParams {
             entities: None,
             conversation_id: None,
             target_message_sequence_id: None,
+            target_message_id: None,
             sender_id: None,
             signing_key_version: None,
             conversation_key: None,
@@ -722,6 +745,13 @@ impl EncryptEditParams {
         target_message_sequence_id: impl Into<String>,
     ) -> Self {
         self.target_message_sequence_id = non_empty(target_message_sequence_id);
+        self
+    }
+
+    /// Set the signed `message_id` of the message being edited, for an edit
+    /// built without `target_event`.
+    pub fn with_target_message_id(mut self, target_message_id: impl Into<String>) -> Self {
+        self.target_message_id = non_empty(target_message_id);
         self
     }
 
@@ -769,6 +799,7 @@ impl std::fmt::Debug for EncryptEditParams {
                 "target_message_sequence_id",
                 &self.target_message_sequence_id,
             )
+            .field("target_message_id", &self.target_message_id)
             .field("sender_id", &self.sender_id)
             .field("signing_key_version", &self.signing_key_version)
             .field(
@@ -1213,8 +1244,8 @@ impl GroupMembersRemoveParams {
 /// key. The result then signs a group-admin add when `promote_admin_id`
 /// names the member who becomes an admin, and a conversation delete.
 ///
-/// `conversation_key_version` is bound into the removal signature. An empty
-/// string is absent, and an absent version signs the literal `null`.
+/// `conversation_key_version` is the conversation-key version the removal
+/// names, which its signature doesn't cover. An empty string is absent.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupLeaveParams {
@@ -1223,7 +1254,7 @@ pub struct GroupLeaveParams {
     /// User ID promoted to admin with this leave, when the sender is the
     /// only admin. The caller chooses whom to promote.
     pub promote_admin_id: Option<String>,
-    /// Conversation-key version bound into the removal signature.
+    /// Conversation-key version the removal names.
     pub conversation_key_version: Option<String>,
     /// User ID of the member leaving; resolves from the session identity
     /// when unset.
@@ -1251,7 +1282,7 @@ impl GroupLeaveParams {
         self
     }
 
-    /// Set the conversation-key version bound into the removal.
+    /// Set the conversation-key version the removal names.
     pub fn with_conversation_key_version(
         mut self,
         conversation_key_version: impl Into<String>,
