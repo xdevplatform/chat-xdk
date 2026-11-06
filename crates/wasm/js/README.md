@@ -157,19 +157,19 @@ messages in those conversations. Key rotation does not retroactively protect
 messages encrypted under a previous key. See
 [docs/CRYPTO.md — Known Limitations](../../../docs/CRYPTO.md#known-limitations).
 
-### Private keys stay inside the chat
+### No method returns the private keys
 
 A chat from this package has no `importKeys` or `exportKeys`, and no method
 that returns its private keys: `setup` hands them to Juicebox and `unlock`
 loads them back, inside the SDK. A script that gets hold of the chat,
-including code injected via XSS or a compromised dependency, therefore has
-no call that gives it the keys.
+including code injected via XSS or a compromised dependency, has no call
+that hands it the keys.
 
 That is not isolation. Script running in the page can still use the chat
-while it runs (decrypt, sign, and send as you) and can reach what the
-page's memory holds, including the keys as `setup` and `unlock` pass them
-to and from Juicebox. Keep untrusted script out of pages that unlock a
-chat. Servers that keep keys themselves use
+while it runs (decrypt, sign and send as you, and make its Juicebox calls)
+and can reach what the page's memory holds, including the keys as `setup`
+and `unlock` pass them to and from Juicebox. Keep untrusted script out of
+pages that unlock a chat. Servers that keep keys themselves use
 [`@xdevplatform/chat-xdk-server`](../js-server/README.md); never bundle it
 into a browser app.
 
