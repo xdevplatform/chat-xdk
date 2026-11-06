@@ -11,8 +11,9 @@
 # Auth is OIDC trusted publishing (no long-lived tokens) wherever the registry
 # supports it: PyPI, npm, and NuGet publishes authenticate with the job's OIDC
 # token after a one-time Trusted Publisher registration on the registry (org
-# xdevplatform, repo chat-xdk, workflow release.yml). Maven Central has no
-# OIDC; it requires a Central Portal user token.
+# xdevplatform, repo chat-xdk, workflow release.yml). npm registers it per
+# package: @xdevplatform/chat-xdk and @xdevplatform/chat-xdk-server each need
+# one. Maven Central has no OIDC; it requires a Central Portal user token.
 #
 # Required secrets:
 #   - NUGET_USER                  NuGet.org profile name the trusted publishing policy is registered under
@@ -203,7 +204,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore(release): v$V"
+          # A version stamped before the release (bump: none) with its
+          # prebuilts already synced leaves nothing to commit: tag HEAD.
+          if git diff --cached --quiet; then
+            echo "v$V and its Go prebuilts are already committed; tagging HEAD"
+          else
+            git commit -m "chore(release): v$V"
+          fi
           git tag "v$V"
           git tag "go/chatxdk/v$V"   # subdir module tag for `go get`
           # Atomic: either the branch and both tags land, or nothing does. A
@@ -294,38 +301,46 @@ jobs:
       # publishing natively.
       - uses: actions/setup-node@v4
         with: { node-version: "24", registry-url: "https://registry.npmjs.org" }
+      # Builds the wasm once and stages it into both packages:
+      # @xdevplatform/chat-xdk (crates/wasm/js) and
+      # @xdevplatform/chat-xdk-server (crates/wasm/js-server).
       - run: make wasm
-      # The wasm artifacts must live inside the package root (npm cannot include
-      # files outside it); guard against shipping a tarball without them.
+      # The wasm artifacts must live inside each package root (npm cannot
+      # include files outside it); guard against shipping a tarball without
+      # them.
       - name: Verify tarball contents
-        working-directory: chat-xdk/crates/wasm/js
+        working-directory: chat-xdk/crates/wasm
         run: |
           set -euo pipefail
-          npm pack --json > /tmp/pack.json
-          node -e '
-            // npm <= 11 emits an array of results; npm >= 12 an object keyed
-            // by package name.
-            const json = require("/tmp/pack.json");
-            const result = Array.isArray(json) ? json[0] : Object.values(json)[0];
-            const files = result.files.map((f) => f.path);
-            const required = [
-              "index.js",
-              "index.d.ts",
-              "pkg/chat_xdk_wasm.js",
-              "pkg/chat_xdk_wasm_bg.wasm",
-            ];
-            const missing = required.filter((f) => !files.includes(f));
-            if (missing.length) {
-              console.error("Missing from npm tarball:", missing);
-              process.exit(1);
-            }
-            console.log("npm tarball OK:", files.length, "files");
-          '
+          verify() {
+            local dir="$1"; shift
+            (cd "$dir" && npm pack --json > "/tmp/pack-$dir.json")
+            node -e '
+              // npm <= 11 emits an array of results; npm >= 12 an object keyed
+              // by package name.
+              const [packJson, ...required] = process.argv.slice(1);
+              const json = require(packJson);
+              const result = Array.isArray(json) ? json[0] : Object.values(json)[0];
+              const files = result.files.map((f) => f.path);
+              const missing = required.filter((f) => !files.includes(f));
+              if (missing.length) {
+                console.error(`Missing from the ${result.name} tarball:`, missing);
+                process.exit(1);
+              }
+              console.log(`${result.name} tarball OK:`, files.length, "files");
+            ' "/tmp/pack-$dir.json" "$@"
+          }
+          verify js index.js index.d.ts chat.js pkg/chat_xdk_wasm.js pkg/chat_xdk_wasm_bg.wasm
+          verify js-server index.js index.d.ts chat.js chat.d.ts pkg/chat_xdk_wasm.js pkg/chat_xdk_wasm_bg.wasm
       # Auth comes from the job's OIDC token (permissions.id-token: write) via
       # npm trusted publishing; provenance is implied for trusted publishes.
       - name: Publish
         if: ${{ !inputs.dry_run }}
         working-directory: chat-xdk/crates/wasm/js
+        run: npm publish --access public
+      - name: Publish server package
+        if: ${{ !inputs.dry_run }}
+        working-directory: chat-xdk/crates/wasm/js-server
         run: npm publish --access public
 
   # ---------------------------------------------------------------------------

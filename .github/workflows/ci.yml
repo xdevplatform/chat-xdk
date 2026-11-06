@@ -64,7 +64,8 @@ jobs:
           tool: wasm-pack
 
       # `make wasm` also stages the wasm-pack output into crates/wasm/js/pkg/,
-      # the layout the npm package ships.
+      # the layout the npm package ships, and stages the server package
+      # (crates/wasm/js-server) from it.
       - name: Build wasm pkg (wasm-pack)
         run: make wasm
 
@@ -149,6 +150,7 @@ jobs:
           node crates/wasm/js/tests/api.test.mjs
           node crates/wasm/js/tests/wrapper.test.mjs
           node crates/wasm/js/tests/features.test.mjs
+          node crates/wasm/js-server/tests/server.test.mjs
 
       # The package declares engines.node >=18; rerun the suites on the floor
       # version, where `require()` of an ES module is unavailable and only the
@@ -164,6 +166,7 @@ jobs:
           node crates/wasm/js/tests/api.test.mjs
           node crates/wasm/js/tests/wrapper.test.mjs
           node crates/wasm/js/tests/features.test.mjs
+          node crates/wasm/js-server/tests/server.test.mjs
 
       # go binding suite: the `go` job below. Prebuilt archive byte-verify:
       # .github/workflows/go-prebuilt-linux.yml (PR verify + push sync).

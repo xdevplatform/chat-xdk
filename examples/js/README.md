@@ -30,15 +30,17 @@ the browser, or in Node for the bot); REST calls go through the **XDK**
 - Rust + [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) to build the WASM
   package (`crates/wasm/pkg/` is not committed): run `npm run build:wasm` once
   before the offline test or the browser app. The example then imports the
-  chat-xdk WASM package from this repo by relative path; for a standalone
-  project, install the package and import from `@xdevplatform/chat-xdk`
-  instead. The REST client uses `@xdevplatform/xdk`
-  (`npm install @xdevplatform/xdk`).
+  chat-xdk WASM packages from this repo by relative path; for a standalone
+  project, install the packages and import from them instead: the bot, which
+  keeps its keys in a local blob, from `@xdevplatform/chat-xdk-server`, and
+  `register.mjs`, which keeps them in Juicebox, from `@xdevplatform/chat-xdk`.
+  The REST client uses `@xdevplatform/xdk` (`npm install @xdevplatform/xdk`).
 
 ## Message format
 
-The bot imports its raw private-key blob into a chat from `createChat()`,
-which reads the X API's feature switches in the background and keeps them
+The bot imports its raw private-key blob into a chat from the server
+package's `createChat()`, which reads the X API's feature switches in the
+background and keeps them
 current, and sends v1 while they turn `v1_send` on. The browser app drives
 the lower-level WASM `Chat` from `crates/wasm/pkg/`, which doesn't read the
 switches, so its messages go out in the v0 format.

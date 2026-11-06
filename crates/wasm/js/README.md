@@ -8,7 +8,12 @@ JavaScript/WASM bindings for the X Chat SDK — encryption for X Direct Messages
 JavaScript (chat-xdk) → wasm-bindgen → Rust WASM (chat_xdk_wasm) → chat-xdk-core
 ```
 
-The Rust WASM layer is a pure crypto engine; Juicebox key-storage lifecycle is orchestrated in the JS wrapper (`index.js`).
+The Rust WASM layer is a pure crypto engine; Juicebox key-storage lifecycle is orchestrated in the JS wrapper (`chat.js`, exported by `index.js`).
+
+A chat from this package keeps its private keys in Juicebox and has no
+method that returns them. A Node server that keeps its keys in its own
+secret store uses [`@xdevplatform/chat-xdk-server`](../js-server/README.md)
+instead: the same API, with `importKeys` and `exportKeys`.
 
 ## Prerequisites
 
@@ -31,10 +36,10 @@ npm install juicebox-sdk   # only needed for setup()/unlock()/changePin()
 ## Developing in this repo
 
 Working from a chat-xdk checkout (instead of the npm package) requires staging
-the WASM build that `index.js` resolves at `./pkg/`:
+the WASM build that `chat.js` resolves at `./pkg/`:
 
 ```bash
-make wasm   # from the repo root; builds --target web and stages js/pkg/
+make wasm   # from the repo root; builds --target web, stages js/pkg/ and the js-server/ package
 ```
 
 ## Quick Start
@@ -152,14 +157,21 @@ messages in those conversations. Key rotation does not retroactively protect
 messages encrypted under a previous key. See
 [docs/CRYPTO.md — Known Limitations](../../../docs/CRYPTO.md#known-limitations).
 
-### Exported keys are unencrypted
+### No method returns the private keys
 
-`exportKeys()` returns unencrypted private key material, as in every
-binding: any script that can reach the chat instance, including code injected
-via XSS or a compromised dependency, could take the identity with it. In a
-browser, keep keys in Juicebox (`setup`/`unlock`), which needs no export;
-where you do export them, store the bytes only where private keys belong and
-zero them with `fill(0)` once stored.
+A chat from this package has no `importKeys` or `exportKeys`, and no method
+that returns its private keys: `setup` hands them to Juicebox and `unlock`
+loads them back, inside the SDK. A script that gets hold of the chat,
+including code injected via XSS or a compromised dependency, has no call
+that hands it the keys.
+
+That is not isolation. Script running in the page can still use the chat
+while it runs (decrypt, sign and send as you, and make its Juicebox calls)
+and can reach what the page's memory holds, including the keys as `setup`
+and `unlock` pass them to and from Juicebox. Keep untrusted script out of
+pages that unlock a chat. Servers that keep keys themselves use
+[`@xdevplatform/chat-xdk-server`](../js-server/README.md); never bundle it
+into a browser app.
 
 ## License
 

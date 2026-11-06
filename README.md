@@ -11,6 +11,7 @@ Thrift wire protocol, exposed through idiomatic bindings for six languages.
 | Rust | `chat-xdk-core` | — | [docs/API.md](docs/API.md) |
 | Python | `chat_xdk` | PyO3 | [crates/pyo3/README.md](crates/pyo3/README.md) |
 | JavaScript / WASM | `@xdevplatform/chat-xdk` | wasm-bindgen | [crates/wasm/js/README.md](crates/wasm/js/README.md) |
+| JavaScript / WASM, servers that keep their keys | `@xdevplatform/chat-xdk-server` | wasm-bindgen | [crates/wasm/js-server/README.md](crates/wasm/js-server/README.md) |
 | Go | `github.com/xdevplatform/chat-xdk/go/chatxdk` | cgo | [go/chatxdk/README.md](go/chatxdk/README.md) |
 | .NET | `ChatXdk` | P/Invoke | [crates/dotnet/README.md](crates/dotnet/README.md) |
 | JVM | `com.x.chatxdk` | JNA | [crates/jvm/README.md](crates/jvm/README.md) |
@@ -125,7 +126,10 @@ Private keys can be held two ways:
 
 - **Local blob** — `exportKeys()` / `importKeys()` move raw private-key bytes
   yourself, in every binding. Simplest; the bytes are **unencrypted identity
-  material** — never commit them or log them, and zero them once stored.
+  material** — never commit them or log them, and zero them once stored. In
+  JS only `@xdevplatform/chat-xdk-server`, for Node servers, has them; the
+  chat `@xdevplatform/chat-xdk` creates, the one browsers load, keeps its
+  keys in Juicebox and has no method that returns them.
 - **Juicebox (production)** — `generate_keypairs()` creates the keys, then
   `setup(pin)` stores the generated keys in
   [Juicebox](https://juicebox.xyz/) distributed PIN-protected storage;
@@ -199,7 +203,7 @@ chat-xdk/
 ├── crates/
 │   ├── core/     # chat-xdk-core: ChatCore engine, crypto, keys, Thrift types
 │   ├── pyo3/     # Python binding (chat_xdk)
-│   ├── wasm/     # JS/WASM binding (+ js/ wrapper and tests)
+│   ├── wasm/     # JS/WASM binding (+ js/ wrapper and tests, js-server/ server package)
 │   ├── ffi/      # C ABI (chat_xdk.h): Go's static archive, .NET's and the JVM's shared library
 │   ├── dotnet/   # .NET binding (P/Invoke)
 │   └── jvm/      # JVM binding (JNA)
@@ -216,7 +220,7 @@ make build              # Rust workspace
 make test               # Rust tests
 
 make wheel-dev          # Python: maturin develop
-make wasm               # WASM: wasm-pack build --target web
+make wasm               # WASM: wasm-pack build --target web, staged into both npm packages
 make test-go            # Go: build staticlib + go test
 make dotnet-test        # .NET: native cdylib + xUnit
 make jvm-test           # JVM: native cdylib + mvn test (JDK 17+)

@@ -10,7 +10,8 @@ such as `0.7.0` marks code for the release it migrates to, as does a block
 without markers. Every half for the release migrated to becomes one
 function over the stand-in names the guides' "About the snippets" sections
 define, and the binding's compiler checks the result: cargo (Rust), tsc
-(against index.d.ts), go vet, javac, dotnet build and gcc (against
+(against index.d.ts, and the server package's for the snippets that import
+it), go vet, javac, dotnet build and gcc (against
 chat_xdk.h). Python runs each half with the real params classes and a
 `chat` whose methods are mocked, so a wrong argument raises. The C check
 also passes every params document such a half shows, in the comment above
@@ -443,6 +444,7 @@ def check_ts(paths):
         if re.search(r"^\s*(export\s+)?(interface|type) \w+", code, re.M):
             continue
         code = code.replace('"@xdevplatform/chat-xdk"', '"chat-xdk"')
+        code = code.replace('"@xdevplatform/chat-xdk-server"', '"chat-xdk-server"')
         imports = [l for l in code.splitlines() if l.startswith("import ")]
         body = "\n".join(l for l in code.splitlines() if not l.startswith("import "))
         imported = set(re.findall(r"\b(\w+)\b", " ".join(re.findall(r"\{([^}]*)\}", " ".join(imports)))))
@@ -458,11 +460,18 @@ def check_ts(paths):
         )
         files.append(name)
     dts = ROOT / "crates" / "wasm" / "js" / "index.d.ts"
+    # The server package's declarations re-export chat.d.ts, which `make
+    # wasm` stages from js/index.d.ts; stage the same pair here.
+    server = d / "chat-xdk-server"
+    server.mkdir(exist_ok=True)
+    (server / "index.d.ts").write_text((ROOT / "crates" / "wasm" / "js-server" / "index.d.ts").read_text())
+    (server / "chat.d.ts").write_text(dts.read_text())
     (d / "tsconfig.json").write_text(
         '{"compilerOptions": {"strict": true, "noImplicitAny": false, "noEmit": true, "noUnusedLocals": false, '
         '"target": "es2022", "module": "es2022", "moduleResolution": "bundler", '
         '"lib": ["es2022", "dom"], "skipLibCheck": true, '
-        f'"paths": {{"chat-xdk": ["{dts}"]}}}}, "files": {files!r}}}'.replace("'", '"')
+        f'"paths": {{"chat-xdk": ["{dts}"], "chat-xdk-server": ["{server / "index.d.ts"}"]}}}}, '
+        f'"files": {files!r}}}'.replace("'", '"')
     )
     print(f"{len(files)} TypeScript snippets")
     return run([os.environ.get("TSC", "tsc"), "-p", str(d)])

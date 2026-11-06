@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-05
+
+### Security
+
+- JS: the chat `@xdevplatform/chat-xdk` creates no longer has `importKeys`
+  and `exportKeys`, as in 0.5.x. From 0.7.0 through 0.7.2 any script that
+  could reach a chat, such as code injected into a page through XSS or a
+  compromised dependency, could call `exportKeys` and take its private keys.
+  The chat keeps its keys in Juicebox: `setup`, `unlock` and `changePin` move
+  them between the WebAssembly engine and Juicebox inside the SDK, and no
+  method returns them. A script that reaches the chat can still use it while
+  the page runs, so keep untrusted script out of pages that unlock one.
+
+### Added
+
+- `@xdevplatform/chat-xdk-server`, the JS package for Node servers that keep
+  their own keys: the API of `@xdevplatform/chat-xdk` over the same
+  WebAssembly engine, whose `createChat` returns a `ServerChat`, a
+  `ChatWithJuicebox` with `importKeys` and `exportKeys`, as in every other
+  binding. A server exports its keys once, keeps them in its secret store,
+  and imports them in each process (a Lambda cold start, a webhook worker)
+  with no Juicebox round trip per request. It declares `ImportKeysParams`,
+  runs on Node 18 and later, and resolves only under the `node` export
+  condition, so a bundler building for browsers can't include it. It is
+  versioned and released with every other binding.
+
+### Breaking changes
+
+- JS: code that calls `importKeys` or `exportKeys` on a chat from
+  `@xdevplatform/chat-xdk` runs on a server with
+  `@xdevplatform/chat-xdk-server` instead, which needs only the import
+  changed: `import { createChat } from "@xdevplatform/chat-xdk-server"`. A
+  browser app keeps its keys in Juicebox with `setup` and `unlock`.
+  TypeScript code imports `ImportKeysParams` from the server package too.
+
 ## [0.7.2] - 2026-11-02
 
 ### Added
@@ -943,7 +978,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/xdevplatform/chat-xdk/compare/v0.5.2...v0.7.0

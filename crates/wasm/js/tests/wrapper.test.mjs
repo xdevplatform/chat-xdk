@@ -1,4 +1,4 @@
-// Tests for the shipped JS wrapper (index.js): ChatWithJuicebox's Juicebox
+// Tests for the shipped JS wrapper (index.js over chat.js): ChatWithJuicebox's Juicebox
 // lifecycle plumbing, every crypto delegation, the guess-budget/config
 // resolution through createChat and updateConfig, and the errors it throws. The wasm Chat underneath is
 // the real SDK; only the Juicebox *network client* is a stub (the SDK is
@@ -57,6 +57,13 @@ function chatXdkError(kind, message) {
     assert.match(err.message, message);
     return true;
   };
+}
+
+/** Neither `chat` nor its prototype chain has a method that loads or returns private keys. */
+function assertNoKeyExport(chat) {
+  for (const name of ["importKeys", "exportKeys"]) {
+    assert.equal(name in chat, false, `${name} is reachable on the chat`);
+  }
 }
 
 // Network-backend stubs (Juicebox realm I/O lives outside the SDK).
@@ -137,14 +144,8 @@ async function delegationTests() {
   await assert.rejects(() => chat.changePin("2580", "0000"), /repeated character/);
   assert.equal(stubClient.registerCalls, 1);
 
-  // importKeys/exportKeys round-trip the loaded keys.
-  const exported = chat.exportKeys();
-  assert.equal(exported.length, 64);
-  chat.lock();
-  assert.throws(() => chat.exportKeys(), chatXdkError("invalidState", /not unlocked/));
-  chat.importKeys({ keys: exported });
-  assert.equal(chat.getPublicKeys().identity, setupKeys.identity);
-  exported.fill(0);
+  // The keys reached Juicebox, and nothing hands them to the caller.
+  assertNoKeyExport(chat);
 
   // unlock imports exactly the bytes recover() returns: swap in the fixture
   // secret and check the fixture public keys and signature come out.
@@ -822,8 +823,8 @@ async function firstBootTests() {
     chatXdkError("invalidInput", /juiceboxConfig must be the Juicebox config JSON string/),
   );
 
-  // A config needs getAuthToken; without either, the chat keeps its keys
-  // with importKeys/exportKeys and loads no juicebox-sdk.
+  // A config needs getAuthToken; without either, the chat has no Juicebox,
+  // loads no juicebox-sdk, and holds only the keys it generates.
   await assert.rejects(
     () => createChat({ juiceboxConfig: JSON.stringify({ realms: [] }), juiceboxModule }),
     chatXdkError("invalidInput", /getAuthToken must be an async function/),
@@ -833,8 +834,10 @@ async function firstBootTests() {
     chatXdkError("invalidInput", /getAuthToken must be an async function/),
   );
   const keyless = await createChat();
-  keyless.importKeys({ keys: chat.exportKeys() });
-  assert.equal(keyless.getPublicKeys().identity, keys.identity);
+  assertNoKeyExport(keyless);
+  assert.equal(keyless.hasIdentityKey(), false);
+  keyless.generateKeypairs();
+  assert.equal(keyless.isUnlocked(), true);
   for (const op of [
     () => keyless.updateConfig(JSON.stringify({ realms: [] })),
     () => keyless.setup("2580"),
@@ -933,7 +936,27 @@ async function realJuiceboxSingletonTests() {
   later.free();
 }
 
+// The package exports its API and nothing that builds a chat of another
+// class, which could hand out a chat's private keys.
+async function publicExportsTests() {
+  const pkg = await import("../index.js");
+  assert.deepEqual(Object.keys(pkg).sort(), [
+    "ChatWithJuicebox",
+    "ChatXdkError",
+    "base64ToBytes",
+    "bytesToBase64",
+    "bytesToHex",
+    "createChat",
+    "detectImageDimensions",
+    "detectMimeType",
+    "encryptedFileSize",
+    "hexToBytes",
+  ]);
+  assertNoKeyExport(ChatWithJuicebox.prototype);
+}
+
 async function main() {
+  await publicExportsTests();
   await delegationTests();
   assert.equal(encryptedFileSize(5000), 5109);
   await guessBudgetTests();

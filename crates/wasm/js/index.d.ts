@@ -313,18 +313,6 @@ export interface SetIdentityParams {
   signingKeyVersion: string;
 }
 
-/** Params for `importKeys`. */
-export interface ImportKeysParams {
-  /** The private keys, as `exportKeys` returns them. */
-  keys: Uint8Array;
-  /**
-   * The `public_key_version` the X API returned when the keys were
-   * registered; key-change entries for other versions of your keys are
-   * skipped.
-   */
-  signingKeyVersion?: string | null;
-}
-
 /**
  * What kind of failure a `ChatXdkError` is; every binding names the same
  * failure the same way.
@@ -1246,8 +1234,9 @@ export interface CreateChatOptions {
    *
    * Required to use Juicebox (`updateConfig`, `setup`, `unlock`,
    * `changePin`, `delete`), even when `juiceboxConfig` is omitted at first
-   * boot. A chat created without it loads no juicebox-sdk and keeps its keys
-   * with `importKeys` / `exportKeys`.
+   * boot. A chat created without it has no Juicebox and loads no
+   * juicebox-sdk; on a server, the chat `@xdevplatform/chat-xdk-server`
+   * creates loads saved keys with `importKeys`.
    *
    * @param realmId - Hex-encoded realm ID
    * @returns Promise resolving to the auth token string
@@ -1345,19 +1334,6 @@ interface ChatCrypto {
    * the previous set.
    */
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
-
-  /**
-   * Load private keys, as `exportKeys` returns them. The SDK's copy of the
-   * bytes is zeroized after import; zero your own with `fill(0)`.
-   */
-  importKeys(params: ImportKeysParams): void;
-
-  /**
-   * The loaded private keys, unencrypted: store them only where private
-   * keys belong, and zero the bytes with `fill(0)` once done. Throws when
-   * no identity key is loaded.
-   */
-  exportKeys(): Uint8Array;
 
   /** Get current public keys. */
   getPublicKeys(): PublicKeys;
@@ -1635,14 +1611,6 @@ declare class Chat implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
-  /**
-   * Import private keys from `keys` (32 or 64 bytes). When
-   * `signingKeyVersion` is given it also records the public key version the
-   * keys were registered under.
-   */
-  importKeys(params: ImportKeysParams): void;
-  /** Export private keys as raw bytes; throws when no identity key is loaded. */
-  exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1692,7 +1660,8 @@ declare class Chat implements ChatCrypto {
 /**
  * Chat with integrated Juicebox key storage (returned by `createChat()`).
  *
- * Key material is managed inside the Juicebox layer.
+ * Key material is managed inside the Juicebox layer: `setup` stores the
+ * private keys and `unlock` loads them, and no method returns them.
  */
 export declare class ChatWithJuicebox implements ChatCrypto {
   /**
@@ -1727,8 +1696,6 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
-  importKeys(params: ImportKeysParams): void;
-  exportKeys(): Uint8Array;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1790,8 +1757,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
  * `juiceboxConfig` is optional: on first boot (no `juicebox_config` on the
  * account yet) create with just `getAuthToken`, `generateKeypairs()`, POST
  * the payload, then `updateConfig()` + `setup(pin)`. Without
- * `getAuthToken`, the chat keeps its keys with `importKeys` / `exportKeys`
- * and needs no juicebox-sdk.
+ * `getAuthToken`, the chat has no Juicebox and needs no juicebox-sdk: it
+ * runs the calls that need no private key, and keeps the keys
+ * `generateKeypairs()` makes for as long as it lives.
  *
  * Each call creates an independent instance with its own Juicebox client.
  * The Juicebox auth-token callback is a process-wide global that each
