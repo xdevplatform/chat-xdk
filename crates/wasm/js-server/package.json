@@ -1,6 +1,6 @@
 {
   "name": "@xdevplatform/chat-xdk-server",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "X Chat SDK for servers - encryption for X Direct Messages, with private key import and export",
   "type": "module",
   "types": "index.d.ts",
