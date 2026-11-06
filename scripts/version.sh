@@ -19,6 +19,7 @@ CARGO_TOML="$ROOT_DIR/Cargo.toml"
 CARGO_LOCK="$ROOT_DIR/Cargo.lock"
 PYPROJECT="$ROOT_DIR/crates/pyo3/pyproject.toml"
 NPM_PKG="$ROOT_DIR/crates/wasm/js/package.json"
+NPM_SERVER_PKG="$ROOT_DIR/crates/wasm/js-server/package.json"
 POM="$ROOT_DIR/crates/jvm/java/chatxdk/pom.xml"
 CSPROJ="$ROOT_DIR/crates/dotnet/dotnet/ChatXdk/ChatXdk.csproj"
 EXAMPLE_POM="$ROOT_DIR/examples/jvm/pom.xml"
@@ -86,8 +87,9 @@ set_version() {
   fi
   # PyPI project version.
   perl -pi -e "s/^version\\s*=\\s*\"[^\"]*\"/version = \"$v\"/ if !\$done && /^version\\s*=/; \$done=1 if /^version\\s*=/" "$PYPROJECT"
-  # npm package version (first "version" key).
-  perl -0pi -e "s/\"version\":\\s*\"[^\"]*\"/\"version\": \"$v\"/" "$NPM_PKG"
+  # npm package versions (first "version" key), @xdevplatform/chat-xdk and
+  # @xdevplatform/chat-xdk-server.
+  perl -0pi -e "s/\"version\":\\s*\"[^\"]*\"/\"version\": \"$v\"/" "$NPM_PKG" "$NPM_SERVER_PKG"
   # Maven project version (first <version> only).
   perl -0pi -e "s{<version>.*?</version>}{<version>$maven_v</version>}s" "$POM"
   # .NET package version.
@@ -103,6 +105,7 @@ print_all() {
   echo "macros dep (Cargo.toml): $(perl -ne 'print $1 if /^chat-xdk-macros\s*=.*version\s*=\s*"([^"]+)"/' "$CARGO_TOML")"
   echo "python (pyproject):      $(perl -ne 'print $1 if /^version\s*=\s*"([^"]+)"/' "$PYPROJECT")"
   echo "npm (package.json):      $(perl -0ne 'print $1 if /"version":\s*"([^"]+)"/' "$NPM_PKG")"
+  echo "npm server (js-server):  $(perl -0ne 'print $1 if /"version":\s*"([^"]+)"/' "$NPM_SERVER_PKG")"
   echo "jvm (pom.xml):           $(perl -0ne 'print $1 if m{<version>(.*?)</version>}s' "$POM")"
   echo "dotnet (csproj):         $(perl -0ne 'print $1 if m{<Version>(.*?)</Version>}s' "$CSPROJ")"
   echo "go:                      (tag-based: go/chatxdk/v<version>)"
