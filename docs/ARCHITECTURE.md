@@ -181,7 +181,8 @@ crates/
 │
 ├── wasm/                         # JavaScript/WASM bindings via wasm-bindgen
 │   ├── src/lib.rs                # Thin wrapper: delegates to ChatCore
-│   └── js/                       # JS wrapper, TypeScript types, tests
+│   ├── js/                       # @xdevplatform/chat-xdk: JS wrapper, TypeScript types, tests
+│   └── js-server/                # @xdevplatform/chat-xdk-server: adds importKeys/exportKeys
 │
 ├── dotnet/                       # .NET bindings (P/Invoke over the ffi shared library)
 │   └── dotnet/ChatXdk/           # C# package

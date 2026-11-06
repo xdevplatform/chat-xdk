@@ -16,7 +16,7 @@ The JVM binding mirrors the .NET surface (JSON across the native boundary, same 
 
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
-| 1 | **new** | `Chat::new(config: JuiceboxConfig)`, `Chat::default()`, `ChatCore::new()` | `createChat({ juiceboxConfig?, getAuthToken? })` → `Promise<ChatWithJuicebox>` (free with `free()`) | `Chat(config_json?: str)` | `New() *Chat`, `NewWithJuiceboxConfig(configJSON string) (*Chat, error)` (free with `Close()`) | `new Chat()`, `new Chat(String juiceboxConfigJson)` (free with `close()` / `try-with-resources`) | `new Chat()`, `new Chat(string juiceboxConfigJson)` (free with `Dispose()` / `using`) |
+| 1 | **new** | `Chat::new(config: JuiceboxConfig)`, `Chat::default()`, `ChatCore::new()` | `createChat({ juiceboxConfig?, getAuthToken? })` → `Promise<ChatWithJuicebox>`; from `@xdevplatform/chat-xdk-server`, `Promise<ServerChat>` (free with `free()`) | `Chat(config_json?: str)` | `New() *Chat`, `NewWithJuiceboxConfig(configJSON string) (*Chat, error)` (free with `Close()`) | `new Chat()`, `new Chat(String juiceboxConfigJson)` (free with `close()` / `try-with-resources`) | `new Chat()`, `new Chat(string juiceboxConfigJson)` (free with `Dispose()` / `using`) |
 | 2 | **update_config** | `update_config(&self, config)` | `updateConfig(config: string)` | `update_config(config_json: str)` | `UpdateConfig(configJSON string) error` | `updateConfig(String)` | `UpdateConfig(string)` |
 | 3 | **set_reject_unverified** | `set_reject_unverified(&self, reject: bool)` | `setRejectUnverified(reject: boolean)` | `set_reject_unverified(reject: bool)` | `SetRejectUnverified(reject bool)` | `setRejectUnverified(boolean)` | `SetRejectUnverified(bool)` |
 | 3a | **set_feature_switches** | `set_feature_switches(&self, status: u16, body: &[u8])` | — | — | — | — | — |
@@ -92,8 +92,9 @@ above until `updateConfig` supplies a real config. The first-boot flow is:
 `createChat({ getAuthToken })` → `generateKeypairs()` → caller POSTs the
 payload → `updateConfig(configFromGet)` → `setup(pin)`. Already-provisioned
 accounts pass `juiceboxConfig` at creation. `createChat()` without
-`getAuthToken` creates a chat without Juicebox, which loads no juicebox-sdk
-and keeps its keys with `importKeys` / `exportKeys`.
+`getAuthToken` creates a chat without Juicebox, which loads no
+juicebox-sdk; on a server, the chat from `@xdevplatform/chat-xdk-server`
+loads saved keys with `importKeys` (see [Key Management](#key-management)).
 
 ### Juicebox Key Storage
 
@@ -114,8 +115,8 @@ and keeps its keys with `importKeys` / `exportKeys`.
 | 11 | **generate_keypairs** | `→ PublicKeyRegistrationPayload` | `generateKeypairs() → object` | `generate_keypairs() → PublicKeyRegistrationPayload` | `GenerateKeypairs() (*PublicKeyRegistrationPayload, error)` | `generateKeypairs()` | `GenerateKeypairs()` |
 | 12 | **get_public_keys** | `→ PublicKeys` | `getPublicKeys() → object` | `get_public_keys() → PublicKeys` | `GetPublicKeys() (*PublicKeys, error)` | `getPublicKeys()` | `GetPublicKeys()` |
 | 13 | **get_public_key_fingerprint** | `→ String` | `getPublicKeyFingerprint() → string` | `get_public_key_fingerprint() → str` | `GetPublicKeyFingerprint() (string, error)` | `getPublicKeyFingerprint()` | `GetPublicKeyFingerprint()` |
-| 14 | **export_keys** | `→ Vec<u8>` | `exportKeys() → Uint8Array` | `export_keys() → bytearray` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]` |
-| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | `importKeys(params: ImportKeysParams)` | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
+| 14 | **export_keys** | `→ Vec<u8>` | `exportKeys() → Uint8Array` (`@xdevplatform/chat-xdk-server` only) | `export_keys() → bytearray` | `ExportKeys() ([]byte, error)` | `exportKeys()` → `byte[]` | `ExportKeys()` → `byte[]` |
+| 15 | **import_keys** | `import_keys(&ImportKeysParams)` | `importKeys(params: ImportKeysParams)` (`@xdevplatform/chat-xdk-server` only) | `import_keys(ImportKeysParams)` | `ImportKeys(ImportKeysParams) error` | `importKeys(ImportKeysParams)` | `ImportKeys(ImportKeysParams)` |
 | 16 | **set_identity** | `set_identity(&SetIdentityParams) → Result<()>` | `setIdentity(params: SetIdentityParams)` | `set_identity(SetIdentityParams)` | `SetIdentity(SetIdentityParams) error` | `setIdentity(SetIdentityParams)` | `SetIdentity(SetIdentityParams)` |
 
 `export_keys` returns **unencrypted** private key material — handle with
@@ -123,6 +124,16 @@ care, and zero the bytes once stored (Python returns a mutable `bytearray`
 so callers can zero it). It requires a loaded identity key (the signing key
 is optional, giving a 32-byte export) and fails with an invalid-state error
 when none is loaded, in every binding.
+
+JS ships two npm packages over one WebAssembly engine. The chat
+`@xdevplatform/chat-xdk` creates, the one browsers load, has no
+`importKeys` or `exportKeys`: it keeps its keys in Juicebox (`setup`,
+`unlock`), and no method returns them, so no script in a page can ask it
+for them. `@xdevplatform/chat-xdk-server`, for Node servers that keep keys
+in their own secret store, exports the same API, and its `createChat`
+returns a `ServerChat`, a `ChatWithJuicebox` with `importKeys` and
+`exportKeys`. It resolves only under the `node` export condition, so a
+bundler building for browsers can't include it.
 
 Both calls take a params object, as every call with more than one input
 does. `ImportKeysParams` holds the key blob (`keys`) and an optional
@@ -1987,6 +1998,25 @@ const encryptedPhoto = chat.encryptFile({
 });
 // … upload encryptedPhoto (POST /2/chat/media/upload/{session_id}/append, then
 // /finalize), then send photoMessage (POST /2/chat/conversations/{id}/messages) …
+```
+
+A Node server that keeps its keys in its own secret store, such as a webhook
+handler, uses `@xdevplatform/chat-xdk-server`: export the keys once, then
+load them in each process with no Juicebox call. Everything else is as
+above:
+
+```typescript
+import { createChat } from '@xdevplatform/chat-xdk-server';
+
+// Once: from a chat that holds the keys (unlocked, or generated and registered)
+const keys = provisioned.exportKeys();
+await secretStore.put("chat-keys", keys);
+keys.fill(0);
+
+// Each process (a Lambda cold start, a worker)
+const chat = await createChat();
+chat.importKeys({ keys: await secretStore.get("chat-keys"), signingKeyVersion: mySigningKeyVersion });
+chat.setIdentity({ userId: myUserId, signingKeyVersion: mySigningKeyVersion });
 ```
 
 ### Python

@@ -290,7 +290,7 @@ pub fn init() {
 ///
 /// Provides all cryptographic operations: key generation, encrypt/decrypt,
 /// sign/verify. Juicebox key-storage lifecycle (setup/unlock/delete/changePin)
-/// is handled by the JS wrapper in `index.js`, which calls `exportKeys()` /
+/// is handled by the JS wrapper in `js/chat.js`, which calls `exportKeys()` /
 /// `importKeys()` to shuttle raw key bytes across the boundary.
 #[wasm_bindgen]
 pub struct Chat {

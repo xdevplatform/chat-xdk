@@ -1,6 +1,11 @@
 /**
  * X Chat SDK - JavaScript Wrapper
  *
+ * The implementation behind both npm packages' entry points: `index.js` here
+ * (@xdevplatform/chat-xdk) re-exports its API, and the server package's
+ * `index.js` (@xdevplatform/chat-xdk-server) builds its own chats with
+ * `newChat`. Neither package exports `newChat`.
+ *
  * Juicebox key-storage lifecycle is handled entirely in this JS layer.
  * The Rust WASM `Chat` is a pure crypto engine that never touches
  * globalThis or module-level singletons.
@@ -210,6 +215,9 @@ function keepKeyOutOfJson(prepared) {
  * JS wrapper that combines the Rust WASM crypto engine with per-instance
  * Juicebox key storage.  Every crypto method is forwarded transparently;
  * setup/unlock/delete/changePin/updateConfig are handled in pure JS.
+ *
+ * No method returns the private keys: setup and changePin hand them from the
+ * engine to Juicebox, and unlock hands them back, through `#inner` alone.
  */
 export class ChatWithJuicebox {
   /** @type {import('./pkg/chat_xdk_wasm.js').Chat} */
@@ -384,8 +392,6 @@ export class ChatWithJuicebox {
   }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
-  importKeys(params) { return this.#inner.importKeys(params); }
-  exportKeys() { return this.#inner.exportKeys(); }
   getPublicKeys() { return this.#inner.getPublicKeys(); }
   getPublicKeyFingerprint() { return this.#inner.getPublicKeyFingerprint(); }
   isUnlocked() { return this.#inner.isUnlocked(); }
@@ -630,11 +636,20 @@ async function readCappedBody(response, maxBytes) {
  * });
  * await chat.unlock("2580");
  *
- * // Keys kept elsewhere: no Juicebox, so no juicebox-sdk either
+ * // No Juicebox, so no juicebox-sdk either: the chat runs the calls that
+ * // need no private key, and keeps the keys generateKeypairs() makes for
+ * // as long as it lives
  * const chat = await createChat();
- * chat.importKeys({ keys, signingKeyVersion });
  */
 export async function createChat(options = {}) {
+  return newChat(ChatWithJuicebox, options);
+}
+
+/**
+ * Create a chat of `ChatClass`, `ChatWithJuicebox` or a subclass that takes
+ * the same constructor arguments, from `createChat`'s options.
+ */
+export async function newChat(ChatClass, options = {}) {
   const { juiceboxConfig, getAuthToken } = options;
 
   if (
@@ -661,7 +676,7 @@ export async function createChat(options = {}) {
     numGuesses = maxGuessCount;
   }
 
-  return new ChatWithJuicebox(
+  return new ChatClass(
     new wasmModule.Chat(),
     juiceboxClient,
     numGuesses,

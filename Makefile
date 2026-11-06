@@ -1,7 +1,7 @@
 # chat-xdk Makefile
 # Run `make help` for available targets
 
-.PHONY: bindings-gate all build release test test-verbose check clean codegen fmt fmt-check lint doc help test-sdks test-js test-py go-lib prebuilt prebuilt-linux-amd64 prebuilt-linux-amd64-musl prebuilt-all test-go dotnet-build dotnet-test jvm-test versions set-version wheel wheel-dev wasm wasm-node wasm-bundler ci
+.PHONY: bindings-gate all build release test test-verbose check clean codegen fmt fmt-check lint doc help test-sdks test-js test-py go-lib prebuilt prebuilt-linux-amd64 prebuilt-linux-amd64-musl prebuilt-all test-go dotnet-build dotnet-test jvm-test versions set-version wheel wheel-dev wasm js-server wasm-node wasm-bundler ci
 
 # Detect host platform for prebuilt target
 HOST_OS   := $(shell go env GOOS 2>/dev/null)
@@ -36,10 +36,11 @@ test-sdks: test test-py test-js test-go
 test-py:
 	PYTHONPATH=crates/pyo3/python python3 -m unittest discover -s crates/pyo3/python/tests -v
 
-test-js:
+test-js: js-server
 	node crates/wasm/js/tests/sdk_vectors.test.mjs
 	node crates/wasm/js/tests/api.test.mjs
 	node crates/wasm/js/tests/wrapper.test.mjs
+	node crates/wasm/js-server/tests/server.test.mjs
 
 # Build Go static library.
 # On darwin, build with a single codegen unit so the archive is reproducible
@@ -210,6 +211,18 @@ wasm:
 	rm -rf crates/wasm/js/pkg
 	mkdir -p crates/wasm/js/pkg
 	cp crates/wasm/pkg/* crates/wasm/js/pkg/
+	@$(MAKE) --no-print-directory js-server
+
+# Stage the server npm package (crates/wasm/js-server) from crates/wasm/js:
+# the same wasm build, the wrapper module both entry points export, and that
+# module's declarations (js/index.d.ts, which declares what chat.js exports).
+# `make wasm` runs it; run it alone after editing chat.js or index.d.ts.
+js-server:
+	rm -rf crates/wasm/js-server/pkg
+	mkdir -p crates/wasm/js-server/pkg
+	cp crates/wasm/js/pkg/* crates/wasm/js-server/pkg/
+	cp crates/wasm/js/chat.js crates/wasm/js-server/chat.js
+	cp crates/wasm/js/index.d.ts crates/wasm/js-server/chat.d.ts
 
 # Build WebAssembly for Node.js
 wasm-node:
@@ -255,7 +268,8 @@ help:
 	@echo "  Language bindings:"
 	@echo "  make wheel        - Build Python wheel"
 	@echo "  make wheel-dev    - Install Python package locally"
-	@echo "  make wasm         - Build WebAssembly for web browsers"
+	@echo "  make wasm         - Build WebAssembly for web browsers (stages both npm packages)"
+	@echo "  make js-server    - Restage the server npm package from crates/wasm/js"
 	@echo "  make wasm-node    - Build WebAssembly for Node.js"
 	@echo "  make wasm-bundler - Build WebAssembly for bundlers (webpack)"
 	@echo "  make go-lib       - Build Go static library"

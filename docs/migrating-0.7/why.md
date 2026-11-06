@@ -230,8 +230,11 @@ network round trips. The JS binding runs the Juicebox client itself, but the
 SDK core still decides what a config means, which PINs a new registration
 accepts, how many guesses a registration allows (the config's
 `max_guess_count`), and how a failure reads, so every binding behaves the
-same. JS also loads keys with `importKeys` and saves them with `exportKeys`,
-as every binding does, without Juicebox:
+same. On a server, JS also loads keys with `importKeys` and saves them with
+`exportKeys`, as every binding does, without Juicebox, through
+`@xdevplatform/chat-xdk-server`. The chat `@xdevplatform/chat-xdk` creates,
+the one a browser loads, has neither call, so no script in a page can ask
+it for the keys:
 [Python](python.md#keys-stored-in-juicebox),
 [JavaScript](javascript.md#keys-stored-in-juicebox),
 [Go](go.md#keys-stored-in-juicebox),

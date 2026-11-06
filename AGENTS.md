@@ -62,10 +62,21 @@ When you add or change SDK behavior:
 5. Extend the parallel per-binding test suites so the new surface is covered
    everywhere (see §6).
 
+JS/WASM ships as two npm packages over one wasm build and one wrapper
+(`crates/wasm/js/chat.js`): `@xdevplatform/chat-xdk` (`crates/wasm/js`, for
+browsers and Node) and `@xdevplatform/chat-xdk-server` (`crates/wasm/js-server`,
+for Node servers). The browser package's chat **deliberately** has no
+`importKeys`/`exportKeys` and no method that returns private keys, so a script
+in the page has no call that hands them out; the server package's `ServerChat`
+adds those two. A new call goes into `chat.js`, so both packages get it. Never
+add key import/export, or anything else that returns private keys, to the
+browser package.
+
 ## 3. Clean API
 
 Keep the public surface small and uniform. The flow every binding exposes:
-key management (`import`/`export`, `setup`/`unlock`), conversation keys
+key management (`import`/`export`, in JS only from the server package, and
+`setup`/`unlock`), conversation keys
 (`prepareConversationKeyChange` / `decryptConversationKey`), `encryptMessage`/reply,
 the file calls (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`
 for a message's files, `encryptFileWithKey` / `decryptFileWithKey` for a file
@@ -243,7 +254,7 @@ params as `Invalid encryptMessage params: …` instead of the core message.
   `juicebox-systems/juicebox-sdk` as a sibling).
 - **One release version for every binding.** The canonical version is
   `[workspace.package] version` in the root `Cargo.toml`; `scripts/version.sh
-  set` stamps it into the npm/PyPI/NuGet/Maven manifests in lockstep, and the
+  set` stamps it into the npm (both packages)/PyPI/NuGet/Maven manifests in lockstep, and the
   release workflow publishes all registries (and the Go module tags) from that
   single value. Never bump or publish a binding out of step with the others.
 - Registry auth is OIDC trusted publishing wherever the registry supports it
@@ -254,7 +265,7 @@ params as `Invalid encryptMessage params: …` instead of the core message.
 
 ```
 crates/core/     chat-xdk-core: engine, crypto/, keys/, thrift/ (generated)
-crates/pyo3/     Python        crates/wasm/   WASM (+ js/ wrapper)
+crates/pyo3/     Python        crates/wasm/   WASM (+ js/ wrapper, js-server/ server package)
 crates/ffi/      C ABI (chat_xdk_ffi) under go/chatxdk, crates/dotnet/ and crates/jvm/
 docs/            API.md, ARCHITECTURE.md, CRYPTO.md
 examples/        clone-and-run demo bots (NOT shipped SDK code)

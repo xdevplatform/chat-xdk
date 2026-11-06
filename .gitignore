@@ -5,6 +5,11 @@ examples/config.yaml
 crates/wasm/js/node_modules/
 # Staged by `make wasm` from crates/wasm/pkg (build artifact, ships in the npm tarball)
 crates/wasm/js/pkg/
+# Staged by `make wasm` / `make js-server` from crates/wasm/js (ship in the server npm tarball)
+crates/wasm/js-server/node_modules/
+crates/wasm/js-server/pkg/
+crates/wasm/js-server/chat.js
+crates/wasm/js-server/chat.d.ts
 crates/pyo3/python/chat_xdk/*.dSYM
 crates/pyo3/python/chat_xdk/*.so
 crates/pyo3/python/chat_xdk/*.dylib

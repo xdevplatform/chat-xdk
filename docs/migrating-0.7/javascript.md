@@ -24,7 +24,7 @@ first call), `[runtime]` a change in behavior that nothing reports, and
 - [ ] `[compile]` [Put the PIN guess budget in the Juicebox config](#keys-stored-in-juicebox)
 - [ ] `[compile]` [Register keys with the public key only](#register-keys-with-the-public-key-only)
 - [ ] `[compile]` [Pass `{ userId, signingKeyVersion }` to `setIdentity`](#setidentity-takes-a-params-object)
-- [ ] `[new]` [Keep keys yourself with `importKeys` and `exportKeys`](#importkeys-and-exportkeys)
+- [ ] `[new]` [On a server, keep keys yourself with `@xdevplatform/chat-xdk-server`](#importkeys-and-exportkeys-on-a-server)
 - [ ] `[compile]` [Pass a params object to `decryptEvents` and read its `events`](#decryptevents-takes-a-params-object)
 - [ ] `[compile]` [Pass a params object to `decryptEvent`](#decryptevent-takes-a-params-object)
 - [ ] `[compile]` [Read `SendPayload` under the send request's field names and send `xdk_version`](#sendpayload-fields-take-the-send-requests-names)
@@ -92,7 +92,9 @@ code that handles a decrypted event; `logSkipped(eventB64, err)` for your
 code that logs an event it skips; and `storeConversationKey(conversationId,
 version, key)` for your code that stores a conversation key.
 `ChatXdkError`, `createChat` and functions such as `encryptedFileSize` and
-`bytesToBase64` import from `@xdevplatform/chat-xdk`.
+`bytesToBase64` import from `@xdevplatform/chat-xdk`; a snippet for a
+server that keeps its own keys imports `createChat` from
+`@xdevplatform/chat-xdk-server` and creates its own `chat`.
 
 The package returns camelCase objects, and the X API takes snake_case keys.
 The snippets write each request body's own keys in snake_case and pass the
@@ -126,6 +128,10 @@ Pin the package at 0.7.3 in `package.json`, then install it:
 ```sh
 npm install @xdevplatform/chat-xdk@0.7.3
 ```
+
+A Node server that keeps its keys in its own secret store installs
+`@xdevplatform/chat-xdk-server@0.7.3` instead (see [`importKeys` and
+`exportKeys` on a server](#importkeys-and-exportkeys-on-a-server)).
 
 It needs Node 18 or newer, or a browser bundler that loads WebAssembly.
 Every app that shares conversations with yours reads the formats 0.7.3 sends
@@ -333,18 +339,26 @@ chat.setIdentity(userId, signingKeyVersion);
 chat.setIdentity({ userId, signingKeyVersion });
 ```
 
-### `importKeys` and `exportKeys`
+### `importKeys` and `exportKeys` on a server
 
-Without `getAuthToken`, `createChat()` returns a chat that keeps its keys
-outside Juicebox and loads no juicebox-sdk: `importKeys` loads the keys
-`exportKeys` returned, as in every binding, with the signing-key version
-they were registered under. `exportKeys` returns the raw private keys, so
-store them only where private keys belong and zero the bytes once stored;
-it throws when no identity key is loaded (see [`exportKeys` throws without
-keys](#exportkeys-throws-without-keys)):
+A Node server that keeps its keys outside Juicebox, such as a webhook
+handler that loads them from its secret store each time it starts, imports
+`createChat` from `@xdevplatform/chat-xdk-server`. That package has the API
+of `@xdevplatform/chat-xdk`, and its chat, a `ServerChat`, adds
+`importKeys` and `exportKeys`, as in every other binding: `importKeys`
+loads the keys `exportKeys` returned, with the signing-key version they
+were registered under, and a chat created without `getAuthToken` loads no
+juicebox-sdk. `exportKeys` returns the raw private keys, so store them only
+where private keys belong and zero the bytes once stored; it throws when no
+identity key is loaded (see [`exportKeys` throws without
+keys](#exportkeys-throws-without-keys)). The chat `@xdevplatform/chat-xdk`
+creates has neither call, so no script in a page can ask it for the keys;
+never bundle the server package into a browser app:
 
 ```js
 // 0.7.3
+import { createChat } from "@xdevplatform/chat-xdk-server";
+
 const chat = await createChat();
 chat.importKeys({ keys: privateKeys, signingKeyVersion });
 ```
@@ -788,9 +802,10 @@ let crypto: ChatWithJuicebox;
 let encryptor: FileEncryptor;
 ```
 
-The typings also declare `ChatXdkError` with its `ChatXdkErrorKind`,
-`ImportKeysParams` for `importKeys`, and `DecryptedEvent` for each entry of
-a `decryptEvents` result.
+The typings also declare `ChatXdkError` with its `ChatXdkErrorKind`, and
+`DecryptedEvent` for each entry of a `decryptEvents` result.
+`@xdevplatform/chat-xdk-server`'s add `ServerChat` and `ImportKeysParams`
+for `importKeys`.
 
 ## 3. Runtime and behavior changes
 
@@ -1070,11 +1085,15 @@ for (const item of page.data) {
 
 ### `exportKeys` throws without keys
 
-`exportKeys` throws a `ChatXdkError` of kind `invalidState` when no identity
-key is loaded:
+`exportKeys`, on the chat `@xdevplatform/chat-xdk-server` creates, throws a
+`ChatXdkError` of kind `invalidState` when no identity key is loaded:
 
 ```js
 // 0.7.3
+import { createChat } from "@xdevplatform/chat-xdk-server";
+
+const chat = await createChat({ juiceboxConfig, getAuthToken });
+await chat.unlock(pin);
 const privateKeys = chat.hasIdentityKey() ? chat.exportKeys() : null;
 ```
 

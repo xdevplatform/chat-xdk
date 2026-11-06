@@ -1,7 +1,8 @@
 /**
  * Crypto core for the JavaScript/WASM chat-xdk example.
  *
- * A thin wrapper around the chat-xdk WASM binding. Everything that touches the
+ * A thin wrapper around the chat-xdk WASM binding's server package, whose
+ * chat imports and exports the bot's raw key blob. Everything that touches the
  * SDK lives here so it can be unit-tested directly (see
  * test/chat-core.test.mjs). The four core feature touchpoints are all here:
  *
@@ -19,7 +20,7 @@ import {
   bytesToBase64,
   createChat,
   encryptedFileSize,
-} from "../../../crates/wasm/js/index.js";
+} from "../../../crates/wasm/js-server/index.js";
 
 /** Concatenate Uint8Array chunks into one buffer. */
 function concatBytes(parts) {

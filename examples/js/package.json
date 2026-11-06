@@ -12,7 +12,8 @@
     "build:wasm": "cd ../.. && make wasm"
   },
   "dependencies": {
-    "@xdevplatform/chat-xdk": "file:../../crates/wasm/js"
+    "@xdevplatform/chat-xdk": "file:../../crates/wasm/js",
+    "@xdevplatform/chat-xdk-server": "file:../../crates/wasm/js-server"
   },
   "optionalDependencies": {
     "@xdevplatform/xdk": "^0.6.6"

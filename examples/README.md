@@ -38,7 +38,7 @@ local-blob path; port the Python flow if you need PIN storage elsewhere.
 | Language | Directory | Binding it imports | Toolchain |
 |----------|-----------|--------------------|-----------|
 | Python | [`python/`](python) | `chat_xdk` (PyO3) | Python 3.10+ |
-| JavaScript / WASM | [`js/`](js) | `@xdevplatform/chat-xdk` (WASM) | Node 18+ |
+| JavaScript / WASM | [`js/`](js) | `@xdevplatform/chat-xdk-server` (WASM) | Node 18+ |
 | Rust | [`rust/`](rust) | `chat-xdk-core` crate | Rust stable |
 | Go | [`go/`](go) | `github.com/xdevplatform/chat-xdk/go/chatxdk` (cgo) | Go 1.21+ |
 | .NET | [`dotnet/`](dotnet) | `ChatXdk` (P/Invoke) | .NET 8+ |
