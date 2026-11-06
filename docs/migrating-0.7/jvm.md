@@ -1,13 +1,13 @@
-# Migrating JVM code to chat-xdk 0.7.2
+# Migrating JVM code to chat-xdk 0.7.3
 
 This page moves Java and other JVM code written for `com.x:chatxdk` 0.5.x
-(0.5.0, 0.5.1 or 0.5.2) to 0.7.2. Work through it top to bottom: [Before
+(0.5.0, 0.5.1 or 0.5.2) to 0.7.3. Work through it top to bottom: [Before
 you start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.2 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.3 form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.2
+request, and [Verify](#5-verify) checks the result. [Why 0.7.3
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
 
@@ -15,9 +15,9 @@ other bindings' pages. [API.md](../API.md) documents every call.
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
-that nothing reports, and `[new]` a 0.7.2 call to adopt.
+that nothing reports, and `[new]` a 0.7.3 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.2](#install-072)
+- [ ] `[rollout]` [Install 0.7.3](#install-073)
 - [ ] `[rollout]` [Remove a native library you built for 0.5.x](#the-jar-bundles-the-linux-arm64-native-library)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
@@ -65,9 +65,9 @@ that nothing reports, and `[new]` a 0.7.2 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.2 code writes them, under `// 0.7.2`. A
-snippet with only a `// 0.7.2` half shows code 0.7.2 adds. CI compiles the
-0.7.2 half of every snippet on this page against 0.7.2 with `javac`
+under `// 0.5.x`, and then as 0.7.3 code writes them, under `// 0.7.3`. A
+snippet with only a `// 0.7.3` half shows code 0.7.3 adds. CI compiles the
+0.7.3 half of every snippet on this page against 0.7.3 with `javac`
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)), as
 the body of a method that declares `throws Exception`.
 
@@ -99,21 +99,21 @@ threw. The types import from `com.x.chatxdk`, `com.x.chatxdk.Types`,
 
 ## 0. Before you start
 
-### Install 0.7.2
+### Install 0.7.3
 
-Set the dependency to 0.7.2. With Maven:
+Set the dependency to 0.7.3. With Maven:
 
 ```xml
 <dependency>
   <groupId>com.x</groupId>
   <artifactId>chatxdk</artifactId>
-  <version>0.7.2</version>
+  <version>0.7.3</version>
 </dependency>
 ```
 
-With Gradle, `implementation("com.x:chatxdk:0.7.2")`. It needs Java 17 or
+With Gradle, `implementation("com.x:chatxdk:0.7.3")`. It needs Java 17 or
 newer. Every app that shares conversations with yours reads the formats
-0.7.2 sends only once it runs a 0.7 release too, so plan the rollout below
+0.7.3 sends only once it runs a 0.7 release too, so plan the rollout below
 before you deploy.
 
 ### The jar bundles the linux-arm64 native library
@@ -121,7 +121,7 @@ before you deploy.
 The jar bundles the native library for 64-bit ARM Linux (`linux-arm64`) as
 well, and on ARM64 Linux loads it ahead of any copy on `jna.library.path`.
 There's no code to change. If you built a library to run 0.5.x there,
-remove it: a 0.5.x build doesn't export the entry points 0.7.2 calls (see
+remove it: a 0.5.x build doesn't export the entry points 0.7.3 calls (see
 [C ABI](c-abi.md)). The native library is `chat_xdk_ffi`
 (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`, `chat_xdk_ffi.dll`), built
 from the `chat-xdk-ffi` crate: name one you build yourself for another
@@ -129,7 +129,7 @@ platform the same way.
 
 ### Upgrade readers first
 
-0.7.2 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.3 sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -145,13 +145,13 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.2 before:
+every app that reads your conversations to 0.7.3 before:
 
 - any of your senders can send v1, that is, before the X API turns
   `v1_send` on for them;
 - you pass a description to [`prepareGroupMembersChange`](#adding-members).
 
-0.7.2 reads both formats, including v1 reply previews, edits and files.
+0.7.3 reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `payload.signatureInfo.signatureVersion`, `"7"` for v0 and `"10"` for v1.
 
@@ -180,12 +180,12 @@ switch, or block it to keep them v0. There's no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.2 form and the section that
+Every 0.5.x name that changes, with its 0.7.3 form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.2 | Section |
+| 0.5.x | 0.7.3 | Section |
 |---|---|---|
 | `new Chat()`, then `chat.setup(pin, configJson)` and `chat.unlock(pin, configJson)` with a `String` PIN | `new Chat(configJson)`, then `chat.setup(pin)` and `chat.unlock(pin)` with a `byte[]` PIN | [Juicebox](#keys-stored-in-juicebox) |
 | `chat.changePin(String, String)` | `chat.changePin(byte[], byte[])` | [Juicebox](#keys-stored-in-juicebox) |
@@ -242,7 +242,7 @@ every PIN is a `byte[]`, so you can zero it once the call returns.
 Chat chat = new Chat();
 chat.unlock(new String(pin, StandardCharsets.UTF_8), juiceboxConfig);
 
-// 0.7.2
+// 0.7.3
 Chat chat = new Chat(juiceboxConfig);
 chat.unlockAsync(pin).join();
 Arrays.fill(pin, (byte) 0);
@@ -259,7 +259,7 @@ config fails](#an-empty-juicebox-config-fails)).
 
 `generateKeypairs` returns a `PublicKeyRegistrationPayload` that holds only
 `publicKey`. Send it as the only field of the
-`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.2 doesn't pick a
+`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.3 doesn't pick a
 signing-key version for new keys: call `setIdentity` with the
 `public_key_version` the request returns (see the next section). A signed
 call made without a version throws `Invalid state: signing_key_version is
@@ -274,7 +274,7 @@ JsonNode response = api.post("/2/users/" + userId + "/public_keys", Map.of(
         "generate_version", registration.generateVersion));
 chat.setIdentity(userId, response.path("data").path("public_key_version").asText());
 
-// 0.7.2
+// 0.7.3
 PublicKeyRegistrationPayload registration = chat.generateKeypairs();
 JsonNode response = api.post("/2/users/" + userId + "/public_keys", Map.of("public_key", registration.publicKey));
 chat.setIdentity(new SetIdentityParams(userId, response.path("data").path("public_key_version").asText()));
@@ -295,7 +295,7 @@ throws `ChatXdkException` when either value is invalid (see
 // 0.5.x
 chat.setIdentity(userId, signingKeyVersion);
 
-// 0.7.2
+// 0.7.3
 chat.setIdentity(new SetIdentityParams(userId, signingKeyVersion));
 ```
 
@@ -312,7 +312,7 @@ keys](#exportkeys-throws-without-keys) for a chat without keys).
 chat.importKeys(privateKeys);
 chat.importKeys(privateKeys, signingKeyVersion);
 
-// 0.7.2
+// 0.7.3
 chat.importKeys(new ImportKeysParams(privateKeys));
 chat.importKeys(new ImportKeysParams(privateKeys, signingKeyVersion));
 ```
@@ -331,7 +331,7 @@ params. The result holds the decrypted events, of every event type, in
 DecryptEventsResult result = chat.decryptEvents(events, signingKeys);
 for (DecryptedMessage decrypted : result.messages) handle(decrypted.event);
 
-// 0.7.2
+// 0.7.3
 DecryptEventsParams batch = new DecryptEventsParams(events);
 batch.signingKeys = signingKeys;
 DecryptEventsResult result = chat.decryptEvents(batch);
@@ -357,7 +357,7 @@ description re-encryptions](#decrypt-drops-a-removals-title-and-description-re-e
 JsonNode event = chat.decryptEvent(eventB64, keys, signingKeys);
 JsonNode fromBundle = chat.decryptEvent(eventB64, bundle, signingKeys);
 
-// 0.7.2
+// 0.7.3
 DecryptEventParams one = new DecryptEventParams(eventB64, keys);
 one.signingKeys = signingKeys;
 JsonNode event = chat.decryptEvent(one);
@@ -382,7 +382,7 @@ Map<String, String> body = Map.of(
         "encoded_message_create_event", payload.encryptedContent,
         "encoded_message_event_signature", payload.encodedEventSignature);
 
-// 0.7.2
+// 0.7.3
 Map<String, String> body = Map.of(
         "message_id", payload.messageId,
         "encoded_message_create_event", payload.encodedMessageCreateEvent,
@@ -426,7 +426,7 @@ signingKey.publicKey = signingPublicKey;
 signingKey.identityPublicKey = identityPublicKey;
 signingKey.identityPublicKeySignature = identityPublicKeySignature;
 
-// 0.7.2
+// 0.7.3
 EntityDescriptor mention = new EntityDescriptor(0, 5, "mention");
 UrlAttachmentImageDescriptor banner = new UrlAttachmentImageDescriptor(
         mediaHashKey, ChatXdkUtilities.encryptedFileSize(photo.length), "banner.jpg");
@@ -460,7 +460,7 @@ EncryptMessageParams params = new EncryptMessageParams(conversationId, "a photo"
 params.attachments = List.of(photoAttachment(mediaHashKey));
 SendPayload payload = chat.encryptMessage(params);
 
-// 0.7.2
+// 0.7.3
 JsonNode upload = api.post("/2/chat/media/upload/initialize", Map.of(
         "conversation_id", conversationId,
         "total_bytes", ChatXdkUtilities.encryptedFileSize(photo.length))).path("data");
@@ -513,7 +513,7 @@ signature: use `verified` from `decryptEvent` for that.
 // 0.5.x
 byte[] plaintext = chat.decryptStream(downloaded, keys.get(conversationKeyVersion));
 
-// 0.7.2
+// 0.7.3
 byte[] plaintext = chat.decryptFile(new DecryptFileParams(downloaded, fileEventB64, keys, fileHashKey));
 ```
 
@@ -539,7 +539,7 @@ file encrypted under the key one of kind `DECRYPTION`.
 byte[] encrypted = chat.encryptStream(data, conversationKey);
 byte[] plaintext = chat.decryptStream(downloaded, conversationKey);
 
-// 0.7.2
+// 0.7.3
 byte[] encrypted = chat.encryptFileWithKey(new EncryptFileWithKeyParams(data, conversationKey));
 byte[] plaintext = chat.decryptFileWithKey(new DecryptFileWithKeyParams(downloaded, conversationKey));
 ```
@@ -566,7 +566,7 @@ long size = ChatXdkUtilities.encryptedStreamSize(photo.length);
 StreamEncryptor encryptor = chat.streamEncryptor(conversationKey);
 StreamDecryptor decryptor = chat.streamDecryptor(keys.get(conversationKeyVersion));
 
-// 0.7.2
+// 0.7.3
 long size = ChatXdkUtilities.encryptedFileSize(photo.length);
 FileEncryptor encryptor = chat.fileEncryptor(new FileEncryptorParams(payload.eventB64, mediaHashKey));
 FileDecryptor decryptor = chat.fileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
@@ -597,7 +597,7 @@ for (ActionSignature sig : prepared.actionSignatures) {
                     "signing_public_key", signingPublicKey)));
 }
 
-// 0.7.2
+// 0.7.3
 List<ActionSignature> actionSignatures = prepared.actionSignatures;
 ```
 
@@ -617,7 +617,7 @@ input.userId = userId;
 input.publicKey = identityPublicKey;
 input.keyVersion = publicKeyVersion;
 
-// 0.7.2
+// 0.7.3
 PublicKeyInput input = new PublicKeyInput(userId, identityPublicKey, publicKeyVersion);
 ```
 
@@ -643,7 +643,7 @@ for (EncryptedKeyForRecipient key : prepared.participantKeys) {
             "public_key_version", key.publicKeyVersion));
 }
 
-// 0.7.2
+// 0.7.3
 List<ConversationParticipantKey> conversationParticipantKeys = prepared.conversationParticipantKeys;
 ```
 
@@ -659,7 +659,7 @@ into `ConversationParticipantKey`. Read them under those names:
 // 0.5.x
 String encrypted = keyChange.path("participant_keys").get(0).path("encrypted_key").asText();
 
-// 0.7.2
+// 0.7.3
 String encrypted = keyChange.path("conversation_participant_keys").get(0)
         .path("encrypted_conversation_key").asText();
 ```
@@ -678,7 +678,7 @@ ActionSignature deletion = chat.prepareMessageDelete(
         new MessageDeleteParams(conversationId, sequenceIds, false));
 String messageId = deletion.messageId;
 
-// 0.7.2
+// 0.7.3
 PreparedAction deletion = chat.prepareMessageDelete(
         new MessageDeleteParams(conversationId, sequenceIds, false));
 String messageId = deletion.actionSignatures.get(0).messageId;
@@ -695,7 +695,7 @@ events give it, and the name the encrypt params serialize to:
 String messageVersion = message.path("key_version").asText();
 String keyChangeVersion = keyChange.path("key_version").asText();
 
-// 0.7.2
+// 0.7.3
 String messageVersion = message.path("conversation_key_version").asText();
 String keyChangeVersion = keyChange.path("conversation_key_version").asText();
 ```
@@ -712,7 +712,7 @@ carries the signed message id of the message it edits as
 `target_message_id`, absent for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`.
-Don't keep `target_message_id`: in 0.7.2 it names a different value, and
+Don't keep `target_message_id`: in 0.7.3 it names a different value, and
 reading it from a `JsonNode` throws no error** (see [`target_message_id`
 holds a different value](#target_message_id-holds-a-different-value)).
 
@@ -725,7 +725,7 @@ if (content.path("content_type").asText().equals("Edit")) {
 JsonNode deletedSequenceIds = deleted.path("message_ids");
 String seenUntil = receipt.path("seen_until_id").asText();
 
-// 0.7.2
+// 0.7.3
 JsonNode content = message.path("content");
 if (content.path("content_type").asText().equals("Edit")) {
     showEdit(content.path("target_message_sequence_id").asText(), content.path("updated_text").asText());
@@ -759,7 +759,7 @@ than by message:
 // 0.5.x
 boolean invalidInput = !e.getMessage().startsWith("Invalid state:");
 
-// 0.7.2
+// 0.7.3
 boolean invalidInput = e.getKind() == ChatXdkException.Kind.INVALID_INPUT;
 showGuessesLeft(e.getGuessesRemaining());
 ```
@@ -811,7 +811,7 @@ throws `ChatXdkException` naming the field, such as `Invalid sender_id
 EncryptReplyParams reply = new EncryptReplyParams(conversationId, "pong", eventB64);
 reply.replyToSenderId = 4201L;
 
-// 0.7.2
+// 0.7.3
 EncryptReplyParams reply = new EncryptReplyParams(conversationId, "pong", eventB64);
 reply.replyToSenderId = "4201";
 ```
@@ -857,7 +857,7 @@ Count an entity's offsets in bytes of UTF-8 when the text holds characters
 outside ASCII:
 
 ```java
-// 0.7.2
+// 0.7.3
 String text = "café @bob";
 int start = text.substring(0, text.indexOf("@bob")).getBytes(StandardCharsets.UTF_8).length;
 int end = start + "@bob".getBytes(StandardCharsets.UTF_8).length;
@@ -876,7 +876,7 @@ included, before you decrypt. It's `null` until a key change verifies: a key
 change the SDK can't verify still adds its key to
 `result.conversationKeys.keys`, for decrypting, but never becomes the
 version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.2 can return `null`: fetch the missing signing keys or the
+0.7.3 can return `null`: fetch the missing signing keys or the
 conversation's key-change events and decrypt again, rather than encrypting
 under the highest key in `keys`:
 
@@ -885,7 +885,7 @@ under the highest key in `keys`:
 DecryptEventsResult result = chat.decryptEvents(events, signingKeys);
 String version = result.conversationKeys.latestVersion;
 
-// 0.7.2
+// 0.7.3
 chat.setSigningKeys(signingKeys);
 DecryptEventsResult result = chat.decryptEvents(new DecryptEventsParams(events));
 String version = result.conversationKeys.latestVersion;
@@ -901,7 +901,7 @@ if (version == null) {
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.2 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.3 that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** Decrypted events are `JsonNode`s, so code that keeps
 reading `target_message_id` compiles and throws no error: it gets the wrong
@@ -953,7 +953,7 @@ the rest:
 // 0.5.x
 String saved = new ObjectMapper().writeValueAsString(prepared);
 
-// 0.7.2
+// 0.7.3
 storeConversationKey(prepared.conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 String saved = new ObjectMapper().writeValueAsString(prepared);
 ```
@@ -971,7 +971,7 @@ identity key. Sign only your own application data with `sign`; the SDK
 signs events itself. Any other data signs as in 0.5.x:
 
 ```java
-// 0.7.2
+// 0.7.3
 byte[] signature;
 try {
     signature = chat.sign(data);
@@ -1006,7 +1006,7 @@ for (DecryptedMessage decrypted : result.messages) {
     }
 }
 
-// 0.7.2
+// 0.7.3
 DecryptEventsResult result = chat.decryptEvents(new DecryptEventsParams(events));
 for (DecryptedEvent decrypted : result.events) {
     JsonNode change = decrypted.event.path("change");
@@ -1021,7 +1021,7 @@ A loop over single events catches the exception, as it catches an
 unverified event's, and moves on to the next event:
 
 ```java
-// 0.7.2
+// 0.7.3
 for (JsonNode item : page.path("data")) {
     String eventB64 = item.path("encoded_event").asText();
     JsonNode event;
@@ -1045,7 +1045,7 @@ identity key is loaded, where 0.5.x returned `null`; check
 // 0.5.x
 byte[] exported = chat.exportKeys();
 
-// 0.7.2
+// 0.7.3
 byte[] exported = chat.hasIdentityKey() ? chat.exportKeys() : null;
 ```
 
@@ -1123,7 +1123,7 @@ api.post("/2/chat/conversations/" + pathId + "/messages/delete", Map.of(
                         "public_key_version", deletion.publicKeyVersion,
                         "signing_public_key", signingPublicKey)))));
 
-// 0.7.2
+// 0.7.3
 PreparedAction deletion = chat.prepareMessageDelete(new MessageDeleteParams(conversationId, sequenceIds, true));
 api.post("/2/chat/conversations/" + pathId + "/messages/delete", Map.of(
         "sequence_ids", sequenceIds,
@@ -1148,7 +1148,7 @@ receipt, which recipients drop.
 // 0.5.x
 api.post("/2/chat/conversations/" + pathId + "/read", Map.of());
 
-// 0.7.2
+// 0.7.3
 PreparedAction receipt = chat.prepareMarkConversationRead(
         new MarkConversationReadParams(conversationId, seenUntilSequenceId));
 api.post("/2/chat/conversations/" + pathId + "/read",
@@ -1188,7 +1188,7 @@ create.avatarUrl = avatarUrl;
 PreparedConversationChange prepared = chat.prepareGroupCreate(create);
 Map<String, Object> body = Map.of("group_name", title, "group_avatar_url", avatarUrl);
 
-// 0.7.2
+// 0.7.3
 GroupCreateParams create = new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds);
 create.title = title;
 PreparedConversationChange prepared = chat.prepareGroupCreate(create);
@@ -1224,7 +1224,7 @@ if (change.path("change_type").asText().equals("Created") && change.hasNonNull("
     showTitle(chat.decrypt(change.path("title").asText(), keys.get(conversationKeyVersion)));
 }
 
-// 0.7.2
+// 0.7.3
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("Created") && change.hasNonNull("title")) {
     GroupText groupTitle = new ObjectMapper().treeToValue(change.path("title"), GroupText.class);
@@ -1255,7 +1255,7 @@ GroupMembersChangeParams add = new GroupMembersChangeParams(
 add.currentTitle = title;
 PreparedConversationChange prepared = chat.prepareGroupMembersChange(add);
 
-// 0.7.2
+// 0.7.3
 GroupMembersChangeParams add = new GroupMembersChangeParams(
         publicKeys, conversationId, newMemberIds, memberIds, adminIds, List.of());
 add.currentTitle = title;
@@ -1273,7 +1273,7 @@ storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.c
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.2, leave the description out, so the add signs at
+your groups runs 0.7.3, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1322,7 +1322,7 @@ first](#upgrade-readers-first)).
 // 0.5.x
 api.post("/2/chat/conversations/" + pathId + "/members/remove", Map.of("user_ids", userIds));
 
-// 0.7.2
+// 0.7.3
 GroupMembersRemoveParams removal = new GroupMembersRemoveParams(remainingPublicKeys, conversationId, userIds);
 removal.title = title;
 removal.description = description;
@@ -1345,7 +1345,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```java
-// 0.7.2
+// 0.7.3
 storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 EncryptMessageParams next = new EncryptMessageParams(conversationId, "hello");
 next.conversationKey = prepared.conversationKey;
@@ -1366,7 +1366,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```java
-// 0.7.2
+// 0.7.3
 DecryptEventsResult result = chat.decryptEvents(new DecryptEventsParams(events));
 for (DecryptedEvent decrypted : result.events) {
     JsonNode change = decrypted.event.path("change");
@@ -1390,7 +1390,7 @@ id:
 // 0.5.x
 api.post("/2/chat/conversations/" + pathId + "/members/remove", Map.of("user_ids", List.of(myUserId)));
 
-// 0.7.2
+// 0.7.3
 GroupLeaveParams leave = new GroupLeaveParams(conversationId);
 leave.promoteAdminId = promoteAdminId;
 PreparedAction left = chat.prepareGroupLeave(leave);
@@ -1417,7 +1417,7 @@ api.put("/2/chat/conversations/" + pathId, Map.of(
         "conversation_key_version", conversationKeyVersion,
         "modified_fields", List.of("group_name")));
 
-// 0.7.2
+// 0.7.3
 PreparedGroupMetadataChange prepared = chat.prepareGroupTitleChange(
         new GroupTitleChangeParams(conversationId, title));
 api.put("/2/chat/conversations/" + pathId, Map.of(
@@ -1443,7 +1443,7 @@ if (change.path("change_type").asText().equals("TitleChanged")) {
     showTitle(chat.decrypt(change.path("new_title").asText(), keys.get(conversationKeyVersion)));
 }
 
-// 0.7.2
+// 0.7.3
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("TitleChanged")) {
     GroupText newTitle = new ObjectMapper().treeToValue(change.path("new_title"), GroupText.class);
@@ -1464,7 +1464,7 @@ api.put("/2/chat/conversations/" + pathId, Map.of(
         "conversation_key_version", conversationKeyVersion,
         "modified_fields", List.of("group_description")));
 
-// 0.7.2
+// 0.7.3
 PreparedGroupMetadataChange prepared = chat.prepareGroupDescriptionChange(
         new GroupDescriptionChangeParams(conversationId, description));
 api.put("/2/chat/conversations/" + pathId, Map.of(
@@ -1481,7 +1481,7 @@ empty description. A removal's re-encrypted description never arrives as
 one:
 
 ```java
-// 0.7.2
+// 0.7.3
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("DescriptionChanged")) {
     GroupText newDescription =
@@ -1510,7 +1510,7 @@ api.put("/2/chat/conversations/" + pathId, Map.of(
         "conversation_key_version", conversationKeyVersion,
         "modified_fields", List.of("group_avatar_url")));
 
-// 0.7.2
+// 0.7.3
 byte[] encrypted = chat.encryptFileWithKey(
         new EncryptFileWithKeyParams(photo, keys.get(conversationKeyVersion)));
 PreparedAction prepared = chat.prepareGroupAvatarChange(
@@ -1529,7 +1529,7 @@ received `AvatarChanged` change holds `new_avatar_url` as sent and its
 the avatar holds an empty `new_avatar_url`.
 
 ```java
-// 0.7.2
+// 0.7.3
 JsonNode change = groupChange.path("change");
 if (change.path("change_type").asText().equals("AvatarChanged") && change.hasNonNull("conversation_key_version")) {
     String version = change.get("conversation_key_version").asText();
@@ -1553,7 +1553,7 @@ verified `SettingsChange` events.
 // 0.5.x
 api.post("/2/chat/conversations/" + pathId + "/admins", Map.of("user_ids", userIds));
 
-// 0.7.2
+// 0.7.3
 PreparedAction added = chat.prepareGroupAdminsAdd(new GroupAdminsAddParams(conversationId, userIds));
 api.post("/2/chat/conversations/" + pathId + "/admins", Map.of(
         "user_ids", userIds, "action_signatures", added.actionSignatures));
@@ -1568,7 +1568,7 @@ as `validity_expiry_timestamp_msec`, and only with the same value the params
 signed:
 
 ```java
-// 0.7.2
+// 0.7.3
 GroupInviteEnableParams enable = new GroupInviteEnableParams(conversationId, inviteUrl);
 enable.expiresAtMsec = expiresAtMsec;
 PreparedAction invite = chat.prepareGroupInviteEnable(enable);
@@ -1585,7 +1585,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```java
-// 0.7.2
+// 0.7.3
 PreparedAction request = chat.prepareGroupJoinRequest(new GroupJoinRequestParams(conversationId));
 api.post("/2/chat/conversations/" + pathId + "/join_requests", Map.of(
         "token", inviteToken, "action_signatures", request.actionSignatures));
@@ -1597,7 +1597,7 @@ api.post("/2/chat/conversations/" + pathId + "/join_requests/reject", Map.of(
 A TTL change signs `ttlMsec` only; a negative one is rejected:
 
 ```java
-// 0.7.2
+// 0.7.3
 PreparedAction ttl = chat.prepareMessageTtlChange(new MessageTtlChangeParams(conversationId, ttlMsec));
 api.put("/2/chat/conversations/" + pathId + "/message_ttl", Map.of(
         "message_ttl_ms", Long.toString(ttlMsec), "action_signatures", ttl.actionSignatures));
@@ -1612,7 +1612,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```java
-// 0.7.2
+// 0.7.3
 PreparedAction capture = chat.prepareScreenCapture(
         new ScreenCaptureParams(conversationId, ScreenCaptureChange.BlockingEnabled));
 api.put("/2/chat/conversations/" + pathId + "/screen_capture", Map.of(
@@ -1652,7 +1652,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `setRejectUnverified` on, the default, so the signature has to verify:
 
 ```java
-// 0.7.2
+// 0.7.3
 try (Chat alice = new Chat(); Chat bob = new Chat()) {
     PublicKeyRegistration aliceKeys = alice.generateKeypairs().publicKey;
     PublicKeyRegistration bobKeys = bob.generateKeypairs().publicKey;

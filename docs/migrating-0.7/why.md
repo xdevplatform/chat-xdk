@@ -1,13 +1,13 @@
-# Why 0.7.2 changes
+# Why 0.7.3 changes
 
-This page explains why each change from 0.5.x to chat-xdk 0.7.2 was made,
+This page explains why each change from 0.5.x to chat-xdk 0.7.3 was made,
 and links to the lines to change in each binding's guide. The
 [index](README.md) lists the guides, and the [CHANGELOG](../../CHANGELOG.md)
 lists every change.
 
 ## Sends can use per-message keys
 
-0.7.2 sends each message, reply, reaction and edit in one of two formats.
+0.7.3 sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends: contents encrypted under the conversation key,
 signed at signature version 7. v1 encrypts each message under its own
 message key, derived with HKDF-SHA256 from the conversation key, the sender
@@ -24,13 +24,13 @@ X clients' v1 sends carry: its encoded signature lists the signing keys the
 message relies on, by user id and key version, its sender's and, for a
 reply, those of the quoted message's sender and of its edit's, and a
 reaction asks for a notification only in a one-to-one conversation, a
-reaction removal or an edit never. 0.7.2 reads both formats.
+reaction removal or an edit never. 0.7.3 reads both formats.
 
 ## v0 is the default, and the X API's `v1_send` switch turns on v1
 
 0.5.x decrypts message contents with the conversation key and doesn't know
 signature version 10, so it rejects every v1 send as a signature
-verification failure. 0.7.2 therefore sends v0, which every reader opens,
+verification failure. 0.7.3 therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
 chat that can't read the switch keeps sending v0. The Rust crate and the C
@@ -103,7 +103,7 @@ v1 message keys from the sender's. Recipients look keys up by the key
 version as the event carries it, while the signatures of messages and key
 changes cover its integer value, so `01` and `1` sign alike but name
 different keys. Any other spelling yields a send no recipient can verify or
-decrypt, so 0.7.2 checks every user id and key version, in both formats, and
+decrypt, so 0.7.3 checks every user id and key version, in both formats, and
 fails with an error naming the field:
 [Rust](rust.md#user-ids-are-strings-of-digits),
 [Python](python.md#user-ids-are-strings-of-digits),
@@ -370,7 +370,7 @@ those of the quoted text, and its entities are exactly the quoted message's,
 or its edit's. 0.5.x accepted any start of the quoted text and entities
 among the quoted message's, so it showed previews as valid that X clients
 mark invalid, such as one that quotes a message's first word as all of it.
-0.7.2 checks a preview as X clients do, and the previews it builds pass that
+0.7.3 checks a preview as X clients do, and the previews it builds pass that
 check. X clients also check a v1 reply against the message it names, so each
 guide builds replies from the event they quote, and a reply built from the
 explicit preview fields names the quoted message by its `message_id`, as
@@ -396,7 +396,7 @@ signature version and a group create's type, 10 covers
 version to group member removals. Every version signs the key version of a
 message or key change as an integer, a message's as `null` when it isn't
 one, and a removed group title, description or avatar as `null`, as X
-clients sign them. 0.7.2 rebuilds each payload in the layout of the version
+clients sign them. 0.7.3 rebuilds each payload in the layout of the version
 its signature carries, so events signed at 8 through 11 verify, including
 the events it signs at 10 while it sends v1 and the member adds with a
 description it signs at 8. Versions above 11 are rejected, since their
@@ -616,6 +616,6 @@ events on its own path:
   ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
-  export the entry points 0.7.2 calls
+  export the entry points 0.7.3 calls
   ([JVM](jvm.md#the-jar-bundles-the-linux-arm64-native-library),
   [.NET](dotnet.md#the-package-bundles-the-linux-arm64-native-library)).
