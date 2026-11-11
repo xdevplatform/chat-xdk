@@ -17,45 +17,67 @@ struct Fixture {
     signing_keys: Vec<SigningKeyEntry>,
 }
 
-/// Same fixed key material as `tests/fixtures/sdk_vectors.json` (scalars 1/2,
-/// conversation key ending in 3) so failures reproduce deterministically.
+impl Fixture {
+    fn params(&self, event_b64: impl Into<String>) -> DecryptEventParams {
+        DecryptEventParams::new(event_b64, self.conversation_keys.clone())
+            .with_signing_keys(self.signing_keys.clone())
+    }
+}
+
+/// The keys, conversation key and signing-key entry of
+/// `tests/fixtures/sdk_vectors.json`, so failures reproduce deterministically
+/// and the fixture's events decrypt and verify.
 fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
-        let mut private_concat = [0u8; 64];
-        private_concat[31] = 1;
-        private_concat[63] = 2;
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../tests/fixtures/sdk_vectors.json"))
+                .expect("sdk_vectors.json");
+        let field = |name: &str| {
+            vectors[name]
+                .as_str()
+                .unwrap_or_else(|| panic!("sdk_vectors.json has no {name}"))
+        };
+        let bytes = |name: &str| {
+            B64.decode(field(name))
+                .unwrap_or_else(|_| panic!("sdk_vectors.json {name} is not base64"))
+        };
+
         let core = ChatCore::new();
         core.import_keys(
-            &ImportKeysParams::new(private_concat.to_vec()).with_signing_key_version("1"),
+            &ImportKeysParams::new(bytes("private_keys_concat_b64"))
+                .with_signing_key_version(field("event_recipient_key_version")),
         )
         .expect("import keys");
 
-        let mut ckey_bytes = vec![0u8; 32];
-        ckey_bytes[31] = 3;
         let mut conversation_keys = HashMap::new();
         conversation_keys.insert(
-            "1001".to_string(),
-            XChatConversationKey::from_bytes(ckey_bytes).expect("valid key"),
+            field("event_conversation_key_version").to_string(),
+            XChatConversationKey::from_bytes(bytes("conversation_key_b64")).expect("valid key"),
         );
 
-        let pubkeys = core.get_public_keys().expect("public keys");
-        // Identity binding: the signing key signs the identity key's wire bytes.
-        let identity_bytes = B64.decode(&pubkeys.identity).expect("identity b64");
-        let binding = core.sign(&identity_bytes).expect("binding signature");
+        // `ChatCore::sign` refuses to sign a public key, so the signing key's
+        // binding over the identity key is the fixture's.
         let signing_keys = vec![SigningKeyEntry::new(
-            "1111",
-            "1",
-            &pubkeys.signing,
-            &pubkeys.identity,
-            B64.encode(binding),
+            field("event_sender_id"),
+            field("event_signing_key_version"),
+            field("signing_public_b64"),
+            field("identity_public_b64"),
+            field("identity_public_key_signature_b64"),
         )];
 
-        Fixture {
+        let fixture = Fixture {
             core,
             conversation_keys,
             signing_keys,
-        }
+        };
+        // Keys that no longer open the fixture's own message would leave every
+        // input on the error paths: fail here instead.
+        fixture
+            .core
+            .decrypt_event(&fixture.params(field("event_message_b64")))
+            .expect("the fixture message decrypts and verifies");
+        fixture
     })
 }
 
@@ -63,17 +85,10 @@ fuzz_target!(|data: &[u8]| {
     let f = fixture();
 
     // Well-formed base64 over arbitrary bytes drives the parse + crypto path …
-    let encoded = B64.encode(data);
-    let _ = f.core.decrypt_event(
-        &DecryptEventParams::new(encoded, f.conversation_keys.clone())
-            .with_signing_keys(f.signing_keys.clone()),
-    );
+    let _ = f.core.decrypt_event(&f.params(B64.encode(data)));
 
     // … and the raw input, when it is a string, drives the base64 error path.
     if let Ok(s) = std::str::from_utf8(data) {
-        let _ = f.core.decrypt_event(
-            &DecryptEventParams::new(s, f.conversation_keys.clone())
-                .with_signing_keys(f.signing_keys.clone()),
-        );
+        let _ = f.core.decrypt_event(&f.params(s));
     }
 });

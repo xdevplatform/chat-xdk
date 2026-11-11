@@ -16,6 +16,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 base64 = "0.22"
+serde_json = "1"
 
 [dependencies.chat-xdk-core]
 path = ".."
