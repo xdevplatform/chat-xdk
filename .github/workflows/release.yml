@@ -399,6 +399,10 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
             rid: linux-x64
             lib: libchat_xdk_ffi.so
+          - runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+            rid: linux-musl-x64
+            lib: libchat_xdk_ffi.so
           - runs_on: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             rid: linux-arm64
@@ -427,7 +431,7 @@ jobs:
           targets: ${{ matrix.rust_target }}
       - name: Install Linux build tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        run: sudo apt-get update && sudo apt-get install -y build-essential musl-tools
       - name: Build cdylib (chat-xdk-ffi)
         run: cargo build -p chat-xdk-ffi --release --target ${{ matrix.rust_target }}
       - name: Upload native library
@@ -463,7 +467,7 @@ jobs:
         run: |
           set -euo pipefail
           base=crates/dotnet/dotnet/ChatXdk/runtimes
-          for rid in osx-arm64 osx-x64 linux-x64 linux-arm64 win-x64; do
+          for rid in osx-arm64 osx-x64 linux-x64 linux-arm64 linux-musl-x64 win-x64; do
             mkdir -p "$base/$rid/native"
             cp artifacts/dotnet-native-$rid/* "$base/$rid/native/"
           done

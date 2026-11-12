@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- .NET: build and bundle the `linux-musl-x64` native library in the NuGet package, enabling deployment on Alpine Linux and other musl-based .NET runtimes (#21).
+
 ## [0.7.3] - 2026-11-05
 
 ### Security
