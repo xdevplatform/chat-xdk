@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import unittest
@@ -374,6 +375,91 @@ class TestFeatureSwitches(unittest.TestCase):
         finally:
             for server in servers:
                 server.close()
+
+    def test_the_read_goes_through_the_proxy_the_environment_names(self):
+        from features_support import PROXY_ONLY_HOST, RecordingProxy
+
+        proxy = RecordingProxy({PROXY_ONLY_HOST: self.server.port})
+        self.addCleanup(proxy.close)
+        url = "http://%s%s" % (PROXY_ONLY_HOST, self.server.path)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            print(wait_for(lambda: send(chat) == "10", float(sys.argv[2])))
+            """
+        self.assertEqual(self._run(script, url, "1.0"), "False", "no proxy, no route to the endpoint")
+        self.assertEqual(proxy.requests, [])
+        for variable in ("HTTP_PROXY", "http_proxy", "ALL_PROXY"):
+            with self.subTest(variable=variable):
+                del proxy.requests[:], proxy.headers[:], self.server.headers[:]
+                proxied = {variable: "http://user:p%40ss@" + proxy.address}
+                self.assertEqual(self._run(script, url, "5.0", env=proxied), "True")
+                self.assertEqual(proxy.requests, ["GET %s HTTP/1.1" % url])
+                credentials = base64.b64encode(b"user:p@ss").decode()
+                self.assertEqual(proxy.headers[0].get("proxy-authorization"), "Basic " + credentials)
+                names = {name.lower() for name in self.server.headers[0]}
+                self.assertFalse({"authorization", "proxy-authorization", "cookie"} & names, names)
+
+    def test_no_proxy_exempts_the_endpoint(self):
+        from features_support import RecordingProxy
+
+        proxy = RecordingProxy()
+        self.addCleanup(proxy.close)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            print(wait_for(lambda: send(chat) == "10", float(sys.argv[2])))
+            """
+        exempt = {"HTTP_PROXY": proxy.url, "NO_PROXY": "example.com,127.0.0.1"}
+        self.assertEqual(self._run(script, self.server.url, "5.0", env=exempt), "True")
+        self.assertEqual(proxy.requests, [], "the read connects directly")
+        self.assertEqual(self._run(script, self.server.url, "1.0", env={"HTTP_PROXY": proxy.url}), "False")
+        self.assertEqual(
+            set(proxy.requests),
+            {"GET %s HTTP/1.1" % self.server.url},
+            "without the exemption each attempt asks the proxy, which has no route",
+        )
+
+    def test_an_https_read_tunnels_through_the_proxy(self):
+        from features_support import PROXY_ONLY_HOST, FeatureServer, RecordingProxy, self_signed_certificate
+
+        with tempfile.TemporaryDirectory() as directory:
+            tls = self_signed_certificate(directory, PROXY_ONLY_HOST)
+            if tls is None:
+                self.skipTest("the openssl command can't make a certificate here")
+            server = FeatureServer(tls=tls)
+            self.addCleanup(server.close)
+            proxy = RecordingProxy({PROXY_ONLY_HOST: server.port})
+            self.addCleanup(proxy.close)
+            script = """
+                chat = keyed(reading(sys.argv[1], 2.0))
+                print(wait_for(lambda: send(chat) == "10", 5.0))
+                """
+            url = "https://%s%s" % (PROXY_ONLY_HOST, server.path)
+            tunnelled = {"HTTPS_PROXY": "http://user:secret@" + proxy.address, "SSL_CERT_FILE": tls[0]}
+            self.assertEqual(self._run(script, url, env=tunnelled), "True")
+        self.assertEqual(proxy.requests, ["CONNECT %s:443 HTTP/1.1" % PROXY_ONLY_HOST])
+        credentials = base64.b64encode(b"user:secret").decode()
+        self.assertEqual(proxy.headers[0].get("proxy-authorization"), "Basic " + credentials)
+        self.assertEqual(server.queries, [""], "the request itself travels inside the tunnel")
+        names = {name.lower() for name in server.headers[0]}
+        self.assertFalse({"authorization", "proxy-authorization", "cookie"} & names, names)
+
+    def test_a_proxy_that_refuses_leaves_sends_on_v0(self):
+        from features_support import PROXY_ONLY_HOST, RecordingProxy
+
+        proxy = RecordingProxy(refuse=403)
+        self.addCleanup(proxy.close)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            time.sleep(0.7)
+            print(send(chat))
+            """
+        refused = {"HTTP_PROXY": proxy.url, "HTTPS_PROXY": proxy.url}
+        for scheme in ("http", "https"):
+            with self.subTest(scheme=scheme):
+                url = "%s://%s%s" % (scheme, PROXY_ONLY_HOST, self.server.path)
+                self.assertEqual(self._run(script, url, env=refused), "7")
+        self.assertEqual([request.split(" ")[0] for request in proxy.requests], ["GET", "CONNECT"])
+        self.assertEqual(self.server.queries, [])
 
 if __name__ == "__main__":
     unittest.main()

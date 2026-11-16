@@ -129,8 +129,10 @@ twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, sends stay in v0,
 the format 0.5.x sends.
 
-A process that creates a chat, sends once and exits has no answer yet, so it
-sends v0: keep one chat alive, or one process running, to follow the switch.
+The request goes through the `http://` proxy that `HTTPS_PROXY` (or
+`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. A process that
+creates a chat, sends once and exits has no answer yet, so it sends v0: keep
+one chat alive, or one process running, to follow the switch.
 
 ## Security limitations
 

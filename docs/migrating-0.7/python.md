@@ -156,9 +156,11 @@ Chats read the X API's feature switches with one anonymous request,
   attempt fails or is blocked, every switch stays off and its sends stay v0.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. The requests run on daemon threads,
-and one still under way or waiting at exit is cut short, so they never keep
-the process alive. There's no code to change.
+switch, or block it to keep them v0. The request goes through the `http://`
+proxy that `HTTPS_PROXY` (or `ALL_PROXY`) names, unless `NO_PROXY` exempts
+`api.x.com`. The requests run on daemon threads, and one still under way or
+waiting at exit is cut short, so they never keep the process alive. There's
+no code to change.
 
 ## 1. Symbol index
 

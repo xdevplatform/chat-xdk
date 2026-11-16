@@ -27,6 +27,7 @@ Quick Start:
 
 import asyncio as _asyncio
 import atexit as _atexit
+import base64 as _base64
 import heapq as _heapq
 import http.client as _http_client
 import itertools as _itertools
@@ -34,6 +35,7 @@ import socket as _socket
 import threading as _threading
 import time as _time
 import urllib.parse as _urllib_parse
+import urllib.request as _urllib_request
 from enum import Enum
 from typing import Any, Literal, Optional, TypedDict
 
@@ -189,16 +191,64 @@ _exit_requested = _threading.Event()
 _tls_context = None
 
 
+def _proxy_for(scheme, host):
+    """The proxy the environment names for a request to ``host``, as its
+    ``(address, authorization)``, or None for a direct connection:
+    ``HTTPS_PROXY`` or ``HTTP_PROXY`` by ``scheme``, else ``ALL_PROXY``,
+    unless ``NO_PROXY`` exempts the host, each in upper or lower case, as
+    urllib reads them. ``authorization`` is the ``Proxy-Authorization``
+    value for the credentials in the proxy's URL, or None. Only an
+    ``http://`` proxy is used; with any other the request connects
+    directly."""
+    proxies = _urllib_request.getproxies_environment()
+    if _urllib_request.proxy_bypass_environment(host, proxies):
+        return None
+    proxy = proxies.get(scheme) or proxies.get("all")
+    if not proxy:
+        return None
+    parts = _urllib_parse.urlsplit(proxy if "://" in proxy else "http://" + proxy)
+    if parts.scheme != "http" or not parts.hostname:
+        return None
+    authorization = None
+    if parts.username is not None:
+        credentials = "%s:%s" % (
+            _urllib_parse.unquote(parts.username),
+            _urllib_parse.unquote(parts.password or ""),
+        )
+        authorization = "Basic " + _base64.b64encode(credentials.encode()).decode("ascii")
+    return (parts.hostname, parts.port or 80), authorization
+
+
+def _open_tunnel(sock, host, port, authorization):
+    """Ask the proxy on ``sock`` for a tunnel to ``host:port``. Raises
+    OSError unless the proxy opens one."""
+    target = "%s:%d" % ("[%s]" % host if ":" in host else host, port)
+    request = "CONNECT %s HTTP/1.1\r\nHost: %s\r\n" % (target, target)
+    if authorization:
+        request += "Proxy-Authorization: %s\r\n" % authorization
+    sock.sendall((request + "\r\n").encode("ascii"))
+    response = _http_client.HTTPResponse(sock, method="CONNECT")
+    try:
+        response.begin()
+        if response.status != 200:
+            raise OSError("the proxy answered CONNECT with %d" % response.status)
+    finally:
+        response.close()
+
+
 def _get_features(url, timeout, max_bytes):
-    """GET ``url`` within ``timeout`` seconds: the status and the body, read
-    to its end or to one byte past ``max_bytes``. Status 0 when no complete
+    """GET ``url`` within ``timeout`` seconds, through the proxy the
+    environment names for it, if any: the status and the body, read to its
+    end or to one byte past ``max_bytes``. Status 0 when no complete
     response arrived in time."""
     global _tls_context
     deadline = _time.monotonic() + timeout
     parts = _urllib_parse.urlsplit(url)
     secure = parts.scheme == "https"
     port = parts.port or (443 if secure else 80)
-    sock = _socket.create_connection((parts.hostname, port), timeout=timeout)
+    proxy = _proxy_for(parts.scheme, parts.hostname)
+    address, authorization = proxy or ((parts.hostname, port), None)
+    sock = _socket.create_connection(address, timeout=timeout)
     thread = _threading.current_thread()
     with _requests_lock:
         if _exiting:
@@ -207,6 +257,8 @@ def _get_features(url, timeout, max_bytes):
         _requests[thread] = sock
     try:
         if secure:
+            if proxy:
+                _open_tunnel(sock, parts.hostname, port, authorization)
             if _tls_context is None:
                 import ssl
 
@@ -226,7 +278,14 @@ def _get_features(url, timeout, max_bytes):
             connection = _http_client.HTTPConnection(parts.hostname, port, timeout=timeout)
         connection.sock = sock
         target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
-        connection.request("GET", target, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if proxy and not secure:
+            # Without a tunnel the proxy needs the whole URL, and its
+            # credentials travel with the request.
+            target = "http://%s%s" % (parts.netloc, target)
+            if authorization:
+                headers["Proxy-Authorization"] = authorization
+        connection.request("GET", target, headers=headers)
         response = connection.getresponse()
         body = bytearray()
         while len(body) <= max_bytes:

@@ -15,6 +15,14 @@
   per URL every 5 minutes instead of one or two per chat. An answer older
   than 5 minutes that no chat holds is not used, so a switch that is turned
   off still stops v1 sends within the refresh interval.
+- Python: the feature-switch request goes through the `http://` proxy that
+  `HTTPS_PROXY` names (`HTTP_PROXY` for a plain URL, else `ALL_PROXY`),
+  unless `NO_PROXY` exempts the host, with the credentials in the proxy's URL
+  sent to the proxy alone. It connected directly whatever the environment
+  said, so a host that reaches the X API only through a proxy never read the
+  switches and its sends stayed v0. Go and .NET already followed these
+  variables, the JVM its `https.proxyHost` properties, and Node its own
+  `NODE_USE_ENV_PROXY`.
 - Python: the requests waiting for their time share one daemon thread
   instead of holding one each, so a process whose chats read many buckets
   keeps one waiting thread, not one per bucket.

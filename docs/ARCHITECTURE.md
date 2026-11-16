@@ -254,6 +254,15 @@ validation; without it, every switch stays off:
   inside OpenSSL while OpenSSL cleans up. Every binding reads the body as it
   streams, up to one byte past 64 KiB, so a long body is never held whole;
   where a runtime can't stream it, the request fails.
+- **Proxies:** each binding's HTTP stack decides. Python sends the request
+  through the `http://` proxy that `HTTPS_PROXY` names, or `ALL_PROXY`,
+  unless `NO_PROXY` exempts `api.x.com`, with the credentials in the proxy's
+  URL sent to the proxy alone; with a proxy of any other scheme it connects
+  directly. Go follows `HTTPS_PROXY` and `NO_PROXY`, .NET its default proxy
+  (the same variables, or the system's settings on Windows), and the JVM its
+  default `ProxySelector` (`-Dhttps.proxyHost`, `-Dhttps.proxyPort`). Node
+  uses a proxy only where it is told to use the environment's
+  (`NODE_USE_ENV_PROXY=1`), and a browser uses its own.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the
