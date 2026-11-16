@@ -11,7 +11,8 @@
 //! returns, if any, in the background after the GET's `delay_ms`, reports its
 //! result with [`complete_fetch`], and performs the GET `complete_fetch`
 //! returns, if any, the same way; it ends a GET it cannot start with
-//! [`abandon_fetch`].
+//! [`abandon_fetch`]. A binding whose process can fork calls
+//! [`restart_fetches`] in the child.
 
 pub use crate::features::Fetch;
 
@@ -126,6 +127,14 @@ pub fn complete_fetch(id: u64, status: u16, body: &[u8]) -> Option<Fetch> {
 /// answers the chats waiting for this one.
 pub fn abandon_fetch(id: u64) {
     shared::abandon_fetch(id);
+}
+
+/// Start every read a chat waits for again, for a binding whose process
+/// forked: the GETs it was performing and waiting to perform stayed in the
+/// parent. Returns the GETs to perform, each after its `delay_ms`; the ones
+/// handed out before the fork report nothing in this process.
+pub fn restart_fetches() -> Vec<Fetch> {
+    shared::restart_fetches()
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set

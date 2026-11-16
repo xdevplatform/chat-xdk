@@ -297,6 +297,26 @@ impl Requests {
         next
     }
 
+    /// Start every read a chat waits for again, for a binding that lost the
+    /// GETs it was performing and waiting to perform (its process forked):
+    /// the reads for it to perform. A URL whose answer is fresh is read
+    /// when its refresh is due, any other at once.
+    fn restart(&mut self, now: u64) -> Vec<Fetch> {
+        let mut fetches = Vec::new();
+        for (url, mut request) in std::mem::take(&mut self.by_url) {
+            request.chats.retain(|chat| chat.strong_count() > 0);
+            if request.chats.is_empty() {
+                request.stop();
+                self.by_url.insert(url, request);
+                continue;
+            }
+            let delay_ms = request.refresh_due_in(now).unwrap_or(0);
+            fetches.push(self.schedule(&url, request, delay_ms, now));
+        }
+        self.forget_stale(now);
+        fetches
+    }
+
     /// Forget the URLs no chat reads whose answer is no longer fresh.
     fn forget_stale(&mut self, now: u64) {
         self.by_url.retain(|_, request| {
@@ -509,6 +529,10 @@ pub(crate) mod shared {
 
     pub(crate) fn abandon_fetch(id: u64) {
         requests().abandon(id);
+    }
+
+    pub(crate) fn restart_fetches() -> Vec<Fetch> {
+        requests().restart(now_ms())
     }
 }
 
@@ -923,6 +947,52 @@ mod tests {
             [URL],
             "the next result drops the answers that aged out"
         );
+    }
+
+    #[test]
+    fn a_binding_that_lost_its_gets_starts_them_again() {
+        let answered_url = features_url(URL, Some("1001"));
+        let unread_url = features_url(URL, Some("2002"));
+        let mut requests = Requests::default();
+        let waiting = chat();
+        let lost = start(&mut requests, &waiting, 0);
+        let answered = chat();
+        let join_at = |requests: &mut Requests, url: &str, chat: &Arc<Flags>, now| {
+            requests.join(url, FEATURES_TIMEOUT_MS, FEATURES_REFRESH_MS, chat, now)
+        };
+        let fetch = join_at(&mut requests, &answered_url, &answered, 0).unwrap();
+        let lost_refresh = requests.complete(fetch.id, 200, V1_ON, 100).unwrap();
+        let gone = chat();
+        let fetch = join_at(&mut requests, &unread_url, &gone, 0).unwrap();
+        drop(gone);
+        requests.complete(fetch.id, 200, V1_ON, 100);
+
+        let mut restarted = requests.restart(1_000);
+        restarted.sort_by(|a, b| a.url.cmp(&b.url));
+        let reads: Vec<(&str, u64)> = restarted
+            .iter()
+            .map(|fetch| (fetch.url.as_str(), fetch.delay_ms))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                (URL, 0),
+                (answered_url.as_str(), 100 + FEATURES_REFRESH_MS - 1_000)
+            ],
+            "a first read at once, a refresh when it is due, nothing for a URL no chat reads"
+        );
+
+        assert_eq!(requests.complete(lost.id, 200, V1_ON, 1_100), None);
+        assert_eq!(requests.complete(lost_refresh.id, 200, V1_OFF, 1_100), None);
+        assert!(!on(&waiting, V1_SEND) && on(&answered, V1_SEND));
+        assert!(requests
+            .complete(restarted[0].id, 200, V1_ON, 1_200)
+            .is_some());
+        assert!(on(&waiting, V1_SEND), "the restarted read answers");
+
+        let later = chat();
+        assert!(join_at(&mut requests, &unread_url, &later, 1_300).is_some());
+        assert!(on(&later, V1_SEND), "a fresh answer survives the restart");
     }
 
     #[test]

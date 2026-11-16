@@ -159,8 +159,9 @@ Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. The request goes through the `http://`
 proxy that `HTTPS_PROXY` (or `ALL_PROXY`) names, unless `NO_PROXY` exempts
 `api.x.com`. The requests run on daemon threads, and one still under way or
-waiting at exit is cut short, so they never keep the process alive. There's
-no code to change.
+waiting at exit is cut short, so they never keep the process alive; a
+process that forks reads the switches again in the child. There's no code
+to change.
 
 ## 1. Symbol index
 

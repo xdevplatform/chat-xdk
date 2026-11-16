@@ -31,6 +31,7 @@ import base64 as _base64
 import heapq as _heapq
 import http.client as _http_client
 import itertools as _itertools
+import os as _os
 import socket as _socket
 import threading as _threading
 import time as _time
@@ -38,6 +39,12 @@ import urllib.parse as _urllib_parse
 import urllib.request as _urllib_request
 from enum import Enum
 from typing import Any, Literal, Optional, TypedDict
+
+# Python imports the idna codec the first time a host name is resolved. Import
+# it here, so it is never mid-import on a request's thread when the process
+# forks: the child would wait for that import for good the first time it
+# resolved a host name.
+import encodings.idna  # noqa: F401
 
 from chat_xdk import _native
 from chat_xdk._native import __version__
@@ -322,6 +329,27 @@ def _end_feature_requests():
     for thread in threads:
         thread.join(max(0.0, deadline - _time.monotonic()))
 
+
+def _restart_feature_fetches_after_fork():
+    """In a forked child: the threads that perform and wait for GETs stayed
+    in the parent, so let go of its GETs and start again every read a chat of
+    this process still waits for."""
+    global _requests_lock, _waiting_changed, _timer, _exiting, _exit_requested
+    _requests_lock = _threading.Lock()
+    _waiting_changed = _threading.Condition()
+    _exit_requested = _threading.Event()
+    _exiting = False
+    _timer = None
+    _waiting.clear()
+    for sock in _requests.values():
+        # This closes the child's handle only: the parent's request goes on.
+        sock.close()
+    _requests.clear()
+    _native._feature_restart()
+
+
+if hasattr(_os, "register_at_fork"):
+    _os.register_at_fork(after_in_child=_restart_feature_fetches_after_fork)
 
 _native._feature_set_starter(_start_feature_fetch)
 

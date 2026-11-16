@@ -130,9 +130,11 @@ one before; until an answer for the chat's URL arrives, sends stay in v0,
 the format 0.5.x sends.
 
 The request goes through the `http://` proxy that `HTTPS_PROXY` (or
-`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. A process that
-creates a chat, sends once and exits has no answer yet, so it sends v0: keep
-one chat alive, or one process running, to follow the switch.
+`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. Requests run on
+daemon threads; a process that forks reads the switches again in the child
+for the chats it inherited. A process that creates a chat, sends once and
+exits has no answer yet, so it sends v0: keep one chat alive, or one process
+running, to follow the switch.
 
 ## Security limitations
 

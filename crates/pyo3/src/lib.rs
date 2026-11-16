@@ -469,6 +469,16 @@ fn feature_complete(py: Python<'_>, fetch_id: u64, status: u16, body: &[u8]) {
     }
 }
 
+/// In a forked child, whose GETs under way and waiting stayed in the
+/// parent: hand the starter every read a chat still waits for.
+#[pyfunction]
+#[pyo3(name = "_feature_restart")]
+fn feature_restart(py: Python<'_>) {
+    for fetch in bindings::restart_fetches() {
+        start_feature_fetch(py, &fetch);
+    }
+}
+
 /// For this repository's tests: the endpoint of every chat that does not set
 /// its own, or the X API's when ``None``.
 #[pyfunction]
@@ -543,6 +553,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_image_dimensions, m)?)?;
     m.add_function(wrap_pyfunction!(feature_set_starter, m)?)?;
     m.add_function(wrap_pyfunction!(feature_complete, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_restart, m)?)?;
     m.add_function(wrap_pyfunction!(feature_set_default_endpoint, m)?)?;
 
     Ok(())

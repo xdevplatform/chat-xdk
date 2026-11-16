@@ -461,5 +461,47 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual([request.split(" ")[0] for request in proxy.requests], ["GET", "CONNECT"])
         self.assertEqual(self.server.queries, [])
 
+    def test_a_request_imports_no_module_on_its_thread(self):
+        # A fork while a request's thread imports a module leaves the child
+        # waiting for that import for good; host names need the idna codec.
+        script = """
+            imported = set(sys.modules)
+            chat = keyed(reading(sys.argv[1], 2.0))
+            assert wait_for(lambda: send(chat) == "10")
+            print("encodings.idna" in imported, sorted(set(sys.modules) - imported))
+            """
+        self.assertEqual(self._run(script, self.server.url.replace("127.0.0.1", "localhost")), "True []")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_forked_child_reads_for_the_chats_it_inherited(self):
+        self.server.delay = 1.0
+        script = """
+            chat = keyed(reading(sys.argv[1], 3.0))
+            time.sleep(0.3)  # the request is under way, waiting for its answer
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if wait_for(lambda: send(chat) == "10", 5.0) else 1)
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), wait_for(lambda: send(chat) == "10", 5.0))
+            """
+        self.assertEqual(self._run(script, self.server.url), "0 True")
+        self.assertEqual(len(self.server.queries), 2, "the parent's read, and the child's of its own")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_forked_child_follows_the_refreshes_of_an_answer_it_inherited(self):
+        script = """
+            server = FeatureServer()
+            chat = keyed(reading(server.url, 2.0, 0.5))
+            assert wait_for(lambda: send(chat) == "10")
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if wait_for(lambda: send(chat) == "7", 5.0) else 1)
+            server.body = '{"features":{}}'
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), wait_for(lambda: send(chat) == "7", 5.0))
+            """
+        self.assertEqual(self._run(script), "0 True")
+
+
 if __name__ == "__main__":
     unittest.main()

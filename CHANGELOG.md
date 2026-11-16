@@ -23,6 +23,15 @@
   switches and its sends stayed v0. Go and .NET already followed these
   variables, the JVM its `https.proxyHost` properties, and Node its own
   `NODE_USE_ENV_PROXY`.
+- Python: a process that forks reads the switches again in the child. The
+  threads that perform and schedule the requests stay in the parent, so the
+  chats a forked worker inherited (under `gunicorn --preload`, uWSGI without
+  `lazy-apps`, a Celery prefork pool or `multiprocessing`) kept the switches
+  they had at the fork for good.
+- Python: importing the package imports the idna codec, which a request
+  needs to resolve a host name. Python imported it on the request's thread
+  the first time, and a process that forked during that import got a child
+  that hung the first time it resolved any host name.
 - Python: the requests waiting for their time share one daemon thread
   instead of holding one each, so a process whose chats read many buckets
   keeps one waiting thread, not one per bucket.

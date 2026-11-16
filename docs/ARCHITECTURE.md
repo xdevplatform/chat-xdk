@@ -254,6 +254,11 @@ validation; without it, every switch stays off:
   inside OpenSSL while OpenSSL cleans up. Every binding reads the body as it
   streams, up to one byte past 64 KiB, so a long body is never held whole;
   where a runtime can't stream it, the request fails.
+- **Forked processes:** threads don't cross a fork, so a Python process that
+  forks starts its reads again in the child, for the chats the child
+  inherited: a refresh when it is due, any other read at once. The package
+  imports everything a request needs when it is imported, so a fork never
+  finds a request's thread halfway through an import.
 - **Proxies:** each binding's HTTP stack decides. Python sends the request
   through the `http://` proxy that `HTTPS_PROXY` names, or `ALL_PROXY`,
   unless `NO_PROXY` exempts `api.x.com`, with the credentials in the proxy's
