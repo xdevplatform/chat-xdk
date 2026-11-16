@@ -238,6 +238,54 @@ namespace ChatXdk.Tests
         }
 
         [Fact]
+        public async Task AChatCreatedAfterTheLastOneIsGoneTakesItsAnswer()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 300);
+            using (var first = NewChat(server.Endpoint))
+            {
+                Assert.Equal("7", SendVersion(first));
+            }
+            await Task.Delay(800);
+            for (var i = 0; i < 5; i++)
+            {
+                using var chat = NewChat(server.Endpoint);
+                Assert.Equal("10", SendVersion(chat));
+            }
+            await Task.Delay(200);
+            Assert.Single(server.Queries);
+        }
+
+        [Fact]
+        public async Task AChatThatTakesAKeptAnswerFollowsItsRefresh()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 200);
+            NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(1)).Dispose();
+            await Task.Delay(600);
+            using var chat = NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(1));
+            Assert.Equal("10", SendVersion(chat));
+            Assert.Single(server.Queries);
+            server.Set(200, "{\"features\":{}}");
+            await WaitFor("v0 after the refresh", () => SendVersion(chat) == "7");
+            Assert.Equal(2, server.Queries.Count);
+        }
+
+        [Fact]
+        public async Task AKeptAnswerAgesOutAtTheRefreshInterval()
+        {
+            using var server = new FeatureServer();
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 200);
+            NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(500)).Dispose();
+            await Task.Delay(1200);
+            Assert.Single(server.Queries);
+            using var late = NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(500));
+            Assert.Equal("7", SendVersion(late));
+            await WaitFor("v1 from its own read", () => SendVersion(late) == "10");
+            Assert.Equal(2, server.Queries.Count);
+        }
+
+        [Fact]
         public async Task TheReadSendsNoCookiesOrCredentials()
         {
             using var server = new FeatureServer();

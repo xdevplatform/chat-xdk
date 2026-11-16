@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- An app that creates a chat for each send, or closes its chats between
+  sends, now follows the `v1_send` switch. A chat got its switches only if
+  it was alive when the answer to its request arrived, so a chat that sent
+  and went away within that time sent v0, and so did every chat after it,
+  each starting a request of its own. Now the latest answer for a URL stays
+  for 5 minutes after it arrives: a chat created in that time takes it at
+  once, in every binding, and reads the URL again when the refresh is due.
+  Such an app sends v0 only until its first answer, and makes one request
+  per URL every 5 minutes instead of one or two per chat. An answer older
+  than 5 minutes that no chat holds is not used, so a switch that is turned
+  off still stops v1 sends within the refresh interval.
+- Python: the requests waiting for their time share one daemon thread
+  instead of holding one each, so a process whose chats read many buckets
+  keeps one waiting thread, not one per bucket.
+
 ## [0.7.3] - 2026-11-05
 
 ### Security

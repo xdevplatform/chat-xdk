@@ -25,8 +25,15 @@
 //! over 64 KiB, or its body is not a JSON object with a `features` object.
 //! A failed read changes no flag and is retried after
 //! [`RETRY_FIRST_DELAY_MS`], then after twice the previous wait, never more
-//! than [`FEATURES_REFRESH_MS`] apart, with no limit on retries. Reads stop
-//! once no chat waits for them. A flag whose value is not a boolean reads
+//! than [`FEATURES_REFRESH_MS`] apart, with no limit on retries. A flag
+//! whose value is not a boolean reads off.
+//!
+//! Reads stop once no chat waits for them, and the URL's latest answer
+//! stays for [`FEATURES_REFRESH_MS`] after it arrived: a chat created in
+//! that time takes it at once and reads the URL again when its refresh is
+//! due. So an app that creates a chat for each send makes one request per
+//! URL every [`FEATURES_REFRESH_MS`], and only the chats created before the
+//! first answer, or after the latest one aged out, start with every flag
 //! off.
 
 // Without the bindings that perform the GETs, nothing here starts one.
@@ -92,29 +99,54 @@ pub struct Fetch {
     /// The largest body accepted: read at most one byte more, so a longer
     /// body is seen and rejected.
     pub max_bytes: usize,
-    /// Start the request this long from now: 0 for a chat's first read, the
-    /// wait for a retry or a refresh.
+    /// Start the request this long from now: 0 for the first read of a URL,
+    /// the wait for a retry or a refresh.
     pub delay_ms: u64,
 }
 
 /// The flags turned on for one chat, set by each answer to its reads.
 type Flags = RwLock<HashSet<String>>;
 
-/// A read in flight, or waiting to start, and the chats waiting for its
-/// answer.
+/// The flags an answer turned on, and when it arrived.
+#[derive(Debug)]
+struct Answer {
+    on: HashSet<String>,
+    at: u64,
+}
+
+/// What is known of one URL: its read in flight or waiting to start with
+/// the chats waiting for its answer, and its latest answer.
 #[derive(Debug)]
 struct Request {
+    /// 0 while no read is in flight or waiting to start.
     id: u64,
     timeout_ms: u64,
     refresh_ms: u64,
     /// How many reads in a row failed before this one.
     failures: u32,
     /// When this read's result stops counting and it takes no more chats:
-    /// its start plus its timeout; 0 once abandoned.
+    /// its start plus its timeout; 0 while there is no read.
     deadline: u64,
     chats: Vec<Weak<Flags>>,
-    /// The flags the latest answer turned on, which a chat that joins takes.
-    answer: Option<HashSet<String>>,
+    /// The latest answer, which a chat that joins takes.
+    answer: Option<Answer>,
+}
+
+impl Request {
+    /// How long until the latest answer's refresh is due, while the answer
+    /// is fresh: for `refresh_ms` after it arrived.
+    fn refresh_due_in(&self, now: u64) -> Option<u64> {
+        let due = self.answer.as_ref()?.at.saturating_add(self.refresh_ms);
+        (now < due).then(|| due - now)
+    }
+
+    /// Stop reading: no read is in flight or waiting to start any more.
+    fn stop(&mut self) {
+        // No read has id 0, so a result reported for the one that was in
+        // flight changes nothing.
+        self.id = 0;
+        self.deadline = 0;
+    }
 }
 
 /// The wait before the read that follows `failures` failed ones in a row:
@@ -125,7 +157,7 @@ fn retry_delay_ms(failures: u32, refresh_ms: u64) -> u64 {
         .min(refresh_ms)
 }
 
-/// The reads in flight or waiting to start, by URL.
+/// What is known of each URL a chat reads or lately read.
 #[derive(Debug, Default)]
 struct Requests {
     last_id: u64,
@@ -140,6 +172,11 @@ impl Requests {
     /// past its deadline takes no more chats: its late result changes
     /// nothing, so the read that replaces it carries over its chats and its
     /// answer.
+    ///
+    /// A URL no chat reads keeps its answer only while it is fresh: the
+    /// chat that joins then takes it and starts the read its refresh is due
+    /// at, and a chat that joins later starts with every flag off and reads
+    /// at once.
     fn join(
         &mut self,
         url: &str,
@@ -149,35 +186,43 @@ impl Requests {
         now: u64,
     ) -> Option<Fetch> {
         let joining = Arc::downgrade(flags);
-        // Chats that are gone, and the joining chat's earlier entry, leave
-        // the list, so it holds each live chat once.
-        let other = |chat: &Weak<Flags>| chat.strong_count() > 0 && !chat.ptr_eq(&joining);
-        if let Some(request) = self.by_url.get_mut(url) {
-            if let Some(answer) = &request.answer {
-                answer.clone_into(&mut flags.write().unwrap_or_else(PoisonError::into_inner));
-            }
-            if now < request.deadline {
-                request.chats.retain(other);
-                request.chats.push(joining);
-                return None;
-            }
-        }
         let mut request = Request {
             id: 0,
             timeout_ms,
             refresh_ms,
             failures: 0,
             deadline: 0,
-            chats: vec![joining.clone()],
+            chats: Vec::new(),
             answer: None,
         };
-        if let Some(expired) = self.by_url.remove(url) {
-            request
-                .chats
-                .extend(expired.chats.into_iter().filter(|chat| other(chat)));
-            request.answer = expired.answer;
+        let mut delay_ms = 0;
+        if let Some(mut known) = self.by_url.remove(url) {
+            known.chats.retain(|chat| chat.strong_count() > 0);
+            let held = !known.chats.is_empty();
+            // The joining chat's earlier entry leaves the list, so it holds
+            // each live chat once.
+            known.chats.retain(|chat| !chat.ptr_eq(&joining));
+            let reading = now < known.deadline;
+            let refresh_due_in = known.refresh_due_in(now);
+            if !reading && !held && refresh_due_in.is_none() {
+                known.answer = None;
+            }
+            if let Some(answer) = &known.answer {
+                answer
+                    .on
+                    .clone_into(&mut flags.write().unwrap_or_else(PoisonError::into_inner));
+            }
+            if reading {
+                known.chats.push(joining);
+                self.by_url.insert(url.to_string(), known);
+                return None;
+            }
+            request.chats = known.chats;
+            request.answer = known.answer;
+            delay_ms = refresh_due_in.unwrap_or(0);
         }
-        Some(self.schedule(url, request, 0, now))
+        request.chats.push(joining);
+        Some(self.schedule(url, request, delay_ms, now))
     }
 
     /// End the read `id`, which its binding could not start, without a
@@ -185,10 +230,7 @@ impl Requests {
     /// answers the chats waiting for this one.
     fn abandon(&mut self, id: u64) {
         if let Some(request) = self.by_url.values_mut().find(|request| request.id == id) {
-            // No read has id 0, so a result reported for this one changes
-            // nothing.
-            request.id = 0;
-            request.deadline = 0;
+            request.stop();
         }
     }
 
@@ -214,8 +256,10 @@ impl Requests {
     /// Apply the result of the read `id` to the chats waiting for it, and
     /// return the next read for the binding to perform while a chat still
     /// waits: a refresh after an answer, a retry after a result that is no
-    /// answer (a failure, or a response after the read's deadline). A result
-    /// for no read in flight changes nothing.
+    /// answer (a failure, or a response after the read's deadline). Once no
+    /// chat waits there is no next read, and the URL keeps its latest
+    /// answer while it is fresh. A result for no read in flight changes
+    /// nothing.
     fn complete(&mut self, id: u64, status: u16, body: &[u8], now: u64) -> Option<Fetch> {
         let url = self
             .by_url
@@ -233,7 +277,7 @@ impl Requests {
                 for chat in request.chats.iter().filter_map(Weak::upgrade) {
                     on.clone_into(&mut chat.write().unwrap_or_else(PoisonError::into_inner));
                 }
-                request.answer = Some(on);
+                request.answer = Some(Answer { on, at: now });
                 request.failures = 0;
                 request.refresh_ms
             }
@@ -242,10 +286,24 @@ impl Requests {
                 retry_delay_ms(request.failures, request.refresh_ms)
             }
         };
-        if request.chats.is_empty() {
-            return None;
-        }
-        Some(self.schedule(&url, request, delay_ms, now))
+        let next = if request.chats.is_empty() {
+            request.stop();
+            self.by_url.insert(url, request);
+            None
+        } else {
+            Some(self.schedule(&url, request, delay_ms, now))
+        };
+        self.forget_stale(now);
+        next
+    }
+
+    /// Forget the URLs no chat reads whose answer is no longer fresh.
+    fn forget_stale(&mut self, now: u64) {
+        self.by_url.retain(|_, request| {
+            now < request.deadline
+                || request.refresh_due_in(now).is_some()
+                || request.chats.iter().any(|chat| chat.strong_count() > 0)
+        });
     }
 }
 
@@ -730,7 +788,7 @@ mod tests {
         let fetch = start(&mut requests, &dropped, 0);
         drop(dropped);
         assert_eq!(requests.complete(fetch.id, 503, b"", 10), None);
-        assert!(requests.by_url.is_empty());
+        assert!(requests.by_url.is_empty(), "a failed read leaves nothing");
 
         let dropped = chat();
         let fetch = start(&mut requests, &dropped, 20);
@@ -741,7 +799,130 @@ mod tests {
             None,
             "no refresh once the chat is gone"
         );
+    }
+
+    #[test]
+    fn a_chat_created_after_the_last_one_is_gone_takes_its_answer() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        drop(gone);
+        assert_eq!(requests.complete(fetch.id, 200, V1_ON, 100), None);
+
+        let next = chat();
+        let refresh = start(&mut requests, &next, 5_000);
+        assert!(on(&next, V1_SEND), "the latest answer, at once");
+        assert_eq!(
+            (refresh.url.as_str(), refresh.delay_ms),
+            (URL, 100 + FEATURES_REFRESH_MS - 5_000),
+            "its read is the answer's refresh, when that is due"
+        );
+        let another = chat();
+        assert_eq!(join(&mut requests, &another, 6_000), None, "one refresh");
+        assert!(on(&another, V1_SEND));
+
+        let after = requests
+            .complete(refresh.id, 200, V1_OFF, 100 + FEATURES_REFRESH_MS + 50)
+            .unwrap();
+        assert!(!on(&next, V1_SEND) && !on(&another, V1_SEND));
+        assert_eq!(after.delay_ms, FEATURES_REFRESH_MS);
+    }
+
+    #[test]
+    fn a_chat_for_each_send_makes_one_get_each_refresh() {
+        let mut requests = Requests::default();
+        let mut gets = Vec::new();
+        let mut sent_v1 = Vec::new();
+        // A chat every 100 ms for 15 minutes, each gone before the next; a
+        // GET takes 150 ms.
+        let mut in_flight: Option<(Fetch, u64)> = None;
+        for now in (0..3 * FEATURES_REFRESH_MS).step_by(100) {
+            if let Some((fetch, lands)) = &in_flight {
+                if now >= *lands {
+                    assert_eq!(requests.complete(fetch.id, 200, V1_ON, *lands), None);
+                    in_flight = None;
+                }
+            }
+            let chat = chat();
+            if let Some(fetch) = join(&mut requests, &chat, now) {
+                let lands = now + fetch.delay_ms + 150;
+                gets.push(now + fetch.delay_ms);
+                assert!(
+                    in_flight.replace((fetch, lands)).is_none(),
+                    "one GET at a time"
+                );
+            }
+            sent_v1.push(on(&chat, V1_SEND));
+        }
+        let refresh = 150 + FEATURES_REFRESH_MS;
+        assert_eq!(
+            gets,
+            [0, refresh, 2 * refresh, 3 * refresh],
+            "the first read, then one refresh after each answer"
+        );
+        assert_eq!(
+            sent_v1.iter().position(|v1| *v1),
+            Some(2),
+            "v1 from the first chat created after the answer"
+        );
+        assert!(sent_v1[2..].iter().all(|v1| *v1));
+    }
+
+    #[test]
+    fn an_answer_no_chat_holds_ages_out_at_the_refresh_interval() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        drop(gone);
+        requests.complete(fetch.id, 200, V1_ON, 100);
+
+        let late = chat();
+        let own = start(&mut requests, &late, 100 + FEATURES_REFRESH_MS);
+        assert!(!on(&late, V1_SEND), "off until its own read answers");
+        assert_eq!(own.delay_ms, 0, "a first read");
+        requests.complete(own.id, 200, V1_ON, 200 + FEATURES_REFRESH_MS);
+        assert!(on(&late, V1_SEND));
+    }
+
+    #[test]
+    fn a_refresh_that_fails_once_no_chat_waits_leaves_no_answer() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        let refresh = requests.complete(fetch.id, 200, V1_ON, 10).unwrap();
+        drop(gone);
+        let failed_at = 10 + FEATURES_REFRESH_MS + 100;
+        assert_eq!(requests.complete(refresh.id, 503, b"", failed_at), None);
         assert!(requests.by_url.is_empty());
+
+        let next = chat();
+        let own = start(&mut requests, &next, failed_at + 10);
+        assert!(!on(&next, V1_SEND));
+        assert_eq!(own.delay_ms, 0);
+    }
+
+    #[test]
+    fn urls_no_chat_reads_are_forgotten_once_their_answers_age_out() {
+        let mut requests = Requests::default();
+        for bucket in 0..50 {
+            let url = features_url(URL, Some(&format!("{bucket:04}")));
+            let gone = chat();
+            let fetch = requests
+                .join(&url, FEATURES_TIMEOUT_MS, FEATURES_REFRESH_MS, &gone, 0)
+                .unwrap();
+            drop(gone);
+            requests.complete(fetch.id, 200, V1_ON, 100);
+        }
+        assert_eq!(requests.by_url.len(), 50, "each fresh answer is kept");
+
+        let kept = chat();
+        let fetch = start(&mut requests, &kept, 200 + FEATURES_REFRESH_MS);
+        requests.complete(fetch.id, 200, V1_ON, 300 + FEATURES_REFRESH_MS);
+        assert_eq!(
+            requests.by_url.keys().collect::<Vec<_>>(),
+            [URL],
+            "the next result drops the answers that aged out"
+        );
     }
 
     #[test]

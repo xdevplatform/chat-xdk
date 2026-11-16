@@ -218,6 +218,13 @@ validation; without it, every switch stays off:
   that read the same URL share one request; a chat that joins it takes the
   latest answer at once. Until an answer for its URL arrives every switch
   reads off for the chat, so its first sends can be v0.
+- **Short-lived chats:** a URL's latest answer stays for 5 minutes after it
+  arrived, also once no chat reads the URL. A chat created in that time takes
+  it at once and reads the URL again when the answer's refresh is due. An app
+  that creates a chat for each send therefore makes one request per URL every
+  5 minutes, and sends v0 only from the chats it creates before the URL's
+  first answer, or more than 5 minutes after its latest. A process that sends
+  once and exits never has an answer: keep a chat alive to follow the switch.
 - **Retries:** a request that fails is retried 1 s later, then after twice
   the previous wait, never more than 5 minutes apart, while a chat still
   waits for its answer. A failure keeps the answer the chats already have.
@@ -236,8 +243,9 @@ validation; without it, every switch stays off:
   switch whose value isn't a boolean reads off. No request blocks or fails an
   SDK call.
 - **Where it runs:** in the background, so creating a chat never waits for
-  it: a daemon thread in Python, a goroutine in Go, `HttpClient.sendAsync` in
-  the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
+  it: daemon threads in Python (one for each request under way, and one that
+  waits for the times of the next), a goroutine in Go, `HttpClient.sendAsync`
+  in the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
   20.16 the request's socket and timer are unref'd, so it never keeps a
   process alive; on older Node, `fetch()` can hold the process open until the
   request ends, at most 2 s. A refresh or a retry waits on a timer that never

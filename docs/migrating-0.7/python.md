@@ -147,14 +147,16 @@ Chats read the X API's feature switches with one anonymous request,
 - it carries no credentials and no other user data, and never delays or
   fails a call;
 - every switch is off until an answer for the chat's URL arrives, so a
-  chat's first sends can be v0;
+  chat's first sends can be v0; the answer stays for 5 minutes after it
+  arrives, so a chat created in that time takes it at once, and an app that
+  creates a chat for each send makes one request per URL every 5 minutes;
 - a request that fails is retried in the background while a chat waits for
   its answer: 1 second later, then after twice the previous wait, at most 5
   minutes apart; a failure keeps the answer a chat already has, and if every
   attempt fails or is blocked, every switch stays off and its sends stay v0.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. The requests run on a daemon thread,
+switch, or block it to keep them v0. The requests run on daemon threads,
 and one still under way or waiting at exit is cut short, so they never keep
 the process alive. There's no code to change.
 

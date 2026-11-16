@@ -239,6 +239,46 @@ async function aRequestEndsSafelyForAFreedChat(v, server) {
   kept.free();
 }
 
+async function aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server) {
+  server.delayMs = 300;
+  const first = newChat(v, server.endpoint);
+  assert.equal(send(first, v), "7", "sent before the answer");
+  first.free();
+  await sleep(800);
+  for (let i = 0; i < 5; i++) {
+    const chat = newChat(v, server.endpoint);
+    assert.equal(send(chat, v), "10", "the first send of a chat created after the answer");
+    chat.free();
+  }
+  await sleep(200);
+  assert.equal(server.queries.length, 1);
+}
+
+async function aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server) {
+  server.delayMs = 200;
+  newChat(v, server.endpoint, { refreshMs: 1000 }).free();
+  await sleep(600);
+  const chat = newChat(v, server.endpoint, { refreshMs: 1000 });
+  assert.equal(send(chat, v), "10", "the kept answer");
+  assert.equal(server.queries.length, 1, "no request before the refresh is due");
+  server.body = '{"features":{}}';
+  await waitFor("v0 after the refresh", () => send(chat, v) === "7");
+  assert.equal(server.queries.length, 2);
+  chat.free();
+}
+
+async function aKeptAnswerAgesOutAtTheRefreshInterval(v, server) {
+  server.delayMs = 200;
+  newChat(v, server.endpoint, { refreshMs: 500 }).free();
+  await sleep(1200);
+  assert.equal(server.queries.length, 1, "no chat, no refresh");
+  const late = newChat(v, server.endpoint, { refreshMs: 500 });
+  assert.equal(send(late, v), "7", "an answer older than the refresh interval is none");
+  await waitFor("v1 from its own read", () => send(late, v) === "10");
+  assert.equal(server.queries.length, 2);
+  late.free();
+}
+
 /**
  * A Node process whose reads are still in flight exits once its own work is
  * done: at once where Node's http module is at hand, and within a read's
@@ -389,6 +429,9 @@ async function main() {
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
     (server) => aRequestEndsSafelyForAFreedChat(v, server),
+    (server) => aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server),
+    (server) => aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server),
+    (server) => aKeptAnswerAgesOutAtTheRefreshInterval(v, server),
     (server) => aReadInFlightNeverKeepsNodeRunning(server),
     () => theReadSendsNoCookiesOrCredentials(v),
     () => aRedirectIsNotFollowed(v),

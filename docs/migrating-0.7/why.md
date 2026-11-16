@@ -73,7 +73,10 @@ the request by its address. Chats that read the same URL share one request,
 so a process with many chats of one sender makes one request every 5
 minutes. Each answer replaces the one before. Every switch is off until an
 answer arrives, so a chat whose `v1_send` switch is on sends v0 first and v1
-from then on, until an answer turns it off. Files encrypted from a v0 build
+from then on, until an answer turns it off. An answer stays for 5 minutes
+after it arrives, also once no chat reads its URL, so an app that creates a
+chat for each send sends v1 from the first chat it creates after an answer,
+and still makes one request every 5 minutes. Files encrypted from a v0 build
 of a message don't open with a v1 build of it, so encrypt each file from the
 payload you send. The request never delays or fails a call. One that fails
 is retried in the background while a chat waits for its answer, 1 second

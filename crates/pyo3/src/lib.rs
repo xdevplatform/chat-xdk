@@ -418,13 +418,18 @@ impl FileDecryptor {
 static FEATURE_STARTER: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
 /// Start `chat`'s reads of the feature switches, when it is created or its
-/// identity is set: hand the GET the core returns, if any, to the starter
-/// the package registered. A GET that cannot start ends at once, and the
-/// chat's switches stay as they are until a later read of its URL answers.
+/// identity is set.
 fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
-    let Some(fetch) = chat.start_features() else {
-        return;
-    };
+    if let Some(fetch) = chat.start_features() {
+        start_feature_fetch(py, &fetch);
+    }
+}
+
+/// Hand `fetch`, a GET the core wants performed, to the starter the package
+/// registered. A GET that cannot start ends at once, and the switches of the
+/// chats that wait for it stay as they are until a later read of its URL
+/// answers.
+fn start_feature_fetch(py: Python<'_>, fetch: &bindings::Fetch) {
     let started = FEATURE_STARTER.get(py).is_some_and(|starter| {
         starter
             .call1(
@@ -434,6 +439,7 @@ fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
                     fetch.url.as_str(),
                     fetch.timeout_ms as f64 / 1000.0,
                     fetch.max_bytes,
+                    fetch.delay_ms as f64 / 1000.0,
                 ),
             )
             .is_ok()
@@ -443,8 +449,9 @@ fn start_feature_read(py: Python<'_>, chat: &chat_xdk_core::Chat) {
     }
 }
 
-/// Register the callable that performs a chat's feature GET:
-/// ``starter(id, url, timeout_seconds, max_bytes)`` starts it and returns.
+/// Register the callable that performs each feature GET:
+/// ``starter(id, url, timeout_seconds, max_bytes, delay_seconds)`` arranges
+/// for the GET to start ``delay_seconds`` from now and returns.
 #[pyfunction]
 #[pyo3(name = "_feature_set_starter")]
 fn feature_set_starter(py: Python<'_>, starter: Py<PyAny>) {
@@ -452,25 +459,14 @@ fn feature_set_starter(py: Python<'_>, starter: Py<PyAny>) {
 }
 
 /// Report the result of the feature GET ``fetch_id``: its HTTP status, 0 when
-/// no complete response arrived, and its body. Returns the next GET to
-/// perform, a refresh or a retry, as ``(id, url, timeout_seconds, max_bytes,
-/// delay_seconds)``, or ``None``.
+/// no complete response arrived, and its body. The next GET, a refresh or a
+/// retry, goes to the starter while a chat still waits for one.
 #[pyfunction]
 #[pyo3(name = "_feature_complete")]
-fn feature_complete(
-    fetch_id: u64,
-    status: u16,
-    body: &[u8],
-) -> Option<(u64, String, f64, usize, f64)> {
-    bindings::complete_fetch(fetch_id, status, body).map(|next| {
-        (
-            next.id,
-            next.url,
-            next.timeout_ms as f64 / 1000.0,
-            next.max_bytes,
-            next.delay_ms as f64 / 1000.0,
-        )
-    })
+fn feature_complete(py: Python<'_>, fetch_id: u64, status: u16, body: &[u8]) {
+    if let Some(next) = bindings::complete_fetch(fetch_id, status, body) {
+        start_feature_fetch(py, &next);
+    }
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set

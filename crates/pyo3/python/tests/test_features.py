@@ -80,6 +80,55 @@ class TestFeatureSwitches(unittest.TestCase):
 
         return wait_for(predicate, timeout)
 
+    def _run(self, script, *args, env=None):
+        """Run ``script`` in a Python process of its own, for a test that sets
+        environment variables, forks or exits: what it printed. The script
+        has ``keyed(chat)``, which gives a chat its keys, and ``send(chat)``,
+        the signature version of a send; ``env`` replaces every proxy
+        variable of this process."""
+        prelude = textwrap.dedent(
+            """
+            import base64, os, sys, time
+            import chat_xdk
+            from chat_xdk import EncryptMessageParams, ImportKeysParams
+            from features_support import FeatureServer, keep_offline, reading, wait_for
+
+            keep_offline()
+
+            def keyed(chat):
+                chat.import_keys(ImportKeysParams(base64.b64decode(os.environ["TEST_PRIVATE_KEYS"])))
+                return chat
+
+            def send(chat):
+                return chat.encrypt_message(
+                    EncryptMessageParams(
+                        "conv-1",
+                        "hello",
+                        sender_id="1001",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                    )
+                ).signature_info.signature_version
+            """
+        )
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        environment = {name: value for name, value in os.environ.items() if not name.lower().endswith("_proxy")}
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, environment.get("PYTHONPATH", "")]
+        )
+        environment["TEST_PRIVATE_KEYS"] = self.vectors["private_keys_concat_b64"]
+        environment.update(env or {})
+        result = subprocess.run(
+            [sys.executable, "-c", prelude + textwrap.dedent(script), *args],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
     def test_feature_switches_are_not_public_api(self):
         import chat_xdk
 
@@ -260,13 +309,7 @@ class TestFeatureSwitches(unittest.TestCase):
     def test_exit_cuts_short_a_request_under_way(self):
         # In a process of its own, since the exit hook ends every request.
         self.server.delay = 30.0
-        script = textwrap.dedent(
-            """
-            import sys, time
-            import chat_xdk
-            from features_support import keep_offline, reading, wait_for
-
-            keep_offline()
+        script = """
             chat = reading(sys.argv[1], 60.0)
             assert wait_for(lambda: len(chat_xdk._requests) == 1), "no request under way"
             (request,) = list(chat_xdk._requests)
@@ -276,22 +319,61 @@ class TestFeatureSwitches(unittest.TestCase):
             assert not request.is_alive() and not chat_xdk._requests
             print("ok")
             """
-        )
-        tests_dir = os.path.dirname(os.path.abspath(__file__))
-        env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(
-            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, env.get("PYTHONPATH", "")]
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", script, self.server.url],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ok")
+        self.assertEqual(self._run(script, self.server.url), "ok")
 
+    def test_a_chat_created_after_the_last_one_is_gone_takes_its_answer(self):
+        self.server.delay = 0.3
+        first = self._chat()
+        self.assertEqual(self._send(first), "7", "sent before the answer")
+        del first
+        gc.collect()
+        time.sleep(0.8)
+        for _ in range(5):
+            chat = self._chat()
+            self.assertEqual(self._send(chat), "10", "the first send of a chat created after the answer")
+            del chat
+            gc.collect()
+        time.sleep(0.2)
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+
+    def test_a_chat_that_takes_a_kept_answer_follows_its_refresh(self):
+        self.server.delay = 0.2
+        self._chat(refresh=1.0)
+        gc.collect()
+        time.sleep(0.6)
+        chat = self._chat(refresh=1.0)
+        self.assertEqual(self._send(chat), "10")
+        self.assertEqual(len(self.server.queries), 1, "no request before the refresh is due")
+        self.server.body = '{"features":{}}'
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "7"), "the refresh reached it")
+        self.assertEqual(len(self.server.queries), 2, self.server.queries)
+
+    def test_a_kept_answer_ages_out_at_the_refresh_interval(self):
+        self.server.delay = 0.2
+        self._chat(refresh=0.5)
+        gc.collect()
+        time.sleep(1.2)
+        self.assertEqual(len(self.server.queries), 1, "no chat, no refresh")
+        late = self._chat(refresh=0.5)
+        self.assertEqual(self._send(late), "7", "an answer older than the refresh interval is none")
+        self.assertTrue(self._wait_for(lambda: self._send(late) == "10"), "its own read answers")
+        self.assertEqual(len(self.server.queries), 2, self.server.queries)
+
+    def test_many_waiting_reads_hold_one_thread(self):
+        import threading
+
+        from features_support import FeatureServer
+
+        servers = [FeatureServer() for _ in range(8)]
+        try:
+            chats = [self._chat(url=server.url) for server in servers]
+            self.assertTrue(self._wait_for(lambda: all(self._send(chat) == "10" for chat in chats)))
+            time.sleep(0.2)
+            waiting = [thread.name for thread in threading.enumerate() if thread.name.startswith("chat-xdk-features")]
+            self.assertEqual(waiting, ["chat-xdk-features-timer"], "one thread waits for every refresh")
+        finally:
+            for server in servers:
+                server.close()
 
 if __name__ == "__main__":
     unittest.main()

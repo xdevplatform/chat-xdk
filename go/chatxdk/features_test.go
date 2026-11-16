@@ -538,6 +538,68 @@ func TestARequestEndsSafelyForAClosedOrCollectedChat(t *testing.T) {
 	}
 }
 
+func TestAChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(300 * time.Millisecond)
+	first := featureChat(t, v, server.endpoint(), 2*time.Second)
+	if got := sendVersion(t, first, v); got != "7" {
+		t.Fatalf("sent %s before the answer, want 7", got)
+	}
+	first.Close()
+	time.Sleep(800 * time.Millisecond)
+	for i := 0; i < 5; i++ {
+		chat := featureChat(t, v, server.endpoint(), 2*time.Second)
+		if got := sendVersion(t, chat, v); got != "10" {
+			t.Fatalf("the first send of a chat created after the answer is %s, want 10", got)
+		}
+		chat.Close()
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1", len(got))
+	}
+}
+
+func TestAChatThatTakesAKeptAnswerFollowsItsRefresh(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(200 * time.Millisecond)
+	featureChatEvery(t, v, server.endpoint(), 2*time.Second, time.Second).Close()
+	time.Sleep(600 * time.Millisecond)
+	chat := featureChatEvery(t, v, server.endpoint(), 2*time.Second, time.Second)
+	if got := sendVersion(t, chat, v); got != "10" {
+		t.Fatalf("sent %s, want 10: the kept answer", got)
+	}
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1: none before the refresh is due", len(got))
+	}
+	server.set(http.StatusOK, `{"features":{}}`)
+	waitFor(t, "v0 after the refresh", func() bool { return sendVersion(t, chat, v) == "7" })
+	if got := server.seen(); len(got) != 2 {
+		t.Fatalf("requests: %d, want 2", len(got))
+	}
+}
+
+func TestAKeptAnswerAgesOutAtTheRefreshInterval(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	server.setDelay(200 * time.Millisecond)
+	featureChatEvery(t, v, server.endpoint(), 2*time.Second, 500*time.Millisecond).Close()
+	time.Sleep(1200 * time.Millisecond)
+	if got := server.seen(); len(got) != 1 {
+		t.Fatalf("requests: %d, want 1: no chat, no refresh", len(got))
+	}
+	late := featureChatEvery(t, v, server.endpoint(), 2*time.Second, 500*time.Millisecond)
+	if got := sendVersion(t, late, v); got != "7" {
+		t.Fatalf("sent %s, want 7: an answer older than the refresh interval is none", got)
+	}
+	waitFor(t, "v1 from its own read", func() bool { return sendVersion(t, late, v) == "10" })
+	if got := server.seen(); len(got) != 2 {
+		t.Fatalf("requests: %d, want 2", len(got))
+	}
+}
+
 func TestTheReadSendsNoCookiesOrCredentials(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)

@@ -150,7 +150,9 @@ minutes after each answer, so a change reaches a running chat without a
 restart. The sender's request carries its bucket, the last four digits of
 the user id (`?bucket=1234`), so every chat of one sender gets the same
 answer; before that, the X API buckets the request by its address. Chats
-that read the same URL share one request.
+that read the same URL share one request, and the answer stays for 5 minutes
+after it arrives, so a chat created in that time takes it at once: an app
+that creates a chat for each send makes one request per URL every 5 minutes.
 
 The request carries no credentials and never delays or fails an SDK call.
 One that fails is retried in the background, 1 second later, then after

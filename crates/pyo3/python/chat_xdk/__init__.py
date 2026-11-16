@@ -27,7 +27,9 @@ Quick Start:
 
 import asyncio as _asyncio
 import atexit as _atexit
+import heapq as _heapq
 import http.client as _http_client
+import itertools as _itertools
 import socket as _socket
 import threading as _threading
 import time as _time
@@ -115,37 +117,71 @@ class ScreenCaptureChange(str, Enum):
 # is API.
 
 
-def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Start a feature GET on a daemon thread; the native module calls this
-    when a chat is created and when ``set_identity`` gives it a new URL."""
-    _threading.Thread(
-        target=_perform_feature_fetch,
-        args=(fetch_id, url, timeout, max_bytes),
-        name="chat-xdk-features",
-        daemon=True,
-    ).start()
+def _start_feature_fetch(fetch_id, url, timeout, max_bytes, delay):
+    """Perform a feature GET ``delay`` seconds from now, on a daemon thread
+    of its own. The native module calls this with each GET the core wants: a
+    chat's first read, and each refresh or retry after a result."""
+    global _timer
+    fetch = (fetch_id, url, timeout, max_bytes)
+    if delay <= 0:
+        _threading.Thread(
+            target=_perform_feature_fetch, args=fetch, name="chat-xdk-features", daemon=True
+        ).start()
+        return
+    with _waiting_changed:
+        if _timer is None:
+            timer = _threading.Thread(
+                target=_start_waiting_fetches, name="chat-xdk-features-timer", daemon=True
+            )
+            timer.start()
+            _timer = timer
+        _heapq.heappush(_waiting, (_time.monotonic() + delay, next(_waiting_order), fetch))
+        _waiting_changed.notify()
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Perform the GET, then each GET the core returns, a refresh or a
-    retry, after its delay, until none is left or the process exits."""
+    """Perform the GET and report its result to the core, which hands
+    ``_start_feature_fetch`` the next one, a refresh or a retry, while a chat
+    still waits for one."""
+    try:
+        status, body = _get_features(url, timeout, max_bytes)
+    except Exception:
+        status, body = 0, b""
+    _native._feature_complete(fetch_id, status, body)
+
+
+# The GETs waiting for their time, soonest first, and the thread that starts
+# each one when it is due. One thread waits for them all, so a process whose
+# chats read many URLs holds no thread per URL between its GETs.
+_waiting = []
+_waiting_order = _itertools.count()
+_waiting_changed = _threading.Condition()
+_timer = None
+
+
+def _start_waiting_fetches():
+    """Start each waiting GET when its time comes, until the process exits."""
     while True:
+        with _waiting_changed:
+            while not _exit_requested.is_set():
+                wait = _waiting[0][0] - _time.monotonic() if _waiting else None
+                if wait is not None and wait <= 0:
+                    break
+                _waiting_changed.wait(wait)
+            else:
+                return
+            fetch = _heapq.heappop(_waiting)[2]
         try:
-            status, body = _get_features(url, timeout, max_bytes)
-        except Exception:
-            status, body = 0, b""
-        following = _native._feature_complete(fetch_id, status, body)
-        if following is None:
-            return
-        fetch_id, url, timeout, max_bytes, delay = following
-        if _exit_requested.wait(delay):
-            return
+            _start_feature_fetch(*fetch, 0)
+        except RuntimeError:
+            # No thread to perform it on: a failed read, which the core retries.
+            _native._feature_complete(fetch[0], 0, b"")
 
 
 # The sockets of the GETs under way, by thread. At exit they are cut short and
 # waited for: a daemon thread still inside OpenSSL when the process exits races
-# OpenSSL's own cleanup, which can crash the process. A thread waiting for
-# its next GET ends instead of starting it.
+# OpenSSL's own cleanup, which can crash the process. The thread waiting for
+# the next GET ends instead of starting it.
 _requests = {}
 _requests_lock = _threading.Lock()
 _exiting = False
@@ -213,6 +249,8 @@ def _end_feature_requests():
     end, at most 2 seconds."""
     global _exiting
     _exit_requested.set()
+    with _waiting_changed:
+        _waiting_changed.notify_all()
     with _requests_lock:
         _exiting = True
         for sock in _requests.values():
