@@ -152,10 +152,17 @@ def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
     """Perform the GET and report its result to the core, which hands
     ``_start_feature_fetch`` the next one, a refresh or a retry, while a chat
     still waits for one."""
+    global _under_way
+    with _fork_gate:
+        _under_way += 1
     try:
         status, body = _get_features(url, timeout, max_bytes)
     except Exception:
         status, body = 0, b""
+    finally:
+        with _fork_gate:
+            _under_way -= 1
+            _fork_gate.notify_all()
     _native._feature_complete(fetch_id, status, body)
 
 
@@ -330,16 +337,45 @@ def _end_feature_requests():
         thread.join(max(0.0, deadline - _time.monotonic()))
 
 
+# A fork copies the process as it is, with only the forking thread in the
+# copy. A GET under way on another thread at that moment may hold a lock of
+# the resolver's or of OpenSSL's, which nothing in the child ever releases:
+# the child then hangs the next time it resolves a name or opens a TLS
+# connection, its own included. So a fork holds new GETs back at this gate
+# and waits for the ones under way, at most _FORK_WAIT seconds.
+_fork_gate = _threading.Condition()
+_under_way = 0
+_FORK_WAIT = 2.0
+
+
+def _wait_for_feature_fetches_before_fork():
+    """Before a fork: hold new GETs back until it is over, and wait for the
+    ones under way."""
+    _fork_gate.acquire()
+    deadline = _time.monotonic() + _FORK_WAIT
+    while _under_way and (remaining := deadline - _time.monotonic()) > 0:
+        _fork_gate.wait(remaining)
+
+
+def _resume_feature_fetches_after_fork():
+    """After a fork, in the parent: let the GETs held back go on."""
+    _fork_gate.release()
+
+
 def _restart_feature_fetches_after_fork():
     """In a forked child: the threads that perform and wait for GETs stayed
     in the parent, so let go of its GETs and start again every read a chat of
     this process still waits for."""
-    global _requests_lock, _waiting_changed, _timer, _exiting, _exit_requested
+    global _fork_gate, _under_way, _requests_lock, _waiting_changed, _timer
+    global _exiting, _exit_requested, _tls_context
+    _fork_gate = _threading.Condition()
+    _under_way = 0
     _requests_lock = _threading.Lock()
     _waiting_changed = _threading.Condition()
     _exit_requested = _threading.Event()
     _exiting = False
     _timer = None
+    _tls_context = None
     _waiting.clear()
     for sock in _requests.values():
         # This closes the child's handle only: the parent's request goes on.
@@ -349,7 +385,11 @@ def _restart_feature_fetches_after_fork():
 
 
 if hasattr(_os, "register_at_fork"):
-    _os.register_at_fork(after_in_child=_restart_feature_fetches_after_fork)
+    _os.register_at_fork(
+        before=_wait_for_feature_fetches_before_fork,
+        after_in_parent=_resume_feature_fetches_after_fork,
+        after_in_child=_restart_feature_fetches_after_fork,
+    )
 
 _native._feature_set_starter(_start_feature_fetch)
 

@@ -130,11 +130,16 @@ one before; until an answer for the chat's URL arrives, sends stay in v0,
 the format 0.5.x sends.
 
 The request goes through the `http://` proxy that `HTTPS_PROXY` (or
-`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. Requests run on
-daemon threads; a process that forks reads the switches again in the child
-for the chats it inherited. A process that creates a chat, sends once and
-exits has no answer yet, so it sends v0: keep one chat alive, or one process
-running, to follow the switch.
+`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. A process that
+creates a chat, sends once and exits has no answer yet, so it sends v0: keep
+one chat alive, or one process running, to follow the switch.
+
+Requests run on daemon threads. A process that forks with `os.fork` (gunicorn
+with `--preload`, a Celery prefork pool, `multiprocessing`) waits for the
+requests under way, at most 2 seconds, and reads the switches again in the
+child for the chats it inherited. uWSGI forks without telling Python and
+runs no threads by default: set `enable-threads`, and create the chat in each
+worker with `lazy-apps` or a post-fork hook.
 
 ## Security limitations
 

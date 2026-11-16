@@ -23,15 +23,21 @@
   switches and its sends stayed v0. Go and .NET already followed these
   variables, the JVM its `https.proxyHost` properties, and Node its own
   `NODE_USE_ENV_PROXY`.
-- Python: a process that forks reads the switches again in the child. The
-  threads that perform and schedule the requests stay in the parent, so the
-  chats a forked worker inherited (under `gunicorn --preload`, uWSGI without
-  `lazy-apps`, a Celery prefork pool or `multiprocessing`) kept the switches
-  they had at the fork for good.
-- Python: importing the package imports the idna codec, which a request
-  needs to resolve a host name. Python imported it on the request's thread
-  the first time, and a process that forked during that import got a child
-  that hung the first time it resolved any host name.
+- Python: a process that forks with `os.fork` reads the switches again in
+  the child. The threads that perform and schedule the requests stay in the
+  parent, so the chats a forked worker inherited (under `gunicorn --preload`,
+  a Celery prefork pool or `multiprocessing`) kept the switches they had at
+  the fork for good.
+- Python: a fork no longer finds a feature-switch request halfway. A process
+  that forked while one was under way, as a preloading server does right
+  after its app creates a chat, could get a child that hung the first time it
+  resolved a host name or opened a TLS connection, its own HTTP calls
+  included: the request's thread was importing Python's idna codec, or held
+  a lock of the resolver's or of OpenSSL's. Importing the package now
+  imports the codec, and `os.fork` waits for the requests under way, at most
+  2 seconds. uWSGI forks without telling Python unless `py-call-osafterfork`
+  is set, so under uWSGI create the chat in each worker (`lazy-apps`, or a
+  post-fork hook) and set `enable-threads`.
 - Python: the requests waiting for their time share one daemon thread
   instead of holding one each, so a process whose chats read many buckets
   keeps one waiting thread, not one per bucket.

@@ -11,8 +11,9 @@
 //! returns, if any, in the background after the GET's `delay_ms`, reports its
 //! result with [`complete_fetch`], and performs the GET `complete_fetch`
 //! returns, if any, the same way; it ends a GET it cannot start with
-//! [`abandon_fetch`]. A binding whose process can fork calls
-//! [`restart_fetches`] in the child.
+//! [`abandon_fetch`]. A binding whose process can fork keeps a fork from
+//! finding one of its GETs under way, and calls [`restart_fetches`] in the
+//! child.
 
 pub use crate::features::Fetch;
 

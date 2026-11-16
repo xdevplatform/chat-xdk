@@ -473,11 +473,32 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(self._run(script, self.server.url.replace("127.0.0.1", "localhost")), "True []")
 
     @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_fork_waits_for_the_request_under_way(self):
+        # A request under way can hold a lock of the resolver's or of
+        # OpenSSL's, which a child forked at that moment could never take.
+        self.server.delay = 0.8
+        script = """
+            chat = keyed(reading(sys.argv[1], 3.0))
+            assert send(chat) == "7"
+            time.sleep(0.2)
+            started = time.monotonic()
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if send(chat) == "10" and not chat_xdk._requests else 1)
+            waited = time.monotonic() - started
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), 0.3 < waited < 2.0, send(chat))
+            """
+        self.assertEqual(self._run(script, self.server.url), "0 True 10")
+        self.assertEqual(len(self.server.queries), 1, "the child inherits the answer and reads at its refresh")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
     def test_a_forked_child_reads_for_the_chats_it_inherited(self):
         self.server.delay = 1.0
         script = """
+            chat_xdk._FORK_WAIT = 0.1  # the fork gives up on the request still under way
             chat = keyed(reading(sys.argv[1], 3.0))
-            time.sleep(0.3)  # the request is under way, waiting for its answer
+            time.sleep(0.3)
             pid = os.fork()
             if pid == 0:
                 os._exit(0 if wait_for(lambda: send(chat) == "10", 5.0) else 1)

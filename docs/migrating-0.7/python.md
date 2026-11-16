@@ -159,9 +159,11 @@ Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. The request goes through the `http://`
 proxy that `HTTPS_PROXY` (or `ALL_PROXY`) names, unless `NO_PROXY` exempts
 `api.x.com`. The requests run on daemon threads, and one still under way or
-waiting at exit is cut short, so they never keep the process alive; a
-process that forks reads the switches again in the child. There's no code
-to change.
+waiting at exit is cut short, so they never keep the process alive. A
+process that forks with `os.fork` waits for the requests under way, at most
+2 seconds, and reads the switches again in the child; under uWSGI, set
+`enable-threads` and create the chat in each worker (`lazy-apps`). There's
+no code to change.
 
 ## 1. Symbol index
 

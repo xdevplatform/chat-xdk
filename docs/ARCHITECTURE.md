@@ -254,11 +254,18 @@ validation; without it, every switch stays off:
   inside OpenSSL while OpenSSL cleans up. Every binding reads the body as it
   streams, up to one byte past 64 KiB, so a long body is never held whole;
   where a runtime can't stream it, the request fails.
-- **Forked processes:** threads don't cross a fork, so a Python process that
-  forks starts its reads again in the child, for the chats the child
-  inherited: a refresh when it is due, any other read at once. The package
-  imports everything a request needs when it is imported, so a fork never
-  finds a request's thread halfway through an import.
+- **Forked processes:** threads don't cross a fork, and a request under way
+  on one can hold a lock, of the resolver's or of OpenSSL's, that the child
+  could never take. So a Python process that forks with `os.fork` (gunicorn
+  with `--preload`, a Celery prefork pool, `multiprocessing`) first waits for
+  its requests under way, at most 2 s, then starts its reads again in the
+  child for the chats the child inherited: a refresh when it is due, any
+  other read at once. The package imports everything a request needs when it
+  is imported, so a fork never finds a request's thread halfway through an
+  import. A server that forks without telling Python gets neither, as uWSGI
+  does unless `py-call-osafterfork` is set: there, create the chats in each
+  worker (`lazy-apps`, or a post-fork hook) and turn `enable-threads` on, or
+  the daemon threads never run.
 - **Proxies:** each binding's HTTP stack decides. Python sends the request
   through the `http://` proxy that `HTTPS_PROXY` names, or `ALL_PROXY`,
   unless `NO_PROXY` exempts `api.x.com`, with the credentials in the proxy's
