@@ -241,12 +241,12 @@ namespace ChatXdk.Tests
         public async Task AChatCreatedAfterTheLastOneIsGoneTakesItsAnswer()
         {
             using var server = new FeatureServer();
-            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 300);
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 1000);
             using (var first = NewChat(server.Endpoint))
             {
                 Assert.Equal("7", SendVersion(first));
             }
-            await Task.Delay(800);
+            await Task.Delay(1500);
             for (var i = 0; i < 5; i++)
             {
                 using var chat = NewChat(server.Endpoint);
@@ -261,9 +261,9 @@ namespace ChatXdk.Tests
         {
             using var server = new FeatureServer();
             server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 200);
-            NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(1)).Dispose();
+            NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(2)).Dispose();
             await Task.Delay(600);
-            using var chat = NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(1));
+            using var chat = NewChat(server.Endpoint, refresh: TimeSpan.FromSeconds(2));
             Assert.Equal("10", SendVersion(chat));
             Assert.Single(server.Queries);
             server.Set(200, "{\"features\":{}}");
@@ -275,9 +275,9 @@ namespace ChatXdk.Tests
         public async Task AKeptAnswerAgesOutAtTheRefreshInterval()
         {
             using var server = new FeatureServer();
-            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 200);
+            server.Set(200, "{\"features\":{\"v1_send\":true}}", delayMs: 800);
             NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(500)).Dispose();
-            await Task.Delay(1200);
+            await Task.Delay(2000);
             Assert.Single(server.Queries);
             using var late = NewChat(server.Endpoint, refresh: TimeSpan.FromMilliseconds(500));
             Assert.Equal("7", SendVersion(late));

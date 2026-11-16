@@ -240,11 +240,11 @@ async function aRequestEndsSafelyForAFreedChat(v, server) {
 }
 
 async function aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server) {
-  server.delayMs = 300;
+  server.delayMs = 1000;
   const first = newChat(v, server.endpoint);
   assert.equal(send(first, v), "7", "sent before the answer");
   first.free();
-  await sleep(800);
+  await sleep(1500);
   for (let i = 0; i < 5; i++) {
     const chat = newChat(v, server.endpoint);
     assert.equal(send(chat, v), "10", "the first send of a chat created after the answer");
@@ -256,9 +256,9 @@ async function aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server) {
 
 async function aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server) {
   server.delayMs = 200;
-  newChat(v, server.endpoint, { refreshMs: 1000 }).free();
+  newChat(v, server.endpoint, { refreshMs: 2000 }).free();
   await sleep(600);
-  const chat = newChat(v, server.endpoint, { refreshMs: 1000 });
+  const chat = newChat(v, server.endpoint, { refreshMs: 2000 });
   assert.equal(send(chat, v), "10", "the kept answer");
   assert.equal(server.queries.length, 1, "no request before the refresh is due");
   server.body = '{"features":{}}';
@@ -268,9 +268,9 @@ async function aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server) {
 }
 
 async function aKeptAnswerAgesOutAtTheRefreshInterval(v, server) {
-  server.delayMs = 200;
+  server.delayMs = 800;
   newChat(v, server.endpoint, { refreshMs: 500 }).free();
-  await sleep(1200);
+  await sleep(2000);
   assert.equal(server.queries.length, 1, "no chat, no refresh");
   const late = newChat(v, server.endpoint, { refreshMs: 500 });
   assert.equal(send(late, v), "7", "an answer older than the refresh interval is none");

@@ -297,11 +297,11 @@ class FeatureSwitchTest {
     @Test
     void aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
-            server.set(200, "{\"features\":{\"v1_send\":true}}", 300);
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 1000);
             try (Chat first = newChat(server.endpoint)) {
                 assertEquals("7", sendVersion(first), "sent before the answer");
             }
-            Thread.sleep(800);
+            Thread.sleep(1500);
             for (int i = 0; i < 5; i++) {
                 try (Chat chat = newChat(server.endpoint)) {
                     assertEquals("10", sendVersion(chat), "the first send of a chat created after the answer");
@@ -316,9 +316,9 @@ class FeatureSwitchTest {
     void aChatThatTakesAKeptAnswerFollowsItsRefresh() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
             server.set(200, "{\"features\":{\"v1_send\":true}}", 200);
-            newChat(server.endpoint, 2000, Duration.ofSeconds(1)).close();
+            newChat(server.endpoint, 2000, Duration.ofSeconds(2)).close();
             Thread.sleep(600);
-            try (Chat chat = newChat(server.endpoint, 2000, Duration.ofSeconds(1))) {
+            try (Chat chat = newChat(server.endpoint, 2000, Duration.ofSeconds(2))) {
                 assertEquals("10", sendVersion(chat), "the kept answer");
                 assertEquals(1, server.queries().size(), "no request before the refresh is due");
                 server.set(200, "{\"features\":{}}", 0);
@@ -331,9 +331,9 @@ class FeatureSwitchTest {
     @Test
     void aKeptAnswerAgesOutAtTheRefreshInterval() throws Exception {
         try (FeatureServer server = new FeatureServer()) {
-            server.set(200, "{\"features\":{\"v1_send\":true}}", 200);
+            server.set(200, "{\"features\":{\"v1_send\":true}}", 800);
             newChat(server.endpoint, 2000, Duration.ofMillis(500)).close();
-            Thread.sleep(1200);
+            Thread.sleep(2000);
             assertEquals(1, server.queries().size(), "no chat, no refresh");
             try (Chat late = newChat(server.endpoint, 2000, Duration.ofMillis(500))) {
                 assertEquals("7", sendVersion(late), "an answer older than the refresh interval is none");

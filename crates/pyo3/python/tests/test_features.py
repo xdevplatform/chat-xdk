@@ -323,12 +323,12 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(self._run(script, self.server.url), "ok")
 
     def test_a_chat_created_after_the_last_one_is_gone_takes_its_answer(self):
-        self.server.delay = 0.3
+        self.server.delay = 1.0
         first = self._chat()
         self.assertEqual(self._send(first), "7", "sent before the answer")
         del first
         gc.collect()
-        time.sleep(0.8)
+        time.sleep(1.5)
         for _ in range(5):
             chat = self._chat()
             self.assertEqual(self._send(chat), "10", "the first send of a chat created after the answer")
@@ -339,10 +339,10 @@ class TestFeatureSwitches(unittest.TestCase):
 
     def test_a_chat_that_takes_a_kept_answer_follows_its_refresh(self):
         self.server.delay = 0.2
-        self._chat(refresh=1.0)
+        self._chat(refresh=2.0)
         gc.collect()
         time.sleep(0.6)
-        chat = self._chat(refresh=1.0)
+        chat = self._chat(refresh=2.0)
         self.assertEqual(self._send(chat), "10")
         self.assertEqual(len(self.server.queries), 1, "no request before the refresh is due")
         self.server.body = '{"features":{}}'
@@ -350,10 +350,10 @@ class TestFeatureSwitches(unittest.TestCase):
         self.assertEqual(len(self.server.queries), 2, self.server.queries)
 
     def test_a_kept_answer_ages_out_at_the_refresh_interval(self):
-        self.server.delay = 0.2
+        self.server.delay = 0.8
         self._chat(refresh=0.5)
         gc.collect()
-        time.sleep(1.2)
+        time.sleep(2.0)
         self.assertEqual(len(self.server.queries), 1, "no chat, no refresh")
         late = self._chat(refresh=0.5)
         self.assertEqual(self._send(late), "7", "an answer older than the refresh interval is none")

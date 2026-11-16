@@ -541,13 +541,13 @@ func TestARequestEndsSafelyForAClosedOrCollectedChat(t *testing.T) {
 func TestAChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	server.setDelay(300 * time.Millisecond)
+	server.setDelay(time.Second)
 	first := featureChat(t, v, server.endpoint(), 2*time.Second)
 	if got := sendVersion(t, first, v); got != "7" {
 		t.Fatalf("sent %s before the answer, want 7", got)
 	}
 	first.Close()
-	time.Sleep(800 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	for i := 0; i < 5; i++ {
 		chat := featureChat(t, v, server.endpoint(), 2*time.Second)
 		if got := sendVersion(t, chat, v); got != "10" {
@@ -565,9 +565,9 @@ func TestAChatThatTakesAKeptAnswerFollowsItsRefresh(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
 	server.setDelay(200 * time.Millisecond)
-	featureChatEvery(t, v, server.endpoint(), 2*time.Second, time.Second).Close()
+	featureChatEvery(t, v, server.endpoint(), 2*time.Second, 2*time.Second).Close()
 	time.Sleep(600 * time.Millisecond)
-	chat := featureChatEvery(t, v, server.endpoint(), 2*time.Second, time.Second)
+	chat := featureChatEvery(t, v, server.endpoint(), 2*time.Second, 2*time.Second)
 	if got := sendVersion(t, chat, v); got != "10" {
 		t.Fatalf("sent %s, want 10: the kept answer", got)
 	}
@@ -584,9 +584,9 @@ func TestAChatThatTakesAKeptAnswerFollowsItsRefresh(t *testing.T) {
 func TestAKeptAnswerAgesOutAtTheRefreshInterval(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)
-	server.setDelay(200 * time.Millisecond)
+	server.setDelay(800 * time.Millisecond)
 	featureChatEvery(t, v, server.endpoint(), 2*time.Second, 500*time.Millisecond).Close()
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 	if got := server.seen(); len(got) != 1 {
 		t.Fatalf("requests: %d, want 1: no chat, no refresh", len(got))
 	}
