@@ -37,7 +37,9 @@ digits of the session identity's user id. It is bounded (2 s per request,
 64 KiB per body), runs when a chat is created, when its identity gives it a
 new bucket, and 5 minutes after each answer, and retries a read that fails
 with backoff (1 s, doubling, at most 5 minutes apart) while a chat waits for
-it. It never blocks or fails an SDK call, and is fail-closed: until an answer
+it. A URL's answer stays for 5 minutes after it arrives, so a chat created in
+that time takes it and reads when its refresh is due, not at once. It never
+blocks or fails an SDK call, and is fail-closed: until an answer
 arrives, every switch stays off, so the chat's sends stay v0. Don't widen it: no
 other endpoint, no auth, no user data past the bucket, no read more often
 than that schedule, nothing whose failure can change a call's result, and no
