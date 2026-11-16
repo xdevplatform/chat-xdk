@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-16
+
 ### Fixed
 
 - An app that creates a chat for each send, or closes its chats between
@@ -1018,7 +1020,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...v0.7.1
