@@ -18,7 +18,8 @@
 # token after a one-time Trusted Publisher registration on the registry (org
 # xdevplatform, repo chat-xdk, workflow release.yml). npm registers it per
 # package: @xdevplatform/chat-xdk and @xdevplatform/chat-xdk-server each need
-# one. Maven Central has no OIDC; it requires a Central Portal user token.
+# one, with no environment. Maven Central has no OIDC; it requires a Central
+# Portal user token.
 #
 # Required secrets:
 #   - NUGET_USER                  NuGet.org profile name the trusted publishing policy is registered under
@@ -93,6 +94,52 @@ jobs:
             echo "::error::binding js-server republishes from the release tag, and v$V does not exist: release $V with binding js or all."
             exit 1
           fi
+      # Fail before anything is tagged or published when npm would refuse a
+      # package the js job publishes. Same Node as that job, for the same npm.
+      - uses: actions/setup-node@v4
+        if: ${{ contains(fromJSON('["js","js-server","all"]'), inputs.binding) }}
+        with: { node-version: "24", registry-url: "https://registry.npmjs.org" }
+      - name: Preflight npm packages
+        if: ${{ contains(fromJSON('["js","js-server","all"]'), inputs.binding) }}
+        working-directory: crates/wasm
+        run: |
+          set -euo pipefail
+          # The id token `npm publish` trades for its publish token.
+          id_token="$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | jq -r .value)"
+          preflight() {
+            local dir="$1" name version repo response
+            name="$(jq -r .name "$dir/package.json")"
+            version="$(jq -r .version "$dir/package.json")"
+            if [ "$(npm view "$name@$version" version 2>/dev/null)" = "$version" ]; then
+              echo "::notice::$name@$version is already on npm; the release skips it"
+              return
+            fi
+            # npm rejects a provenance statement that names another repository.
+            repo="$(jq -r '.repository.url // ""' "$dir/package.json")"
+            repo="${repo#git+}"
+            if [ "${repo%.git}" != "https://github.com/$GITHUB_REPOSITORY" ]; then
+              echo "::error file=crates/wasm/$dir/package.json::repository.url is '$repo'; npm provenance needs https://github.com/$GITHUB_REPOSITORY"
+              exit 1
+            fi
+            # No wasm is built yet, so this tarball is incomplete: the dry run
+            # checks what npm checks before it uploads (manifest, version, tag).
+            (cd "$dir" && npm publish --dry-run --access public)
+            # Without a trusted publisher `npm publish` fails with a bare 404
+            # after the tag is pushed, so make its token exchange here.
+            response="$(curl -sS -X POST -H "Authorization: Bearer $id_token" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${name/\//%2f}")"
+            if ! jq -e .token <<<"$response" >/dev/null 2>&1; then
+              jq -r '.message // empty' <<<"$response" 2>/dev/null || true
+              echo "::error::npm does not accept this workflow as a trusted publisher of $name. On npmjs.com, the package's Settings → Trusted Publisher needs GitHub Actions with organization or user $GITHUB_REPOSITORY_OWNER, repository ${GITHUB_REPOSITORY#*/}, workflow filename release.yml and no environment."
+              exit 1
+            fi
+            echo "$name@$version: npm accepts this workflow as a trusted publisher"
+          }
+          # js-server republishes only the server package.
+          dirs="js js-server"
+          if [ "${{ inputs.binding }}" = "js-server" ]; then dirs="js-server"; fi
+          for dir in $dirs; do preflight "$dir"; done
 
   # ---------------------------------------------------------------------------
   # The version stamp changes the Go static libraries (rustc's -C metadata
