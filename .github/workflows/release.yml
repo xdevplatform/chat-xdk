@@ -8,6 +8,11 @@
 # scripts/version.sh. The git tag `vX.Y.Z` is created on a real release; the Go
 # module additionally needs the subdir tag `go/chatxdk/vX.Y.Z`.
 #
+# `js` publishes both npm packages. `js-server` republishes only
+# @xdevplatform/chat-xdk-server, from the tag of a version already released
+# (bump: none): it commits and tags nothing. Use it when a release published
+# everything but the server package.
+#
 # Auth is OIDC trusted publishing (no long-lived tokens) wherever the registry
 # supports it: PyPI, npm, and NuGet publishes authenticate with the job's OIDC
 # token after a one-time Trusted Publisher registration on the registry (org
@@ -31,10 +36,10 @@ on:
   workflow_dispatch:
     inputs:
       binding:
-        description: "Binding to release"
+        description: "Binding to release (js-server: republish only @xdevplatform/chat-xdk-server)"
         required: true
         type: choice
-        options: [rust, python, js, go, dotnet, java, all]
+        options: [rust, python, js, js-server, go, dotnet, java, all]
       bump:
         description: "Version bump (none = republish the current version)"
         required: true
@@ -73,6 +78,21 @@ jobs:
         run: echo "version=$(./scripts/version.sh get)" >> "$GITHUB_OUTPUT"
       - name: Summary
         run: ./scripts/version.sh list >> "$GITHUB_STEP_SUMMARY"
+      # js-server publishes from the tag an earlier release pushed, so it has
+      # no version to bump.
+      - name: Check the js-server republish
+        if: ${{ inputs.binding == 'js-server' }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.v.outputs.version }}"
+          if [ "${{ inputs.bump }}" != "none" ]; then
+            echo "::error::binding js-server republishes a released version: run it with bump none."
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/v$V" >/dev/null; then
+            echo "::error::binding js-server republishes from the release tag, and v$V does not exist: release $V with binding js or all."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # The version stamp changes the Go static libraries (rustc's -C metadata
@@ -80,10 +100,11 @@ jobs:
   # from the stamped source BEFORE the release commit is tagged — otherwise
   # `go get` at the tag resolves prebuilts compiled from the previous version.
   # Build steps and reproducibility flags mirror the go-prebuilt sync workflows.
+  # js-server tags nothing, so it needs no prebuilts.
   go-prebuilt:
     name: Build Go prebuilts (${{ matrix.os }})
     needs: prepare
-    if: ${{ !inputs.dry_run || contains(fromJSON('["go","all"]'), inputs.binding) }}
+    if: ${{ (!inputs.dry_run && inputs.binding != 'js-server') || contains(fromJSON('["go","all"]'), inputs.binding) }}
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -166,7 +187,7 @@ jobs:
   tag:
     name: Commit + tag release
     needs: [prepare, go-prebuilt]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !inputs.dry_run && inputs.binding != 'js-server' }}
     runs-on: ubuntu-latest
     steps:
       # The chat-xdk-release GitHub App is a ruleset bypass actor, so its
@@ -272,19 +293,21 @@ jobs:
   js:
     name: Publish JS/WASM (npm)
     needs: [prepare, tag]
-    # `tag` is skipped on dry runs, so success is only required on real ones.
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || needs.tag.result == 'success') && contains(fromJSON('["js","all"]'), inputs.binding) }}
+    # `tag` is skipped on dry runs and for js-server, so success is only
+    # required on the other real runs.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (inputs.dry_run || inputs.binding == 'js-server' || needs.tag.result == 'success') && contains(fromJSON('["js","js-server","all"]'), inputs.binding) }}
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: chat-xdk
     steps:
       # Real run builds at the release tag; a dry-run builds at the triggering
-      # ref, since the tag only exists after a non-dry-run prepare.
+      # ref, since the tag only exists after a non-dry-run prepare. js-server
+      # always builds at the tag, which prepare checked exists.
       - uses: actions/checkout@v4
         with:
           path: chat-xdk
-          ref: ${{ inputs.dry_run && github.ref || format('v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ inputs.dry_run && inputs.binding != 'js-server' && github.ref || format('v{0}', needs.prepare.outputs.version) }}
       - name: Checkout juicebox-sdk (sibling path dependency)
         uses: actions/checkout@v4
         with:
@@ -337,7 +360,7 @@ jobs:
       # A version already on npm is skipped, so a run that follows one where a
       # package failed publishes only that package.
       - name: Publish
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && inputs.binding != 'js-server' }}
         working-directory: chat-xdk/crates/wasm/js
         run: |
           set -euo pipefail
