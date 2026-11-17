@@ -1,24 +1,29 @@
-# Migrating Go code to chat-xdk 0.7.4
+# Migrating Go code to chat-xdk 0.7.x
 
 This page moves Go code written for
 `github.com/xdevplatform/chat-xdk/go/chatxdk` 0.5.x (0.5.0, 0.5.1 or 0.5.2)
-to 0.7.4. Work through it top to bottom: [Before you
+to 0.7.x. Work through it top to bottom: [Before you
 start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.4 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.x form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.4
+request, and [Verify](#5-verify) checks the result. [Why 0.7.x
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
+
+The page describes the newest 0.7.x release, which is the one to install. If
+your app already runs an earlier 0.7.x release, [what each 0.7.x release
+changed](README.md#what-each-07x-release-changed) lists what the later ones
+change for it.
 
 ## Checklist
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
-that nothing reports, and `[new]` a 0.7.4 call to adopt.
+that nothing reports, and `[new]` a 0.7.x call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.4](#install-074)
+- [ ] `[rollout]` [Install the newest 0.7.x release](#install-07x)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Create a Juicebox chat with `NewWithJuiceboxConfig`, and pass `Setup` and `Unlock` only the PIN](#keys-stored-in-juicebox)
@@ -45,6 +50,7 @@ that nothing reports, and `[new]` a 0.7.4 call to adopt.
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a nil `LatestVersion`](#latestversion-comes-from-a-verified-key-change)
 - [ ] `[runtime]` [Rename every read of `target_message_id` to `target_message_sequence_id`](#target_message_id-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `ReplyToEvent`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
+- [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
 - [ ] `[runtime]` [Store a prepared change's key yourself, not through `json.Marshal`](#a-prepared-changes-json-leaves-out-its-key)
 - [ ] `[runtime]` [Sign only your own data with `Sign`](#sign-refuses-data-only-the-sdk-signs)
 - [ ] `[runtime]` [Skip the events `DecryptEvent` drops](#decrypt-drops-a-removals-title-and-description-re-encryptions)
@@ -61,9 +67,10 @@ that nothing reports, and `[new]` a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.4`. A
-snippet with only a `// 0.7.4` half shows code 0.7.4 adds. CI compiles the
-0.7.4 half of every snippet on this page against 0.7.4 with `go vet`
+under `// 0.5.x`, and then as 0.7.x code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.x adds. CI compiles the
+0.7.x half of every snippet on this page against the newest 0.7.x source
+with `go vet`
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)).
 
 `chat` is a `*chatxdk.Chat` with your keys loaded, and the other names stand
@@ -95,22 +102,24 @@ for your code that stores a conversation key. `pin` is the PIN's bytes and
 
 ## 0. Before you start
 
-### Install 0.7.4
+### Install 0.7.x
 
-Require the module at v0.7.4:
+Require the newest v0.7.x release of the module, v0.7.5 or later:
 
 ```sh
-go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7.4
+go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7
 ```
 
-It needs Go 1.21 or newer and cgo: the module links the prebuilt static
-library it ships for your platform. Every app that shares conversations with
-yours reads the formats 0.7.4 sends only once it runs a 0.7 release too, so
-plan the rollout below before you deploy.
+`@v0.7` takes the newest v0.7.x release and writes it to `go.mod`: check
+that the `require` line there names v0.7.5 or later. It needs Go 1.21 or
+newer and cgo: the module links the prebuilt static library it ships for
+your platform. Every app that shares conversations with yours reads the
+formats 0.7.x sends only once it runs a 0.7.x release too, so plan the
+rollout below before you deploy.
 
 ### Upgrade readers first
 
-0.7.4 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.x sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -126,13 +135,13 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.4 before:
+every app that reads your conversations to 0.7.x before:
 
 - any of your senders can send v1, that is, before the X API turns
   `v1_send` on for them;
 - you pass a description to [`PrepareGroupMembersChange`](#adding-members).
 
-0.7.4 reads both formats, including v1 reply previews, edits and files.
+0.7.x reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `payload.SignatureInfo.SignatureVersion`, `"7"` for v0 and `"10"` for v1.
 
@@ -167,12 +176,12 @@ ignored. There's no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.4 form and the section that
+Every 0.5.x name that changes, with its 0.7.x form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.4 | Section |
+| 0.5.x | 0.7.x | Section |
 |---|---|---|
 | `chatxdk.New()`, then `chat.Setup(pin, configJSON)` and `chat.Unlock(pin, configJSON)` | `chatxdk.NewWithJuiceboxConfig(configJSON)`, then `chat.Setup(pin)` and `chat.Unlock(pin)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chatxdk.GuessesRemaining(err)` | `GuessesRemaining` of a `*chatxdk.Error`, read with `errors.As` | [Errors](#errors-carry-their-kind) |
@@ -229,7 +238,7 @@ _, err := chat.Setup(pin, juiceboxConfig)
 must(err)
 must(chat.Unlock(pin, juiceboxConfig))
 
-// 0.7.4
+// 0.7.x
 chat, err := chatxdk.NewWithJuiceboxConfig(juiceboxConfig)
 must(err)
 _, err = chat.Setup(pin)
@@ -249,7 +258,7 @@ config fails](#an-empty-juicebox-config-fails)).
 
 `GenerateKeypairs` returns a `*PublicKeyRegistrationPayload` that holds only
 `PublicKey`. Send it as the only field of the
-`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.4 doesn't pick a
+`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.x doesn't pick a
 signing-key version for new keys: call `SetIdentity` with the
 `public_key_version` the request returns (see the next section). A signed
 call made without a version returns the error `Invalid state:
@@ -269,7 +278,7 @@ must(err)
 publicKeyVersion := response["data"].(map[string]any)["public_key_version"].(string)
 must(chat.SetIdentity(userID, publicKeyVersion))
 
-// 0.7.4
+// 0.7.x
 registration, err := chat.GenerateKeypairs()
 must(err)
 response, err := api.Post("/2/users/"+userID+"/public_keys", map[string]any{"public_key": registration.PublicKey})
@@ -293,7 +302,7 @@ returns an error when either value is invalid (see
 // 0.5.x
 must(chat.SetIdentity(userID, signingKeyVersion))
 
-// 0.7.4
+// 0.7.x
 must(chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: signingKeyVersion}))
 ```
 
@@ -310,7 +319,7 @@ keys](#exportkeys-fails-without-keys) for a chat without keys).
 must(chat.ImportKeys(privateKeys))
 must(chat.ImportKeysWithVersion(privateKeys, signingKeyVersion))
 
-// 0.7.4
+// 0.7.x
 must(chat.ImportKeys(chatxdk.ImportKeysParams{Keys: privateKeys}))
 must(chat.ImportKeys(chatxdk.ImportKeysParams{Keys: privateKeys, SigningKeyVersion: signingKeyVersion}))
 ```
@@ -332,7 +341,7 @@ for _, decrypted := range result.Messages {
 	showEvent(decrypted.Event)
 }
 
-// 0.7.4
+// 0.7.x
 result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events, SigningKeys: signingKeys})
 must(err)
 for _, decrypted := range result.Events {
@@ -358,7 +367,7 @@ re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions))
 event, err := chat.DecryptEvent(eventB64, keys, signingKeys)
 must(err)
 
-// 0.7.4
+// 0.7.x
 event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{
 	EventB64: eventB64, ConversationKeys: keys, SigningKeys: signingKeys,
 })
@@ -381,7 +390,7 @@ body := map[string]string{
 	"encoded_message_event_signature": payload.EncodedEventSignature,
 }
 
-// 0.7.4
+// 0.7.x
 body := map[string]string{
 	"message_id":                      payload.MessageID,
 	"encoded_message_create_event":    payload.EncodedMessageCreateEvent,
@@ -431,7 +440,7 @@ payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 size, err := chatxdk.EncryptedFileSize(uint64(len(photo)))
 must(err)
 response, err := api.Post("/2/chat/media/upload/initialize", map[string]any{
@@ -488,8 +497,10 @@ Pass the downloaded bytes, the base64 event of the message that carries the
 file and the conversation key map (the values `DecryptEvent` takes), and
 the file's media hash key from the decrypted message: one of its media
 attachments, a link card's banner or favicon (both listed in
-`media_hashes`), or media quoted in its reply preview. The SDK finds the
-file in the event and derives its key. It doesn't check the message's
+`media_hashes`), or media quoted in its reply preview (see [Media a reply
+quotes opens with the reply's
+event](#media-a-reply-quotes-opens-with-the-replys-event)). The SDK finds
+the file in the event and derives its key. It doesn't check the message's
 signature: use `Verified` from `DecryptEvent` for that.
 
 ```go
@@ -497,7 +508,7 @@ signature: use `Verified` from `DecryptEvent` for that.
 plaintext, err := chat.DecryptStream(downloaded, keys[conversationKeyVersion])
 must(err)
 
-// 0.7.4
+// 0.7.x
 plaintext, err := chat.DecryptFile(chatxdk.DecryptFileParams{
 	Encrypted: downloaded, EventB64: fileEventB64, ConversationKeys: keys, MediaHashKey: fileHashKey,
 })
@@ -528,7 +539,7 @@ must(err)
 plaintext, err := chat.DecryptStream(downloaded, conversationKey)
 must(err)
 
-// 0.7.4
+// 0.7.x
 encrypted, err := chat.EncryptFileWithKey(chatxdk.EncryptFileWithKeyParams{File: data, Key: conversationKey})
 must(err)
 plaintext, err := chat.DecryptFileWithKey(chatxdk.DecryptFileWithKeyParams{Encrypted: downloaded, Key: conversationKey})
@@ -560,7 +571,7 @@ must(err)
 decryptor, err := chat.StreamDecryptor(keys[conversationKeyVersion])
 must(err)
 
-// 0.7.4
+// 0.7.x
 size, err := chatxdk.EncryptedFileSize(uint64(len(photo)))
 must(err)
 encryptor, err := chat.FileEncryptor(chatxdk.FileEncryptorParams{
@@ -598,7 +609,7 @@ for _, sig := range prepared.ActionSignatures {
 	})
 }
 
-// 0.7.4
+// 0.7.x
 actionSignatures := prepared.ActionSignatures
 ```
 
@@ -613,7 +624,7 @@ their identity key:
 // 0.5.x
 publicKeys = append(publicKeys, chatxdk.PublicKeyInput{UserID: userID, PublicKey: identityPublicKey, KeyVersion: publicKeyVersion})
 
-// 0.7.4
+// 0.7.x
 publicKeys = append(publicKeys, chatxdk.PublicKeyInput{UserID: userID, IdentityPublicKey: identityPublicKey, PublicKeyVersion: publicKeyVersion})
 ```
 
@@ -640,7 +651,7 @@ for _, key := range prepared.ParticipantKeys {
 	})
 }
 
-// 0.7.4
+// 0.7.x
 conversationParticipantKeys := prepared.ConversationParticipantKeys
 ```
 
@@ -658,7 +669,7 @@ prepared keys are one type, `ConversationParticipantKey`:
 var key chatxdk.ParticipantKey = keyChange.ParticipantKeys[0]
 encrypted := key.EncryptedKey
 
-// 0.7.4
+// 0.7.x
 var key chatxdk.ConversationParticipantKey = keyChange.ConversationParticipantKeys[0]
 encrypted := key.EncryptedConversationKey
 ```
@@ -679,7 +690,7 @@ deletion, err := chat.PrepareMessageDelete(chatxdk.MessageDeleteParams{
 must(err)
 messageID := deletion.MessageID
 
-// 0.7.4
+// 0.7.x
 deletion, err := chat.PrepareMessageDelete(chatxdk.MessageDeleteParams{
 	ConversationID: conversationID, SequenceIDs: sequenceIDs,
 })
@@ -699,7 +710,7 @@ params take:
 messageVersion := *message.KeyVersion
 keyChangeVersion := keyChange.KeyVersion
 
-// 0.7.4
+// 0.7.x
 messageVersion := *message.ConversationKeyVersion
 keyChangeVersion := keyChange.ConversationKeyVersion
 ```
@@ -714,7 +725,7 @@ Fields that hold sequence ids take the names of the params that send them.
 showReaction(message.Content.ReactionContent.TargetMessageID, message.Content.ReactionContent.Emoji)
 seenUntil := *receipt.SeenUntilID
 
-// 0.7.4
+// 0.7.x
 showReaction(message.Content.ReactionContent.TargetMessageSequenceID, message.Content.ReactionContent.Emoji)
 seenUntil := *receipt.SeenUntilSequenceID
 ```
@@ -730,7 +741,7 @@ for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`,
 in struct tags and in code that reads `Event.Raw`. Don't keep
-`target_message_id`: in 0.7.4 it names a different value, and decoding it
+`target_message_id`: in 0.7.x it names a different value, and decoding it
 returns no error** (see [`target_message_id` holds a different
 value](#target_message_id-holds-a-different-value)).
 
@@ -741,7 +752,7 @@ var deleted struct {
 }
 must(json.Unmarshal(event.Raw(), &deleted))
 
-// 0.7.4
+// 0.7.x
 var deleted struct {
 	SequenceIDs []string `json:"sequence_ids"`
 }
@@ -767,7 +778,7 @@ stored keys are locked and `nil` when Juicebox reports no count:
 err := chat.Unlock(pin, juiceboxConfig)
 showGuessesLeft(chatxdk.GuessesRemaining(err))
 
-// 0.7.4
+// 0.7.x
 err := chat.Unlock(pin)
 var chatErr *chatxdk.Error
 if errors.As(err, &chatErr) && chatErr.GuessesRemaining != nil {
@@ -810,7 +821,7 @@ params := chatxdk.EncryptReplyParams{
 	ConversationID: conversationID, Text: "pong", ReplyToEvent: eventB64, ReplyToSenderID: &replyTo,
 }
 
-// 0.7.4
+// 0.7.x
 params := chatxdk.EncryptReplyParams{
 	ConversationID: conversationID, Text: "pong", ReplyToEvent: eventB64, ReplyToSenderID: "4201",
 }
@@ -855,7 +866,7 @@ return an error of kind `ErrorKindInvalidInput` naming the value, where
 A Go string's byte offsets are already UTF-8 offsets:
 
 ```go
-// 0.7.4
+// 0.7.x
 text := "café @bob"
 start := strings.Index(text, "@bob")
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
@@ -875,7 +886,7 @@ included, before you decrypt. It's `nil` until a key change verifies: a key
 change the SDK can't verify still adds its key to
 `result.ConversationKeys.Keys`, for decrypting, but never becomes the
 version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.4 can return `nil`: fetch the missing signing keys or the conversation's
+0.7.x can return `nil`: fetch the missing signing keys or the conversation's
 key-change events and decrypt again, rather than encrypting under the
 highest key in `Keys`:
 
@@ -885,7 +896,7 @@ result, err := chat.DecryptEvents(events, signingKeys)
 must(err)
 version := *result.ConversationKeys.LatestVersion
 
-// 0.7.4
+// 0.7.x
 must(chat.SetSigningKeys(signingKeys))
 result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events})
 must(err)
@@ -902,7 +913,7 @@ version := *result.ConversationKeys.LatestVersion
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.4 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.x that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** The compiler catches the renamed `ReactionContent`
 field, but not a struct tag or a `map[string]any` that reads
@@ -942,6 +953,31 @@ message, and decrypt ignores a key change embedded in a reply.
 hold yet, for `EncryptReply` to quote it, but the reply doesn't carry those
 key changes.
 
+### Media a reply quotes opens with the reply's event
+
+A reply's preview lists the media of the message it quotes, and
+`DecryptFile` and `FileDecryptor` open those files with the reply's event,
+called as [Decrypt a file with its message's
+event](#decrypt-a-file-with-its-messages-event) shows. A reply that embeds
+the quoted message gives each file's key through it. A reply can also only
+name the quoted message, by its sender and message id, as replies from X
+clients can: from 0.7.5 the calls open that media too, where 0.7.0 through
+0.7.4 failed with `the reply does not embed the message it quotes`. Such a
+preview doesn't say which key the quoted message is under, so the SDK tries
+the file under each key the preview and `ConversationKeys` give, and only
+the file's own key decrypts it. **Pass the conversation's whole key map as
+`ConversationKeys`, not only the reply's key version:** the quoted message
+can be under an older key version than the reply. When no key in the map
+decrypts the file, the call fails with an `*Error` of kind
+`ErrorKindDecryption` that names the media hash key and says to pass the
+quoted message's key version or its own event.
+
+**Nothing ties a file opened this way to the quoted message.**
+`ReplyPreviewValidation` is empty for a preview that embeds no message, and
+any member of the conversation can upload a file that opens this way, so
+show it as what the reply claims to quote. To check that a file belongs to
+the quoted message, decrypt it with that message's own event.
+
 ### A prepared change's JSON leaves out its key
 
 A `PreparedConversationChange`'s `ConversationKey` field is tagged
@@ -955,7 +991,7 @@ the key yourself, and marshal the rest:
 saved, err := json.Marshal(prepared)
 must(err)
 
-// 0.7.4
+// 0.7.x
 storeConversationKey(prepared.ConversationID, prepared.ConversationKeyVersion, prepared.ConversationKey)
 saved, err := json.Marshal(prepared)
 must(err)
@@ -974,7 +1010,7 @@ identity key. Sign only your own application data with `Sign`; the SDK
 signs events itself. Any other data signs as in 0.5.x:
 
 ```go
-// 0.7.4
+// 0.7.x
 signature, err := chat.Sign(data)
 var chatErr *chatxdk.Error
 if errors.As(err, &chatErr) && chatErr.Kind == chatxdk.ErrorKindInvalidInput {
@@ -1019,7 +1055,7 @@ for _, decrypted := range result.Messages {
 	}
 }
 
-// 0.7.4
+// 0.7.x
 result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events})
 must(err)
 for _, decrypted := range result.Events {
@@ -1044,7 +1080,7 @@ A loop over single events handles the error, as it handles an unverified
 event's, and moves on to the next event:
 
 ```go
-// 0.7.4
+// 0.7.x
 for _, item := range page.Data {
 	event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{EventB64: item.EncodedEvent, ConversationKeys: keys})
 	if err != nil {
@@ -1062,7 +1098,7 @@ identity key is loaded, where 0.5.x returned no keys and no error; check
 `HasIdentityKey` first where that can happen:
 
 ```go
-// 0.7.4
+// 0.7.x
 if chat.HasIdentityKey() {
 	privateKeys, err := chat.ExportKeys()
 	must(err)
@@ -1151,7 +1187,7 @@ _, err = api.Post("/2/chat/conversations/"+pathID+"/messages/delete", map[string
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 deletion, err := chat.PrepareMessageDelete(chatxdk.MessageDeleteParams{
 	ConversationID: conversationID, SequenceIDs: sequenceIDs, DeleteForAll: true,
 })
@@ -1183,7 +1219,7 @@ an unsigned receipt, which recipients drop.
 _, err := api.Post("/2/chat/conversations/"+pathID+"/read", map[string]any{})
 must(err)
 
-// 0.7.4
+// 0.7.x
 receipt, err := chat.PrepareMarkConversationRead(chatxdk.MarkConversationReadParams{
 	ConversationID: conversationID, SeenUntilSequenceID: seenUntilSequenceID,
 })
@@ -1232,7 +1268,7 @@ prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
 must(err)
 body := map[string]any{"group_name": title, "group_avatar_url": avatarURL}
 
-// 0.7.4
+// 0.7.x
 prepared, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
 	PublicKeys:     publicKeys,
 	ConversationID: conversationID,
@@ -1281,7 +1317,7 @@ if created.ChangeType == "Created" && created.Title != "" {
 	showTitle(title)
 }
 
-// 0.7.4
+// 0.7.x
 var created struct {
 	ChangeType string             `json:"change_type"`
 	Title      *chatxdk.GroupText `json:"title"`
@@ -1324,7 +1360,7 @@ prepared, err := chat.PrepareGroupMembersChange(chatxdk.GroupMembersChangeParams
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 prepared, err := chat.PrepareGroupMembersChange(chatxdk.GroupMembersChangeParams{
 	PublicKeys:         publicKeys,
 	ConversationID:     conversationID,
@@ -1349,7 +1385,7 @@ storeConversationKey(conversationID, prepared.ConversationKeyVersion, prepared.C
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.4, leave the description out, so the add signs at
+your groups runs 0.7.x, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1399,7 +1435,7 @@ first](#upgrade-readers-first)).
 _, err := api.Post("/2/chat/conversations/"+pathID+"/members/remove", map[string]any{"user_ids": userIDs})
 must(err)
 
-// 0.7.4
+// 0.7.x
 prepared, err := chat.PrepareGroupMembersRemove(chatxdk.GroupMembersRemoveParams{
 	PublicKeys:     remainingPublicKeys,
 	ConversationID: conversationID,
@@ -1429,7 +1465,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```go
-// 0.7.4
+// 0.7.x
 storeConversationKey(conversationID, prepared.ConversationKeyVersion, prepared.ConversationKey)
 payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
 	ConversationID:         conversationID,
@@ -1453,7 +1489,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```go
-// 0.7.4
+// 0.7.x
 result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events})
 must(err)
 for _, decrypted := range result.Events {
@@ -1486,7 +1522,7 @@ id:
 _, err := api.Post("/2/chat/conversations/"+pathID+"/members/remove", map[string]any{"user_ids": []string{myUserID}})
 must(err)
 
-// 0.7.4
+// 0.7.x
 left, err := chat.PrepareGroupLeave(chatxdk.GroupLeaveParams{
 	ConversationID: conversationID,
 	PromoteAdminID: promoteAdminID,
@@ -1521,7 +1557,7 @@ _, err = api.Put("/2/chat/conversations/"+pathID, map[string]any{
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 prepared, err := chat.PrepareGroupTitleChange(chatxdk.GroupTitleChangeParams{
 	ConversationID: conversationID,
 	NewTitle:       title,
@@ -1559,7 +1595,7 @@ if change.ChangeType == "TitleChanged" {
 	showTitle(title)
 }
 
-// 0.7.4
+// 0.7.x
 var change struct {
 	ChangeType string            `json:"change_type"`
 	NewTitle   chatxdk.GroupText `json:"new_title"`
@@ -1591,7 +1627,7 @@ _, err = api.Put("/2/chat/conversations/"+pathID, map[string]any{
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 prepared, err := chat.PrepareGroupDescriptionChange(chatxdk.GroupDescriptionChangeParams{
 	ConversationID: conversationID,
 	NewDescription: description,
@@ -1612,7 +1648,7 @@ A received description change is a `DescriptionChanged` change holding
 description. A removal's re-encrypted description never arrives as one:
 
 ```go
-// 0.7.4
+// 0.7.x
 var change struct {
 	ChangeType     string            `json:"change_type"`
 	NewDescription chatxdk.GroupText `json:"new_description"`
@@ -1652,7 +1688,7 @@ _, err = api.Put("/2/chat/conversations/"+pathID, map[string]any{
 })
 must(err)
 
-// 0.7.4
+// 0.7.x
 encrypted, err := chat.EncryptFileWithKey(chatxdk.EncryptFileWithKeyParams{
 	File: photo, Key: keys[conversationKeyVersion],
 })
@@ -1679,7 +1715,7 @@ received `AvatarChanged` change holds `new_avatar_url` as sent and its
 the avatar holds an empty `new_avatar_url`.
 
 ```go
-// 0.7.4
+// 0.7.x
 var change struct {
 	ChangeType             string  `json:"change_type"`
 	NewAvatarURL           string  `json:"new_avatar_url"`
@@ -1711,7 +1747,7 @@ verified `SettingsChange` events.
 _, err := api.Post("/2/chat/conversations/"+pathID+"/admins", map[string]any{"user_ids": userIDs})
 must(err)
 
-// 0.7.4
+// 0.7.x
 added, err := chat.PrepareGroupAdminsAdd(chatxdk.GroupAdminsAddParams{
 	ConversationID: conversationID, UserIDs: userIDs,
 })
@@ -1736,7 +1772,7 @@ the expiry as `validity_expiry_timestamp_msec`, and only with the same value
 the params signed:
 
 ```go
-// 0.7.4
+// 0.7.x
 invite, err := chat.PrepareGroupInviteEnable(chatxdk.GroupInviteEnableParams{
 	ConversationID: conversationID, InviteURL: inviteURL, ExpiresAtMsec: &expiresAtMsec,
 })
@@ -1761,7 +1797,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```go
-// 0.7.4
+// 0.7.x
 request, err := chat.PrepareGroupJoinRequest(chatxdk.GroupJoinRequestParams{
 	ConversationID: conversationID,
 })
@@ -1783,7 +1819,7 @@ must(err)
 A TTL change signs `TTLMsec` only; a negative one is rejected:
 
 ```go
-// 0.7.4
+// 0.7.x
 ttl, err := chat.PrepareMessageTtlChange(chatxdk.MessageTtlChangeParams{
 	ConversationID: conversationID, TTLMsec: ttlMsec,
 })
@@ -1808,7 +1844,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```go
-// 0.7.4
+// 0.7.x
 capture, err := chat.PrepareScreenCapture(chatxdk.ScreenCaptureParams{
 	ConversationID: conversationID,
 	Change:         chatxdk.BlockingEnabled,
@@ -1852,7 +1888,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `SetRejectUnverified` on, the default, so the signature has to verify:
 
 ```go
-// 0.7.4
+// 0.7.x
 alice, bob := chatxdk.New(), chatxdk.New()
 defer alice.Close()
 defer bob.Close()
@@ -1912,7 +1948,7 @@ if !strings.HasPrefix(payload.XdkVersion, "0.7.") {
 
 `SignatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
 `v1_send` switch decides. `XdkVersion` is the version of the module that
-built the send, a 0.7 release, which the X API receives with each send.
+built the send, a 0.7.x release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

@@ -4,10 +4,10 @@
 Usage: scripts/check_doc_snippets.py LANG FILE...
 
 LANG is rust, python, ts, go, java, csharp or c. Each fenced block of the
-language splits at its version marker comments: a release line such as
-`0.5.x` marks code for the release a guide migrates from, and a release
-such as `0.7.0` marks code for the release it migrates to, as does a block
-without markers. Every half for the release migrated to becomes one
+language splits at its version marker comments: `0.5.x` marks code for the
+release line a guide migrates from, and any other marker, such as `0.7.x`,
+marks code for the release line it migrates to, as does a block without
+markers. Every half for the release line migrated to becomes one
 function over the stand-in names the guides' "About the snippets" sections
 define, and the binding's compiler checks the result: cargo (Rust), tsc
 (against index.d.ts, and the server package's for the snippets that import
@@ -44,10 +44,14 @@ FENCES = {
     "c": ["c"],
 }
 
+# The release line the guides migrate from. A half under any other marker,
+# such as `0.7.x`, or under none, is code for the release line migrated to.
+MIGRATES_FROM = "0.5.x"
+
 
 def halves(block, comment):
-    """Split a block into (version, code) halves at its version markers. A
-    marker ending in `.x` names the release line a guide migrates from."""
+    """Split a block into (version, code) halves at its version markers, each
+    a release line such as `0.7.x` or a release such as `0.7.0`."""
     marker = re.compile(rf"\s*{re.escape(comment)}\s*(\d+\.\d+\.(?:x|\d+))\s*$")
     parts, version, lines = [], "", []
     for line in block.splitlines():
@@ -65,7 +69,7 @@ def halves(block, comment):
 
 def snippets(lang, paths):
     """Yield (path, line, code) for every half of LANG in PATHS that is code
-    for the release a guide migrates to."""
+    for the release line a guide migrates to."""
     comment = "#" if lang == "python" else "//"
     fences = "|".join(FENCES[lang])
     for path in paths:
@@ -73,7 +77,7 @@ def snippets(lang, paths):
         for m in re.finditer(rf"```(?:{fences})\n(.*?)```", text, re.S):
             line = text[: m.start()].count("\n") + 1
             for version, code in halves(m.group(1), comment):
-                if not version.endswith(".x"):
+                if version != MIGRATES_FROM:
                     yield path, line, code
 
 
