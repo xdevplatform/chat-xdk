@@ -22,6 +22,7 @@
 
 import {
   __featureComplete,
+  __featureSetApiBaseUrl,
   __juiceboxClientConfig,
   __juiceboxError,
   __noJuiceboxConfig,
@@ -458,7 +459,22 @@ export class ChatWithJuicebox {
 
 /** Start the reads of `wasmChat`'s feature switches for its identity. */
 function startFeatureFetch(wasmChat) {
+  __featureSetApiBaseUrl(environmentApiBaseUrl());
   performFeatureFetch(wasmChat.__featureStart());
+}
+
+/**
+ * The CHAT_XDK_API_BASE_URL environment variable, where the runtime has a
+ * process environment and lets this module read it. The wasm core has no
+ * environment, so it takes the variable from here.
+ */
+function environmentApiBaseUrl() {
+  try {
+    const base = globalThis.process?.env?.CHAT_XDK_API_BASE_URL;
+    return typeof base === "string" ? base : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

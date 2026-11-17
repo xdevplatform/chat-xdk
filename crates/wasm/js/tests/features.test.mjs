@@ -140,6 +140,24 @@ async function createChatReadsTheSwitches(v, server) {
   }
 }
 
+async function theEnvironmentsApiBaseUrlNamesTheEndpoint(v, server) {
+  // The endpoint a test sets comes before the environment's, so none is set here.
+  __featureSetDefaultEndpoint(undefined);
+  process.env.CHAT_XDK_API_BASE_URL = server.endpoint.slice(0, -"/2/chat/features".length) + "/";
+  try {
+    const juiceboxModule = { Client: class {}, Configuration: class {} };
+    const created = await createChat({ getAuthToken: async () => "", juiceboxModule });
+    created.generateKeypairs();
+    created.setIdentity({ userId: "1234561001", signingKeyVersion: "1" });
+    await waitFor("v1", () => send(created, v) === "10");
+    assert.ok(server.queries.includes("bucket=1001"), server.queries.join());
+    created.free();
+  } finally {
+    delete process.env.CHAT_XDK_API_BASE_URL;
+    keepOffline();
+  }
+}
+
 async function aSendNeverWaitsForTheRequest(v, server) {
   server.delayMs = 2000;
   const chat = newChat(v, server.endpoint, { timeoutMs: 3000 });
@@ -237,6 +255,46 @@ async function aRequestEndsSafelyForAFreedChat(v, server) {
   await waitFor("v1", () => send(kept, v) === "10");
   assert.equal(server.queries.length, 1);
   kept.free();
+}
+
+async function aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server) {
+  server.delayMs = 1000;
+  const first = newChat(v, server.endpoint);
+  assert.equal(send(first, v), "7", "sent before the answer");
+  first.free();
+  await sleep(1500);
+  for (let i = 0; i < 5; i++) {
+    const chat = newChat(v, server.endpoint);
+    assert.equal(send(chat, v), "10", "the first send of a chat created after the answer");
+    chat.free();
+  }
+  await sleep(200);
+  assert.equal(server.queries.length, 1);
+}
+
+async function aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server) {
+  server.delayMs = 200;
+  newChat(v, server.endpoint, { refreshMs: 2000 }).free();
+  await sleep(600);
+  const chat = newChat(v, server.endpoint, { refreshMs: 2000 });
+  assert.equal(send(chat, v), "10", "the kept answer");
+  assert.equal(server.queries.length, 1, "no request before the refresh is due");
+  server.body = '{"features":{}}';
+  await waitFor("v0 after the refresh", () => send(chat, v) === "7");
+  assert.equal(server.queries.length, 2);
+  chat.free();
+}
+
+async function aKeptAnswerAgesOutAtTheRefreshInterval(v, server) {
+  server.delayMs = 800;
+  newChat(v, server.endpoint, { refreshMs: 500 }).free();
+  await sleep(2000);
+  assert.equal(server.queries.length, 1, "no chat, no refresh");
+  const late = newChat(v, server.endpoint, { refreshMs: 500 });
+  assert.equal(send(late, v), "7", "an answer older than the refresh interval is none");
+  await waitFor("v1 from its own read", () => send(late, v) === "10");
+  assert.equal(server.queries.length, 2);
+  late.free();
 }
 
 /**
@@ -380,6 +438,7 @@ async function main() {
     (server) => chatsOfOneSenderShareTheirBucketsRead(v, server),
     (server) => aRefreshReachesARunningChat(v, server),
     (server) => createChatReadsTheSwitches(v, server),
+    (server) => theEnvironmentsApiBaseUrlNamesTheEndpoint(v, server),
     (server) => aSendNeverWaitsForTheRequest(v, server),
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
     (server) => theAnswerHoldsUntilTheNextRefresh(v, server),
@@ -389,6 +448,9 @@ async function main() {
     (server) => anUnreachableEndpointLeavesSendsOnV0(v, server),
     (server) => aRequestStillOpenAtItsTimeoutFails(v, server),
     (server) => aRequestEndsSafelyForAFreedChat(v, server),
+    (server) => aChatCreatedAfterTheLastOneIsGoneTakesItsAnswer(v, server),
+    (server) => aChatThatTakesAKeptAnswerFollowsItsRefresh(v, server),
+    (server) => aKeptAnswerAgesOutAtTheRefreshInterval(v, server),
     (server) => aReadInFlightNeverKeepsNodeRunning(server),
     () => theReadSendsNoCookiesOrCredentials(v),
     () => aRedirectIsNotFollowed(v),

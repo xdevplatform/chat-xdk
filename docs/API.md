@@ -47,7 +47,9 @@ the answer to `GET /2/chat/features`, which the bindings read themselves
 have called `set_identity`: `FEATURES_ENDPOINT`
 (`CHAT_XDK_FEATURES_ENDPOINT` in `chat_xdk.h`) with the sender's bucket, the
 last four digits of the user id, so every chat of one sender gets the same
-answer. Make the request without credentials, within `FEATURES_TIMEOUT_MS`
+answer. Where the `CHAT_XDK_API_BASE_URL` environment variable names
+another base URL for the X API, the URL is `/2/chat/features` on that one.
+Make the request without credentials, within `FEATURES_TIMEOUT_MS`
 (`CHAT_XDK_FEATURES_TIMEOUT_MS`), reading at most one byte past
 `FEATURES_MAX_BODY` (`CHAT_XDK_FEATURES_MAX_BODY`), pass its status, 0 when
 no response arrived, and body, and request it again every

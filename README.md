@@ -150,13 +150,19 @@ minutes after each answer, so a change reaches a running chat without a
 restart. The sender's request carries its bucket, the last four digits of
 the user id (`?bucket=1234`), so every chat of one sender gets the same
 answer; before that, the X API buckets the request by its address. Chats
-that read the same URL share one request.
+that read the same URL share one request, and the answer stays for 5 minutes
+after it arrives, so a chat created in that time takes it at once: an app
+that creates a chat for each send makes one request per URL every 5 minutes.
 
 The request carries no credentials and never delays or fails an SDK call.
 One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, every switch stays
-off and sends stay in v0, the format 0.5.x sends. The Rust crate and the C
+off and sends stay in v0, the format 0.5.x sends. Each binding's HTTP stack
+picks the proxy, if any, and a process that reaches the X API under another
+host name sets `CHAT_XDK_API_BASE_URL` to its base URL, in place of
+`https://api.x.com` (see
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#feature-switches)). The Rust crate and the C
 ABI never make the request: a Rust app or a C caller requests the URL
 `feature_switches_url` (`chat_xdk_feature_switches_url`) returns, again every
 5 minutes, and hands the chat each answer (`set_feature_switches`,

@@ -11,7 +11,9 @@
 //! returns, if any, in the background after the GET's `delay_ms`, reports its
 //! result with [`complete_fetch`], and performs the GET `complete_fetch`
 //! returns, if any, the same way; it ends a GET it cannot start with
-//! [`abandon_fetch`].
+//! [`abandon_fetch`]. A binding whose process can fork keeps a fork from
+//! finding one of its GETs under way, and calls [`restart_fetches`] in the
+//! child.
 
 pub use crate::features::Fetch;
 
@@ -112,6 +114,13 @@ pub fn set_clock(clock: fn() -> u64) {
     shared::set_clock(clock);
 }
 
+/// Hand over the value of the `CHAT_XDK_API_BASE_URL` environment variable,
+/// `None` when it is unset, for the chats that start their reads from now
+/// on. Only WebAssembly needs it: its core has no environment to read.
+pub fn set_api_base_url(base: Option<&str>) {
+    shared::set_api_base_url(base);
+}
+
 /// Report the result of the GET `id`: its HTTP status, 0 when no response
 /// arrived, and the body, read to its end or to [`Fetch::max_bytes`] plus one
 /// byte, whichever comes first. A request that ended any other way reports
@@ -128,8 +137,16 @@ pub fn abandon_fetch(id: u64) {
     shared::abandon_fetch(id);
 }
 
+/// Start every read a chat waits for again, for a binding whose process
+/// forked: the GETs it was performing and waiting to perform stayed in the
+/// parent. Returns the GETs to perform, each after its `delay_ms`; the ones
+/// handed out before the fork report nothing in this process.
+pub fn restart_fetches() -> Vec<Fetch> {
+    shared::restart_fetches()
+}
+
 /// For this repository's tests: the endpoint of every chat that does not set
-/// its own, or the X API's when `None`.
+/// its own, or the one the environment asks for when `None`.
 pub fn set_default_endpoint(endpoint: Option<&str>) {
     shared::set_default_endpoint(endpoint);
 }

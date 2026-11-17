@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import unittest
@@ -80,6 +81,55 @@ class TestFeatureSwitches(unittest.TestCase):
 
         return wait_for(predicate, timeout)
 
+    def _run(self, script, *args, env=None):
+        """Run ``script`` in a Python process of its own, for a test that sets
+        environment variables, forks or exits: what it printed. The script
+        has ``keyed(chat)``, which gives a chat its keys, and ``send(chat)``,
+        the signature version of a send; ``env`` replaces every proxy
+        variable of this process."""
+        prelude = textwrap.dedent(
+            """
+            import base64, os, sys, time
+            import chat_xdk
+            from chat_xdk import EncryptMessageParams, ImportKeysParams
+            from features_support import FeatureServer, keep_offline, reading, wait_for
+
+            keep_offline()
+
+            def keyed(chat):
+                chat.import_keys(ImportKeysParams(base64.b64decode(os.environ["TEST_PRIVATE_KEYS"])))
+                return chat
+
+            def send(chat):
+                return chat.encrypt_message(
+                    EncryptMessageParams(
+                        "conv-1",
+                        "hello",
+                        sender_id="1001",
+                        signing_key_version="1",
+                        conversation_key=bytes(32),
+                        conversation_key_version="1",
+                    )
+                ).signature_info.signature_version
+            """
+        )
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        environment = {name: value for name, value in os.environ.items() if not name.lower().endswith("_proxy")}
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, environment.get("PYTHONPATH", "")]
+        )
+        environment["TEST_PRIVATE_KEYS"] = self.vectors["private_keys_concat_b64"]
+        environment.update(env or {})
+        result = subprocess.run(
+            [sys.executable, "-c", prelude + textwrap.dedent(script), *args],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
     def test_feature_switches_are_not_public_api(self):
         import chat_xdk
 
@@ -134,6 +184,24 @@ class TestFeatureSwitches(unittest.TestCase):
             self.assertTrue(self._wait_for(lambda: self._send(chat) == "10"))
         finally:
             keep_offline()
+
+    def test_the_environments_api_base_url_names_the_endpoint(self):
+        # The endpoint a test sets comes before the environment's, so the
+        # script sets none. Were the variable ignored, the read of the X
+        # API's own URL would end at a proxy nothing listens on.
+        script = """
+            chat_xdk._native._feature_set_default_endpoint(None)
+            chat = keyed(chat_xdk.Chat())
+            chat.set_identity(chat_xdk.SetIdentityParams("1234561001", "1"))
+            print(wait_for(lambda: send(chat) == "10", 5.0))
+            """
+        environment = {
+            "CHAT_XDK_API_BASE_URL": self.server.url[: -len("/2/chat/features")] + "/",
+            "HTTPS_PROXY": "http://127.0.0.1:9",
+            "NO_PROXY": "127.0.0.1",
+        }
+        self.assertEqual(self._run(script, env=environment), "True")
+        self.assertIn("bucket=1001", self.server.queries)
 
     def test_a_send_never_waits_for_the_request(self):
         self.server.delay = 2.0
@@ -260,13 +328,7 @@ class TestFeatureSwitches(unittest.TestCase):
     def test_exit_cuts_short_a_request_under_way(self):
         # In a process of its own, since the exit hook ends every request.
         self.server.delay = 30.0
-        script = textwrap.dedent(
-            """
-            import sys, time
-            import chat_xdk
-            from features_support import keep_offline, reading, wait_for
-
-            keep_offline()
+        script = """
             chat = reading(sys.argv[1], 60.0)
             assert wait_for(lambda: len(chat_xdk._requests) == 1), "no request under way"
             (request,) = list(chat_xdk._requests)
@@ -276,21 +338,208 @@ class TestFeatureSwitches(unittest.TestCase):
             assert not request.is_alive() and not chat_xdk._requests
             print("ok")
             """
+        self.assertEqual(self._run(script, self.server.url), "ok")
+
+    def test_a_chat_created_after_the_last_one_is_gone_takes_its_answer(self):
+        self.server.delay = 1.0
+        first = self._chat()
+        self.assertEqual(self._send(first), "7", "sent before the answer")
+        del first
+        gc.collect()
+        time.sleep(1.5)
+        for _ in range(5):
+            chat = self._chat()
+            self.assertEqual(self._send(chat), "10", "the first send of a chat created after the answer")
+            del chat
+            gc.collect()
+        time.sleep(0.2)
+        self.assertEqual(len(self.server.queries), 1, self.server.queries)
+
+    def test_a_chat_that_takes_a_kept_answer_follows_its_refresh(self):
+        self.server.delay = 0.2
+        self._chat(refresh=2.0)
+        gc.collect()
+        time.sleep(0.6)
+        chat = self._chat(refresh=2.0)
+        self.assertEqual(self._send(chat), "10")
+        self.assertEqual(len(self.server.queries), 1, "no request before the refresh is due")
+        self.server.body = '{"features":{}}'
+        self.assertTrue(self._wait_for(lambda: self._send(chat) == "7"), "the refresh reached it")
+        self.assertEqual(len(self.server.queries), 2, self.server.queries)
+
+    def test_a_kept_answer_ages_out_at_the_refresh_interval(self):
+        self.server.delay = 0.8
+        self._chat(refresh=0.5)
+        gc.collect()
+        time.sleep(2.0)
+        self.assertEqual(len(self.server.queries), 1, "no chat, no refresh")
+        late = self._chat(refresh=0.5)
+        self.assertEqual(self._send(late), "7", "an answer older than the refresh interval is none")
+        self.assertTrue(self._wait_for(lambda: self._send(late) == "10"), "its own read answers")
+        self.assertEqual(len(self.server.queries), 2, self.server.queries)
+
+    def test_many_waiting_reads_hold_one_thread(self):
+        import threading
+
+        from features_support import FeatureServer
+
+        servers = [FeatureServer() for _ in range(8)]
+        try:
+            chats = [self._chat(url=server.url) for server in servers]
+            self.assertTrue(self._wait_for(lambda: all(self._send(chat) == "10" for chat in chats)))
+            time.sleep(0.2)
+            waiting = [thread.name for thread in threading.enumerate() if thread.name.startswith("chat-xdk-features")]
+            self.assertEqual(waiting, ["chat-xdk-features-timer"], "one thread waits for every refresh")
+        finally:
+            for server in servers:
+                server.close()
+
+    def test_the_read_goes_through_the_proxy_the_environment_names(self):
+        from features_support import PROXY_ONLY_HOST, RecordingProxy
+
+        proxy = RecordingProxy({PROXY_ONLY_HOST: self.server.port})
+        self.addCleanup(proxy.close)
+        url = "http://%s%s" % (PROXY_ONLY_HOST, self.server.path)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            print(wait_for(lambda: send(chat) == "10", float(sys.argv[2])))
+            """
+        self.assertEqual(self._run(script, url, "1.0"), "False", "no proxy, no route to the endpoint")
+        self.assertEqual(proxy.requests, [])
+        for variable in ("HTTP_PROXY", "http_proxy", "ALL_PROXY"):
+            with self.subTest(variable=variable):
+                del proxy.requests[:], proxy.headers[:], self.server.headers[:]
+                proxied = {variable: "http://user:p%40ss@" + proxy.address}
+                self.assertEqual(self._run(script, url, "5.0", env=proxied), "True")
+                self.assertEqual(proxy.requests, ["GET %s HTTP/1.1" % url])
+                credentials = base64.b64encode(b"user:p@ss").decode()
+                self.assertEqual(proxy.headers[0].get("proxy-authorization"), "Basic " + credentials)
+                names = {name.lower() for name in self.server.headers[0]}
+                self.assertFalse({"authorization", "proxy-authorization", "cookie"} & names, names)
+
+    def test_no_proxy_exempts_the_endpoint(self):
+        from features_support import RecordingProxy
+
+        proxy = RecordingProxy()
+        self.addCleanup(proxy.close)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            print(wait_for(lambda: send(chat) == "10", float(sys.argv[2])))
+            """
+        exempt = {"HTTP_PROXY": proxy.url, "NO_PROXY": "example.com,127.0.0.1"}
+        self.assertEqual(self._run(script, self.server.url, "5.0", env=exempt), "True")
+        self.assertEqual(proxy.requests, [], "the read connects directly")
+        self.assertEqual(self._run(script, self.server.url, "1.0", env={"HTTP_PROXY": proxy.url}), "False")
+        self.assertEqual(
+            set(proxy.requests),
+            {"GET %s HTTP/1.1" % self.server.url},
+            "without the exemption each attempt asks the proxy, which has no route",
         )
-        tests_dir = os.path.dirname(os.path.abspath(__file__))
-        env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(
-            [os.path.join(_repo_root(), "crates", "pyo3", "python"), tests_dir, env.get("PYTHONPATH", "")]
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", script, self.server.url],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_an_https_read_tunnels_through_the_proxy(self):
+        from features_support import PROXY_ONLY_HOST, FeatureServer, RecordingProxy, self_signed_certificate
+
+        with tempfile.TemporaryDirectory() as directory:
+            tls = self_signed_certificate(directory, PROXY_ONLY_HOST)
+            if tls is None:
+                self.skipTest("the openssl command can't make a certificate here")
+            server = FeatureServer(tls=tls)
+            self.addCleanup(server.close)
+            proxy = RecordingProxy({PROXY_ONLY_HOST: server.port})
+            self.addCleanup(proxy.close)
+            script = """
+                chat = keyed(reading(sys.argv[1], 2.0))
+                print(wait_for(lambda: send(chat) == "10", 5.0))
+                """
+            url = "https://%s%s" % (PROXY_ONLY_HOST, server.path)
+            tunnelled = {"HTTPS_PROXY": "http://user:secret@" + proxy.address, "SSL_CERT_FILE": tls[0]}
+            self.assertEqual(self._run(script, url, env=tunnelled), "True")
+        self.assertEqual(proxy.requests, ["CONNECT %s:443 HTTP/1.1" % PROXY_ONLY_HOST])
+        credentials = base64.b64encode(b"user:secret").decode()
+        self.assertEqual(proxy.headers[0].get("proxy-authorization"), "Basic " + credentials)
+        self.assertEqual(server.queries, [""], "the request itself travels inside the tunnel")
+        names = {name.lower() for name in server.headers[0]}
+        self.assertFalse({"authorization", "proxy-authorization", "cookie"} & names, names)
+
+    def test_a_proxy_that_refuses_leaves_sends_on_v0(self):
+        from features_support import PROXY_ONLY_HOST, RecordingProxy
+
+        proxy = RecordingProxy(refuse=403)
+        self.addCleanup(proxy.close)
+        script = """
+            chat = keyed(reading(sys.argv[1], 2.0))
+            time.sleep(0.7)
+            print(send(chat))
+            """
+        refused = {"HTTP_PROXY": proxy.url, "HTTPS_PROXY": proxy.url}
+        for scheme in ("http", "https"):
+            with self.subTest(scheme=scheme):
+                url = "%s://%s%s" % (scheme, PROXY_ONLY_HOST, self.server.path)
+                self.assertEqual(self._run(script, url, env=refused), "7")
+        self.assertEqual([request.split(" ")[0] for request in proxy.requests], ["GET", "CONNECT"])
+        self.assertEqual(self.server.queries, [])
+
+    def test_a_request_imports_no_module_on_its_thread(self):
+        # A fork while a request's thread imports a module leaves the child
+        # waiting for that import for good; host names need the idna codec.
+        script = """
+            imported = set(sys.modules)
+            chat = keyed(reading(sys.argv[1], 2.0))
+            assert wait_for(lambda: send(chat) == "10")
+            print("encodings.idna" in imported, sorted(set(sys.modules) - imported))
+            """
+        self.assertEqual(self._run(script, self.server.url.replace("127.0.0.1", "localhost")), "True []")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_fork_waits_for_the_request_under_way(self):
+        # A request under way can hold a lock of the resolver's or of
+        # OpenSSL's, which a child forked at that moment could never take.
+        self.server.delay = 0.8
+        script = """
+            chat = keyed(reading(sys.argv[1], 3.0))
+            assert send(chat) == "7"
+            time.sleep(0.2)
+            started = time.monotonic()
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if send(chat) == "10" and not chat_xdk._requests else 1)
+            waited = time.monotonic() - started
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), 0.3 < waited < 2.0, send(chat))
+            """
+        self.assertEqual(self._run(script, self.server.url), "0 True 10")
+        self.assertEqual(len(self.server.queries), 1, "the child inherits the answer and reads at its refresh")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_forked_child_reads_for_the_chats_it_inherited(self):
+        self.server.delay = 1.0
+        script = """
+            chat_xdk._FORK_WAIT = 0.1  # the fork gives up on the request still under way
+            chat = keyed(reading(sys.argv[1], 3.0))
+            time.sleep(0.3)
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if wait_for(lambda: send(chat) == "10", 5.0) else 1)
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), wait_for(lambda: send(chat) == "10", 5.0))
+            """
+        self.assertEqual(self._run(script, self.server.url), "0 True")
+        self.assertEqual(len(self.server.queries), 2, "the parent's read, and the child's of its own")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs os.fork")
+    def test_a_forked_child_follows_the_refreshes_of_an_answer_it_inherited(self):
+        script = """
+            server = FeatureServer()
+            chat = keyed(reading(server.url, 2.0, 0.5))
+            assert wait_for(lambda: send(chat) == "10")
+            pid = os.fork()
+            if pid == 0:
+                os._exit(0 if wait_for(lambda: send(chat) == "7", 5.0) else 1)
+            server.body = '{"features":{}}'
+            _, status = os.waitpid(pid, 0)
+            print(os.waitstatus_to_exitcode(status), wait_for(lambda: send(chat) == "7", 5.0))
+            """
+        self.assertEqual(self._run(script), "0 True")
 
 
 if __name__ == "__main__":

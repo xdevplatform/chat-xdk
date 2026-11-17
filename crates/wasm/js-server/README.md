@@ -94,7 +94,9 @@ and `ServerChat` extends its `ChatWithJuicebox`.
 
 Each chat makes the one request a chat from `@xdevplatform/chat-xdk` makes:
 an anonymous `GET https://api.x.com/2/chat/features` in the background,
-which reads the feature switches that pick the format the SDK sends in. See
+which reads the feature switches that pick the format the SDK sends in. A
+process that reaches the X API under another host name sets the
+`CHAT_XDK_API_BASE_URL` environment variable to its base URL. See
 "Network access" in its [README](../js/README.md#network-access).
 
 ## Security limitations

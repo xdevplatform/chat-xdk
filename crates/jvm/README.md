@@ -85,11 +85,16 @@ sender's request carries its bucket, the last four digits of the user id
 (`?bucket=1234`), so every chat of one sender gets the same answer; before
 that, the X API buckets the request by its address. Chats that read the same
 URL share one request, and a chat that joins it takes its latest answer at
-once. The request carries no credentials and never delays or fails a call.
+once. The answer stays for 5 minutes after it arrives, so a chat created in
+that time takes it at once even when no other chat is alive: an app that
+creates a chat for each send makes one request per URL every 5 minutes. The
+request carries no credentials and never delays or fails a call.
 One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, sends stay in v0,
-the format 0.5.x sends.
+the format 0.5.x sends. A process that reaches the X API under another host
+name sets the `CHAT_XDK_API_BASE_URL` environment variable to its base URL,
+in place of `https://api.x.com`, before it creates its chats.
 
 ## Security limitations
 

@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-16
+
+### Added
+
+- The `CHAT_XDK_API_BASE_URL` environment variable names the base URL of the
+  X API to read the feature switches from, in place of `https://api.x.com`,
+  for a process that reaches the X API under another host name. With
+  `CHAT_XDK_API_BASE_URL=https://api.example.com` a chat requests
+  `https://api.example.com/2/chat/features`; nothing else about the request
+  changes. A chat takes the variable when it is created and when its
+  identity is set. A value that is not an `https://` or `http://` URL with a
+  host, or that carries credentials, a query or a fragment, is ignored.
+  Python, Go, .NET and the JVM follow it, Node does too (a browser has no
+  environment), and so does the URL `feature_switches_url`
+  (`chat_xdk_feature_switches_url`) returns to a Rust app or a C caller.
+
+### Fixed
+
+- An app that creates a chat for each send, or closes its chats between
+  sends, now follows the `v1_send` switch. A chat got its switches only if
+  it was alive when the answer to its request arrived, so a chat that sent
+  and went away within that time sent v0, and so did every chat after it,
+  each starting a request of its own. Now the latest answer for a URL stays
+  for 5 minutes after it arrives: a chat created in that time takes it at
+  once, in every binding, and reads the URL again when the refresh is due.
+  Such an app sends v0 only until its first answer, and makes one request
+  per URL every 5 minutes instead of one or two per chat. An answer older
+  than 5 minutes that no chat holds is not used, so a switch that is turned
+  off still stops v1 sends within the refresh interval.
+- Python: the feature-switch request goes through the `http://` proxy that
+  `HTTPS_PROXY` names (`HTTP_PROXY` for a plain URL, else `ALL_PROXY`),
+  unless `NO_PROXY` exempts the host, with the credentials in the proxy's URL
+  sent to the proxy alone. It connected directly whatever the environment
+  said, so a host that reaches the X API only through a proxy never read the
+  switches and its sends stayed v0. Go and .NET already followed these
+  variables, the JVM its `https.proxyHost` properties, and Node its own
+  `NODE_USE_ENV_PROXY`.
+- Python: a process that forks with `os.fork` reads the switches again in
+  the child. The threads that perform and schedule the requests stay in the
+  parent, so the chats a forked worker inherited (under `gunicorn --preload`,
+  a Celery prefork pool or `multiprocessing`) kept the switches they had at
+  the fork for good.
+- Python: a fork no longer finds a feature-switch request halfway. A process
+  that forked while one was under way, as a preloading server does right
+  after its app creates a chat, could get a child that hung the first time it
+  resolved a host name or opened a TLS connection, its own HTTP calls
+  included: the request's thread was importing Python's idna codec, or held
+  a lock of the resolver's or of OpenSSL's. Importing the package now
+  imports the codec, and `os.fork` waits for the requests under way, at most
+  2 seconds. uWSGI forks without telling Python unless `py-call-osafterfork`
+  is set, so under uWSGI create the chat in each worker (`lazy-apps`, or a
+  post-fork hook) and set `enable-threads`.
+- Python: the requests waiting for their time share one daemon thread
+  instead of holding one each, so a process whose chats read many buckets
+  keeps one waiting thread, not one per bucket.
+
 ## [0.7.3] - 2026-11-05
 
 ### Security
@@ -978,7 +1034,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.0...v0.7.1

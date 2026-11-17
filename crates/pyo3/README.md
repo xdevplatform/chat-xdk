@@ -120,11 +120,30 @@ sender's request carries its bucket, the last four digits of the user id
 (`?bucket=1234`), so every chat of one sender gets the same answer; before
 that, the X API buckets the request by its address. Chats that read the same
 URL share one request, and a chat that joins it takes its latest answer at
-once. The request carries no credentials and never delays or fails a call.
+once. The answer stays for 5 minutes after it arrives, so a chat created in
+that time takes it at once even when no other chat is alive: an app that
+creates a chat for each send makes one request per URL every 5 minutes. The
+request carries no credentials and never delays or fails a call.
 One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, sends stay in v0,
 the format 0.5.x sends.
+
+The request goes through the `http://` proxy that `HTTPS_PROXY` (or
+`ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. A process that
+reaches the X API under another host name sets the `CHAT_XDK_API_BASE_URL`
+environment variable to its base URL before it creates its chats: with
+`https://api.example.com` there, the request goes to
+`https://api.example.com/2/chat/features`. A process that
+creates a chat, sends once and exits has no answer yet, so it sends v0: keep
+one chat alive, or one process running, to follow the switch.
+
+Requests run on daemon threads. A process that forks with `os.fork` (gunicorn
+with `--preload`, a Celery prefork pool, `multiprocessing`) waits for the
+requests under way, at most 2 seconds, and reads the switches again in the
+child for the chats it inherited. uWSGI forks without telling Python and
+runs no threads by default: set `enable-threads`, and create the chat in each
+worker with `lazy-apps` or a post-fork hook.
 
 ## Security limitations
 
