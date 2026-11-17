@@ -396,6 +396,41 @@ reads no key from inside a reply:
 [.NET](dotnet.md#a-reply-preview-quotes-its-message-exactly),
 [C ABI](c-abi.md#a-reply-preview-quotes-its-message-exactly).
 
+## Media a reply quotes opens with the reply's event
+
+A reply's preview lists the media of the message it quotes, and
+`decrypt_file` and `file_decryptor` open those files with the reply's event.
+A reply that embeds the quoted message gives each file's key through that
+message. A reply can also only name the quoted message, by its sender and
+message id, as replies from X clients can, and 0.7.0 through 0.7.4 failed on
+its media with `the reply does not embed the message it quotes`. From 0.7.5
+the calls open it. The preview names the attachment, by its id or its
+position in the preview, but not the key the quoted message is under, so the
+SDK tries the file under each key the preview and the key map give: for each
+key version in the map, the reply's own first, the attachment key of a v1
+message, then the conversation key itself, which v0 media is under. The file
+is authenticated, so only its own key decrypts it. The quoted message can be
+under an older key version than the reply, so the calls take the
+conversation's whole key map.
+
+A file opened this way is not tied to the quoted message. With an embedded
+message, the attachment is found in a message whose signature
+`decrypt_event` checks when it validates the preview. Without one, the
+sender, message id and attachment come from the reply alone, and every
+member of the conversation holds its keys, so a member can upload a file
+that opens this way and show it as another member's. `decrypt_event` reports
+no `reply_preview_validation` for such a preview, so an app shows its media
+as what the reply claims to quote, and checks a file against the quoted
+message by decrypting it with that message's own event
+([CRYPTO.md](../CRYPTO.md#media-keys)):
+[Rust](rust.md#media-a-reply-quotes-opens-with-the-replys-event),
+[Python](python.md#media-a-reply-quotes-opens-with-the-replys-event),
+[JavaScript](javascript.md#media-a-reply-quotes-opens-with-the-replys-event),
+[Go](go.md#media-a-reply-quotes-opens-with-the-replys-event),
+[JVM](jvm.md#media-a-reply-quotes-opens-with-the-replys-event),
+[.NET](dotnet.md#media-a-reply-quotes-opens-with-the-replys-event),
+[C ABI](c-abi.md#media-a-reply-quotes-opens-with-the-replys-event).
+
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload

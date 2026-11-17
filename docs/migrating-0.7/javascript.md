@@ -48,6 +48,7 @@ first call), `[runtime]` a change in behavior that nothing reports, and
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a `latestVersion` of `null`](#latestversion-comes-from-a-verified-key-change)
 - [ ] `[runtime]` [Rename every read of `targetMessageId` to `targetMessageSequenceId`](#targetmessageid-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `replyToEvent`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
+- [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
 - [ ] `[runtime]` [Store a prepared change's key yourself, not through `JSON.stringify`](#a-prepared-changes-json-leaves-out-its-key)
 - [ ] `[runtime]` [Sign only your own data with `sign`](#sign-refuses-data-only-the-sdk-signs)
 - [ ] `[runtime]` [Skip the events `decryptEvent` drops](#decrypt-drops-a-removals-title-and-description-re-encryptions)
@@ -520,9 +521,11 @@ Pass the downloaded bytes, the base64 event of the message that carries the
 file and the conversation key map (the values `decryptEvent` takes), and
 the file's media hash key from the decrypted message: one of its media
 attachments, a link card's banner or favicon (both listed in
-`mediaHashes`), or media quoted in its reply preview. The SDK finds the file
-in the event and derives its key. It doesn't check the message's signature:
-use `verified` from `decryptEvent` for that.
+`mediaHashes`), or media quoted in its reply preview (see [Media a reply
+quotes opens with the reply's
+event](#media-a-reply-quotes-opens-with-the-replys-event)). The SDK finds
+the file in the event and derives its key. It doesn't check the message's
+signature: use `verified` from `decryptEvent` for that.
 
 ```js
 // 0.5.x
@@ -996,6 +999,31 @@ message, and decrypt ignores a key change embedded in a reply.
 `replyToCkces` still opens a message under a key version your chat doesn't
 hold yet, for `encryptReply` to quote it, but the reply doesn't carry those
 key changes.
+
+### Media a reply quotes opens with the reply's event
+
+A reply's preview lists the media of the message it quotes, and
+`decryptFile` and `fileDecryptor` open those files with the reply's event,
+called as [Decrypt a file with its message's
+event](#decrypt-a-file-with-its-messages-event) shows. A reply that embeds
+the quoted message gives each file's key through it. A reply can also only
+name the quoted message, by its sender and message id, as replies from X
+clients can: from 0.7.5 the calls open that media too, where 0.7.0 through
+0.7.4 threw `the reply does not embed the message it quotes`. Such a preview
+doesn't say which key the quoted message is under, so the SDK tries the file
+under each key the preview and `conversationKeys` give, and only the file's
+own key decrypts it. **Pass the conversation's whole key map as
+`conversationKeys`, not only the reply's key version:** the quoted message
+can be under an older key version than the reply. When no key in the map
+decrypts the file, the call throws a `ChatXdkError` of kind `decryption`
+that names the media hash key and says to pass the quoted message's key
+version or its own event.
+
+**Nothing ties a file opened this way to the quoted message.**
+`replyPreviewValidation` is absent for a preview that embeds no message,
+and any member of the conversation can upload a file that opens this way,
+so show it as what the reply claims to quote. To check that a file belongs
+to the quoted message, decrypt it with that message's own event.
 
 ### A prepared change's JSON leaves out its key
 
