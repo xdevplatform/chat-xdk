@@ -1,13 +1,14 @@
-# Why 0.7.3 changes
+# Why 0.7.x changes
 
-This page explains why each change from 0.5.x to chat-xdk 0.7.3 was made,
-and links to the lines to change in each binding's guide. The
-[index](README.md) lists the guides, and the [CHANGELOG](../../CHANGELOG.md)
-lists every change.
+This page explains why each change from 0.5.x to chat-xdk 0.7.x was made,
+and links to the lines to change in each binding's guide. It describes the
+newest 0.7.x release. The [index](README.md) lists the guides and [what each
+0.7.x release changed](README.md#what-each-07x-release-changed), and the
+[CHANGELOG](../../CHANGELOG.md) lists every change.
 
 ## Sends can use per-message keys
 
-0.7.3 sends each message, reply, reaction and edit in one of two formats.
+0.7.x sends each message, reply, reaction and edit in one of two formats.
 v0 is the format 0.5.x sends: contents encrypted under the conversation key,
 signed at signature version 7. v1 encrypts each message under its own
 message key, derived with HKDF-SHA256 from the conversation key, the sender
@@ -24,13 +25,13 @@ X clients' v1 sends carry: its encoded signature lists the signing keys the
 message relies on, by user id and key version, its sender's and, for a
 reply, those of the quoted message's sender and of its edit's, and a
 reaction asks for a notification only in a one-to-one conversation, a
-reaction removal or an edit never. 0.7.3 reads both formats.
+reaction removal or an edit never. 0.7.x reads both formats.
 
 ## v0 is the default, and the X API's `v1_send` switch turns on v1
 
 0.5.x decrypts message contents with the conversation key and doesn't know
 signature version 10, so it rejects every v1 send as a signature
-verification failure. 0.7.3 therefore sends v0, which every reader opens,
+verification failure. 0.7.x therefore sends v0, which every reader opens,
 and a chat sends v1 only while the X API's `v1_send` feature switch is on
 for it. The X API decides when v1 sends start, with no app release, and a
 chat that can't read the switch keeps sending v0. The Rust crate and the C
@@ -63,8 +64,11 @@ Upgrade the apps that read your conversations first:
 
 The bindings read the switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, in the background. It carries no
-credentials. Each chat reads the switches when it is created, again once
-`set_identity` gives it a sender, and again 5 minutes after each answer, so
+credentials. A process that reaches the X API under another host name
+names its base URL in the `CHAT_XDK_API_BASE_URL` environment variable, and
+the request goes to `/2/chat/features` there. Each chat reads the switches
+when it is created, again once `set_identity` gives it a sender, and again
+5 minutes after each answer, so
 a change to a switch reaches running chats with no restart and no new chat.
 The sender's request carries its bucket, the last four digits of the user
 id, so a ramp of `v1_send` picks the same senders wherever they run and
@@ -73,7 +77,10 @@ the request by its address. Chats that read the same URL share one request,
 so a process with many chats of one sender makes one request every 5
 minutes. Each answer replaces the one before. Every switch is off until an
 answer arrives, so a chat whose `v1_send` switch is on sends v0 first and v1
-from then on, until an answer turns it off. Files encrypted from a v0 build
+from then on, until an answer turns it off. An answer stays for 5 minutes
+after it arrives, also once no chat reads its URL, so an app that creates a
+chat for each send sends v1 from the first chat it creates after an answer,
+and still makes one request every 5 minutes. Files encrypted from a v0 build
 of a message don't open with a v1 build of it, so encrypt each file from the
 payload you send. The request never delays or fails a call. One that fails
 is retried in the background while a chat waits for its answer, 1 second
@@ -103,7 +110,7 @@ v1 message keys from the sender's. Recipients look keys up by the key
 version as the event carries it, while the signatures of messages and key
 changes cover its integer value, so `01` and `1` sign alike but name
 different keys. Any other spelling yields a send no recipient can verify or
-decrypt, so 0.7.3 checks every user id and key version, in both formats, and
+decrypt, so 0.7.x checks every user id and key version, in both formats, and
 fails with an error naming the field:
 [Rust](rust.md#user-ids-are-strings-of-digits),
 [Python](python.md#user-ids-are-strings-of-digits),
@@ -234,7 +241,8 @@ same. On a server, JS also loads keys with `importKeys` and saves them with
 `exportKeys`, as every binding does, without Juicebox, through
 `@xdevplatform/chat-xdk-server`. The chat `@xdevplatform/chat-xdk` creates,
 the one a browser loads, has neither call, so no script in a page can ask
-it for the keys:
+it for the keys; 0.7.0 through 0.7.2 had both on that chat, and 0.7.3 moved
+them to the server package:
 [Python](python.md#keys-stored-in-juicebox),
 [JavaScript](javascript.md#keys-stored-in-juicebox),
 [Go](go.md#keys-stored-in-juicebox),
@@ -373,7 +381,7 @@ those of the quoted text, and its entities are exactly the quoted message's,
 or its edit's. 0.5.x accepted any start of the quoted text and entities
 among the quoted message's, so it showed previews as valid that X clients
 mark invalid, such as one that quotes a message's first word as all of it.
-0.7.3 checks a preview as X clients do, and the previews it builds pass that
+0.7.x checks a preview as X clients do, and the previews it builds pass that
 check. X clients also check a v1 reply against the message it names, so each
 guide builds replies from the event they quote, and a reply built from the
 explicit preview fields names the quoted message by its `message_id`, as
@@ -390,6 +398,41 @@ reads no key from inside a reply:
 [.NET](dotnet.md#a-reply-preview-quotes-its-message-exactly),
 [C ABI](c-abi.md#a-reply-preview-quotes-its-message-exactly).
 
+## Media a reply quotes opens with the reply's event
+
+A reply's preview lists the media of the message it quotes, and
+`decrypt_file` and `file_decryptor` open those files with the reply's event.
+A reply that embeds the quoted message gives each file's key through that
+message. A reply can also only name the quoted message, by its sender and
+message id, as replies from X clients can, and 0.7.0 through 0.7.4 failed on
+its media with `the reply does not embed the message it quotes`. From 0.7.5
+the calls open it. The preview names the attachment, by its id or its
+position in the preview, but not the key the quoted message is under, so the
+SDK tries the file under each key the preview and the key map give: for each
+key version in the map, the reply's own first, the attachment key of a v1
+message, then the conversation key itself, which v0 media is under. The file
+is authenticated, so only its own key decrypts it. The quoted message can be
+under an older key version than the reply, so the calls take the
+conversation's whole key map.
+
+A file opened this way is not tied to the quoted message. With an embedded
+message, the attachment is found in a message whose signature
+`decrypt_event` checks when it validates the preview. Without one, the
+sender, message id and attachment come from the reply alone, and every
+member of the conversation holds its keys, so a member can upload a file
+that opens this way and show it as another member's. `decrypt_event` reports
+no `reply_preview_validation` for such a preview, so an app shows its media
+as what the reply claims to quote, and checks a file against the quoted
+message by decrypting it with that message's own event
+([CRYPTO.md](../CRYPTO.md#media-keys)):
+[Rust](rust.md#media-a-reply-quotes-opens-with-the-replys-event),
+[Python](python.md#media-a-reply-quotes-opens-with-the-replys-event),
+[JavaScript](javascript.md#media-a-reply-quotes-opens-with-the-replys-event),
+[Go](go.md#media-a-reply-quotes-opens-with-the-replys-event),
+[JVM](jvm.md#media-a-reply-quotes-opens-with-the-replys-event),
+[.NET](dotnet.md#media-a-reply-quotes-opens-with-the-replys-event),
+[C ABI](c-abi.md#media-a-reply-quotes-opens-with-the-replys-event).
+
 ## Signatures verify at versions 8 through 11
 
 Each signature carries its version, and each version signs its own payload
@@ -399,7 +442,7 @@ signature version and a group create's type, 10 covers
 version to group member removals. Every version signs the key version of a
 message or key change as an integer, a message's as `null` when it isn't
 one, and a removed group title, description or avatar as `null`, as X
-clients sign them. 0.7.3 rebuilds each payload in the layout of the version
+clients sign them. 0.7.x rebuilds each payload in the layout of the version
 its signature carries, so events signed at 8 through 11 verify, including
 the events it signs at 10 while it sends v1 and the member adds with a
 description it signs at 8. Versions above 11 are rejected, since their
@@ -619,6 +662,6 @@ events on its own path:
   ([Rust](rust.md#types-are-non_exhaustive)).
 - The JVM and .NET packages bundle the native library for 64-bit ARM Linux,
   so apps there need no copy of their own; a library built for 0.5.x doesn't
-  export the entry points 0.7.3 calls
+  export the entry points 0.7.x calls
   ([JVM](jvm.md#the-jar-bundles-the-linux-arm64-native-library),
   [.NET](dotnet.md#the-package-bundles-the-linux-arm64-native-library)).

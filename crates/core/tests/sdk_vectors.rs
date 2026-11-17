@@ -63,6 +63,8 @@ struct Vectors {
     event_key_change_message_key_b64: String,
     event_reply_message_key_b64: String,
     event_reply_message_key_text: String,
+    event_reply_named_b64: String,
+    event_reply_named_text: String,
     media_first_hash_key: String,
     media_first_encrypted_b64: String,
     media_first_plaintext_b64: String,
@@ -997,6 +999,62 @@ fn vectors_reply_carrying_a_message_key_validates_and_opens_the_quoted_media() {
         .unwrap(),
         B64.decode(&v.media_first_plaintext_b64).unwrap()
     );
+}
+
+#[test]
+fn vectors_reply_naming_a_message_opens_the_quoted_media_and_stays_unvalidated() {
+    let v = load_vectors();
+    let core = chat_xdk_core::ChatCore::new();
+    let mut keys = fixture_key_map(&v);
+    let message = expect_message(
+        core.decrypt_event(
+            &DecryptEventParams::new(v.event_reply_named_b64.clone(), keys.clone())
+                .with_signing_keys(vec![signing_key_for(&v, &v.event_sender_id)]),
+        )
+        .unwrap(),
+    );
+    assert!(message.verified);
+    assert_eq!(message.text(), Some(v.event_reply_named_text.as_str()));
+    assert_eq!(message.reply_preview_validation, None);
+
+    // The quoted message is under another key version than the reply's.
+    let first = B64.decode(&v.media_first_encrypted_b64).unwrap();
+    let err = media_error(
+        &v.event_reply_named_b64,
+        &keys,
+        &v.media_first_hash_key,
+        &first,
+    );
+    assert!(
+        err.contains("under any key the reply gives for it"),
+        "{err}"
+    );
+    assert!(err.contains("pass the quoted message's own event"), "{err}");
+
+    keys.extend(message_key_map(&v));
+    for (media_hash_key, encrypted_b64, plaintext_b64) in [
+        (
+            &v.media_first_hash_key,
+            &v.media_first_encrypted_b64,
+            &v.media_first_plaintext_b64,
+        ),
+        (
+            &v.media_second_hash_key,
+            &v.media_second_encrypted_b64,
+            &v.media_second_plaintext_b64,
+        ),
+    ] {
+        assert_eq!(
+            open_media(
+                &v.event_reply_named_b64,
+                &keys,
+                media_hash_key,
+                encrypted_b64
+            )
+            .unwrap(),
+            B64.decode(plaintext_b64).unwrap()
+        );
+    }
 }
 
 #[test]

@@ -150,13 +150,19 @@ minutes after each answer, so a change reaches a running chat without a
 restart. The sender's request carries its bucket, the last four digits of
 the user id (`?bucket=1234`), so every chat of one sender gets the same
 answer; before that, the X API buckets the request by its address. Chats
-that read the same URL share one request.
+that read the same URL share one request, and the answer stays for 5 minutes
+after it arrives, so a chat created in that time takes it at once: an app
+that creates a chat for each send makes one request per URL every 5 minutes.
 
 The request carries no credentials and never delays or fails an SDK call.
 One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, every switch stays
-off and sends stay in v0, the format 0.5.x sends. The Rust crate and the C
+off and sends stay in v0, the format 0.5.x sends. Each binding's HTTP stack
+picks the proxy, if any, and a process that reaches the X API under another
+host name sets `CHAT_XDK_API_BASE_URL` to its base URL, in place of
+`https://api.x.com` (see
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#feature-switches)). The Rust crate and the C
 ABI never make the request: a Rust app or a C caller requests the URL
 `feature_switches_url` (`chat_xdk_feature_switches_url`) returns, again every
 5 minutes, and hands the chat each answer (`set_feature_switches`,
@@ -230,6 +236,30 @@ The repo depends on the [Juicebox SDK](https://github.com/juicebox-systems/juice
 via a path dependency at `../juicebox-sdk` (CI checks it out automatically). For
 JS/WASM with Juicebox key storage you also build juicebox-sdk's wasm crate — see
 [crates/wasm/js/README.md](crates/wasm/js/README.md).
+
+## Releasing
+
+Maintainers release from GitHub: Actions → **Release** → Run workflow
+([`release.yml`](.github/workflows/release.yml)). Every binding has the same
+version, so one run bumps it, tags `vX.Y.Z` and publishes to each registry.
+
+| Input | Meaning |
+|---|---|
+| `binding` | What to publish: `all`, or one of `rust`, `python`, `js`, `go`, `dotnet`, `java`. `js` publishes both npm packages. `js-server` republishes only `@xdevplatform/chat-xdk-server`, from the tag of a version already released: it needs `bump: none`, and commits and tags nothing. |
+| `bump` | `patch`, `minor`, `major` or `beta`. `none` releases the version already in the manifests, or republishes it if its tag exists. |
+| `dry_run` | On by default: builds and checks everything, publishes and pushes nothing. |
+
+npm publishes by trusted publishing, which npmjs.com registers per package:
+`@xdevplatform/chat-xdk` and `@xdevplatform/chat-xdk-server` each need a
+Trusted Publisher for GitHub Actions with organization `xdevplatform`,
+repository `chat-xdk`, workflow `release.yml` and no environment. Before it
+tags anything, a run that publishes to npm checks that npm accepts it as the
+publisher of each package, dry runs included.
+
+A version already on npm is skipped. So when a release publishes
+`@xdevplatform/chat-xdk` and `@xdevplatform/chat-xdk-server` fails, fix the
+cause, then run the workflow with `binding: js-server`, `bump: none` and
+`dry_run` off.
 
 ## Documentation
 

@@ -73,6 +73,8 @@ type sdkVectors struct {
 	EventKeyChangeMessageKeyB64           string `json:"event_key_change_message_key_b64"`
 	EventReplyMessageKeyB64               string `json:"event_reply_message_key_b64"`
 	EventReplyMessageKeyText              string `json:"event_reply_message_key_text"`
+	EventReplyNamedB64                    string `json:"event_reply_named_b64"`
+	EventReplyNamedText                   string `json:"event_reply_named_text"`
 	MediaFirstHashKey                     string `json:"media_first_hash_key"`
 	MediaFirstEncryptedB64                string `json:"media_first_encrypted_b64"`
 	MediaFirstPlaintextB64                string `json:"media_first_plaintext_b64"`
@@ -4913,6 +4915,7 @@ func TestMediaErrorsSayWhatToPass(t *testing.T) {
 		{first[:len(first)/2], v.EventMessageKeyB64, mkKeys, v.MediaFirstHashKey, "truncated"},
 		{first, v.EventUnencryptedB64, mkKeys, v.MediaUnencryptedHashKey, "the message is not encrypted"},
 		{first, v.EventMessageKeyB64, map[string][]byte{v.MessageKeyConversationKeyVersion: {1, 2, 3}}, v.MediaFirstHashKey, "is not 32 bytes"},
+		{first, v.EventReplyNamedB64, v.conversationKeys(t), v.MediaFirstHashKey, "under any key the reply gives for it"},
 	}
 	for _, c := range cases {
 		_, err := chat.DecryptFile(DecryptFileParams{
@@ -4999,6 +5002,36 @@ func TestReplyCarryingAMessageKeyValidatesAndOpensTheQuotedMedia(t *testing.T) {
 	got := openMedia(t, v.EventReplyMessageKeyB64, v.conversationKeys(t), v.MediaFirstHashKey, v.MediaFirstEncryptedB64)
 	if !bytes.Equal(got, mustDecodeB64(t, v.MediaFirstPlaintextB64)) {
 		t.Fatal("quoted media decrypted to the wrong bytes")
+	}
+}
+
+func TestReplyNamingAMessageOpensTheQuotedMediaAndStaysUnvalidated(t *testing.T) {
+	v := loadVectors(t)
+	chat := New()
+	defer chat.Close()
+	keys := v.conversationKeys(t)
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         v.EventReplyNamedB64,
+		ConversationKeys: keys,
+		SigningKeys:      v.signingKeysFor(v.EventSenderID),
+	})
+	msg := mustMessage(t, event, err)
+	if !msg.Verified || msg.Text() != v.EventReplyNamedText || msg.ReplyPreviewValidation != "" {
+		t.Fatalf("unexpected reply: verified=%v text=%q validation=%q", msg.Verified, msg.Text(), msg.ReplyPreviewValidation)
+	}
+	// The quoted message is under another key version than the reply's.
+	for version, key := range v.messageKeyConversationKeys(t) {
+		keys[version] = key
+	}
+	media := []struct{ hashKey, encryptedB64, plaintextB64 string }{
+		{v.MediaFirstHashKey, v.MediaFirstEncryptedB64, v.MediaFirstPlaintextB64},
+		{v.MediaSecondHashKey, v.MediaSecondEncryptedB64, v.MediaSecondPlaintextB64},
+	}
+	for _, m := range media {
+		got := openMedia(t, v.EventReplyNamedB64, keys, m.hashKey, m.encryptedB64)
+		if !bytes.Equal(got, mustDecodeB64(t, m.plaintextB64)) {
+			t.Fatalf("quoted media %s decrypted to the wrong bytes", m.hashKey)
+		}
 	}
 }
 

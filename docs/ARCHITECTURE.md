@@ -218,6 +218,13 @@ validation; without it, every switch stays off:
   that read the same URL share one request; a chat that joins it takes the
   latest answer at once. Until an answer for its URL arrives every switch
   reads off for the chat, so its first sends can be v0.
+- **Short-lived chats:** a URL's latest answer stays for 5 minutes after it
+  arrived, also once no chat reads the URL. A chat created in that time takes
+  it at once and reads the URL again when the answer's refresh is due. An app
+  that creates a chat for each send therefore makes one request per URL every
+  5 minutes, and sends v0 only from the chats it creates before the URL's
+  first answer, or more than 5 minutes after its latest. A process that sends
+  once and exits never has an answer: keep a chat alive to follow the switch.
 - **Retries:** a request that fails is retried 1 s later, then after twice
   the previous wait, never more than 5 minutes apart, while a chat still
   waits for its answer. A failure keeps the answer the chats already have.
@@ -236,8 +243,9 @@ validation; without it, every switch stays off:
   switch whose value isn't a boolean reads off. No request blocks or fails an
   SDK call.
 - **Where it runs:** in the background, so creating a chat never waits for
-  it: a daemon thread in Python, a goroutine in Go, `HttpClient.sendAsync` in
-  the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
+  it: daemon threads in Python (one for each request under way, and one that
+  waits for the times of the next), a goroutine in Go, `HttpClient.sendAsync`
+  in the JVM, a thread-pool task in .NET and a promise in JavaScript. From Node
   20.16 the request's socket and timer are unref'd, so it never keeps a
   process alive; on older Node, `fetch()` can hold the process open until the
   request ends, at most 2 s. A refresh or a retry waits on a timer that never
@@ -246,6 +254,38 @@ validation; without it, every switch stays off:
   inside OpenSSL while OpenSSL cleans up. Every binding reads the body as it
   streams, up to one byte past 64 KiB, so a long body is never held whole;
   where a runtime can't stream it, the request fails.
+- **Forked processes:** threads don't cross a fork, and a request under way
+  on one can hold a lock, of the resolver's or of OpenSSL's, that the child
+  could never take. So a Python process that forks with `os.fork` (gunicorn
+  with `--preload`, a Celery prefork pool, `multiprocessing`) first waits for
+  its requests under way, at most 2 s, then starts its reads again in the
+  child for the chats the child inherited: a refresh when it is due, any
+  other read at once. The package imports everything a request needs when it
+  is imported, so a fork never finds a request's thread halfway through an
+  import. A server that forks without telling Python gets neither, as uWSGI
+  does unless `py-call-osafterfork` is set: there, create the chats in each
+  worker (`lazy-apps`, or a post-fork hook) and turn `enable-threads` on, or
+  the daemon threads never run.
+- **Proxies:** each binding's HTTP stack decides. Python sends the request
+  through the `http://` proxy that `HTTPS_PROXY` names, or `ALL_PROXY`,
+  unless `NO_PROXY` exempts `api.x.com`, with the credentials in the proxy's
+  URL sent to the proxy alone; with a proxy of any other scheme it connects
+  directly. Go follows `HTTPS_PROXY` and `NO_PROXY`, .NET its default proxy
+  (the same variables, or the system's settings on Windows), and the JVM its
+  default `ProxySelector` (`-Dhttps.proxyHost`, `-Dhttps.proxyPort`). Node
+  uses a proxy only where it is told to use the environment's
+  (`NODE_USE_ENV_PROXY=1`), and a browser uses its own.
+- **Another host name:** a process that reaches the X API under a host name
+  other than `api.x.com` names its base URL in the `CHAT_XDK_API_BASE_URL`
+  environment variable: with `https://api.example.com` there, a chat
+  requests `https://api.example.com/2/chat/features`. The route, the bucket
+  and everything else about the request stay the same. The core reads the
+  variable when a chat starts its reads, that is when the chat is created
+  and when its identity is set, so every binding follows it; WebAssembly
+  has no environment, so in Node the wrapper hands the variable to the
+  core, and a browser has none. `feature_switches_url` follows it too. A
+  value that is not an `https://` or `http://` URL with a host, or that
+  carries credentials, a query or a fragment, is ignored.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the

@@ -25,8 +25,15 @@
 //! over 64 KiB, or its body is not a JSON object with a `features` object.
 //! A failed read changes no flag and is retried after
 //! [`RETRY_FIRST_DELAY_MS`], then after twice the previous wait, never more
-//! than [`FEATURES_REFRESH_MS`] apart, with no limit on retries. Reads stop
-//! once no chat waits for them. A flag whose value is not a boolean reads
+//! than [`FEATURES_REFRESH_MS`] apart, with no limit on retries. A flag
+//! whose value is not a boolean reads off.
+//!
+//! Reads stop once no chat waits for them, and the URL's latest answer
+//! stays for [`FEATURES_REFRESH_MS`] after it arrived: a chat created in
+//! that time takes it at once and reads the URL again when its refresh is
+//! due. So an app that creates a chat for each send makes one request per
+//! URL every [`FEATURES_REFRESH_MS`], and only the chats created before the
+//! first answer, or after the latest one aged out, start with every flag
 //! off.
 
 // Without the bindings that perform the GETs, nothing here starts one.
@@ -45,6 +52,18 @@ pub const V1_SEND: &str = "v1_send";
 /// it without credentials; a chat's request adds its sender's bucket (see
 /// `ChatCore::feature_switches_url`).
 pub const FEATURES_ENDPOINT: &str = "https://api.x.com/2/chat/features";
+
+/// The route of the switches on the X API.
+const FEATURES_PATH: &str = "/2/chat/features";
+
+/// The environment variable that names the base URL of the X API to read
+/// the switches from, in place of `https://api.x.com`: for a process that
+/// reaches the X API under another host name. The route stays
+/// [`FEATURES_PATH`]. Its value is used when it is an `https://` or
+/// `http://` URL with a host and without credentials, a query, a fragment
+/// or white space; any other value is ignored. A chat takes it when it
+/// starts its reads: when it is created and when its identity is set.
+pub(crate) const API_BASE_URL_ENV: &str = "CHAT_XDK_API_BASE_URL";
 
 /// Largest response body accepted, in bytes.
 pub const FEATURES_MAX_BODY: usize = 64 * 1024;
@@ -80,6 +99,36 @@ pub(crate) fn features_url(endpoint: &str, user_id: Option<&str>) -> String {
     }
 }
 
+/// The endpoint to read when `base` is the value of [`API_BASE_URL_ENV`]:
+/// [`FEATURES_PATH`] on `base` when it is a base URL that variable accepts,
+/// else [`FEATURES_ENDPOINT`].
+pub(crate) fn endpoint_for(base: Option<&str>) -> String {
+    let named = base
+        .map(|base| base.trim().trim_end_matches('/'))
+        .filter(|base| {
+            let authority = base
+                .strip_prefix("https://")
+                .or_else(|| base.strip_prefix("http://"))
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default();
+            !authority.is_empty()
+                && !authority.contains('@')
+                && !base.contains(['?', '#'])
+                && !base.contains(|c: char| c.is_whitespace() || c.is_control())
+        });
+    match named {
+        Some(base) => format!("{base}{FEATURES_PATH}"),
+        None => FEATURES_ENDPOINT.to_string(),
+    }
+}
+
+/// The endpoint this process's environment asks for: see [`endpoint_for`].
+/// WebAssembly has no environment to read, so there this is
+/// [`FEATURES_ENDPOINT`] unless the binding hands the variable over.
+pub(crate) fn environment_endpoint() -> String {
+    endpoint_for(std::env::var(API_BASE_URL_ENV).ok().as_deref())
+}
+
 /// A GET for a language binding to perform.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Fetch {
@@ -92,29 +141,54 @@ pub struct Fetch {
     /// The largest body accepted: read at most one byte more, so a longer
     /// body is seen and rejected.
     pub max_bytes: usize,
-    /// Start the request this long from now: 0 for a chat's first read, the
-    /// wait for a retry or a refresh.
+    /// Start the request this long from now: 0 for the first read of a URL,
+    /// the wait for a retry or a refresh.
     pub delay_ms: u64,
 }
 
 /// The flags turned on for one chat, set by each answer to its reads.
 type Flags = RwLock<HashSet<String>>;
 
-/// A read in flight, or waiting to start, and the chats waiting for its
-/// answer.
+/// The flags an answer turned on, and when it arrived.
+#[derive(Debug)]
+struct Answer {
+    on: HashSet<String>,
+    at: u64,
+}
+
+/// What is known of one URL: its read in flight or waiting to start with
+/// the chats waiting for its answer, and its latest answer.
 #[derive(Debug)]
 struct Request {
+    /// 0 while no read is in flight or waiting to start.
     id: u64,
     timeout_ms: u64,
     refresh_ms: u64,
     /// How many reads in a row failed before this one.
     failures: u32,
     /// When this read's result stops counting and it takes no more chats:
-    /// its start plus its timeout; 0 once abandoned.
+    /// its start plus its timeout; 0 while there is no read.
     deadline: u64,
     chats: Vec<Weak<Flags>>,
-    /// The flags the latest answer turned on, which a chat that joins takes.
-    answer: Option<HashSet<String>>,
+    /// The latest answer, which a chat that joins takes.
+    answer: Option<Answer>,
+}
+
+impl Request {
+    /// How long until the latest answer's refresh is due, while the answer
+    /// is fresh: for `refresh_ms` after it arrived.
+    fn refresh_due_in(&self, now: u64) -> Option<u64> {
+        let due = self.answer.as_ref()?.at.saturating_add(self.refresh_ms);
+        (now < due).then(|| due - now)
+    }
+
+    /// Stop reading: no read is in flight or waiting to start any more.
+    fn stop(&mut self) {
+        // No read has id 0, so a result reported for the one that was in
+        // flight changes nothing.
+        self.id = 0;
+        self.deadline = 0;
+    }
 }
 
 /// The wait before the read that follows `failures` failed ones in a row:
@@ -125,7 +199,7 @@ fn retry_delay_ms(failures: u32, refresh_ms: u64) -> u64 {
         .min(refresh_ms)
 }
 
-/// The reads in flight or waiting to start, by URL.
+/// What is known of each URL a chat reads or lately read.
 #[derive(Debug, Default)]
 struct Requests {
     last_id: u64,
@@ -140,6 +214,11 @@ impl Requests {
     /// past its deadline takes no more chats: its late result changes
     /// nothing, so the read that replaces it carries over its chats and its
     /// answer.
+    ///
+    /// A URL no chat reads keeps its answer only while it is fresh: the
+    /// chat that joins then takes it and starts the read its refresh is due
+    /// at, and a chat that joins later starts with every flag off and reads
+    /// at once.
     fn join(
         &mut self,
         url: &str,
@@ -149,35 +228,43 @@ impl Requests {
         now: u64,
     ) -> Option<Fetch> {
         let joining = Arc::downgrade(flags);
-        // Chats that are gone, and the joining chat's earlier entry, leave
-        // the list, so it holds each live chat once.
-        let other = |chat: &Weak<Flags>| chat.strong_count() > 0 && !chat.ptr_eq(&joining);
-        if let Some(request) = self.by_url.get_mut(url) {
-            if let Some(answer) = &request.answer {
-                answer.clone_into(&mut flags.write().unwrap_or_else(PoisonError::into_inner));
-            }
-            if now < request.deadline {
-                request.chats.retain(other);
-                request.chats.push(joining);
-                return None;
-            }
-        }
         let mut request = Request {
             id: 0,
             timeout_ms,
             refresh_ms,
             failures: 0,
             deadline: 0,
-            chats: vec![joining.clone()],
+            chats: Vec::new(),
             answer: None,
         };
-        if let Some(expired) = self.by_url.remove(url) {
-            request
-                .chats
-                .extend(expired.chats.into_iter().filter(|chat| other(chat)));
-            request.answer = expired.answer;
+        let mut delay_ms = 0;
+        if let Some(mut known) = self.by_url.remove(url) {
+            known.chats.retain(|chat| chat.strong_count() > 0);
+            let held = !known.chats.is_empty();
+            // The joining chat's earlier entry leaves the list, so it holds
+            // each live chat once.
+            known.chats.retain(|chat| !chat.ptr_eq(&joining));
+            let reading = now < known.deadline;
+            let refresh_due_in = known.refresh_due_in(now);
+            if !reading && !held && refresh_due_in.is_none() {
+                known.answer = None;
+            }
+            if let Some(answer) = &known.answer {
+                answer
+                    .on
+                    .clone_into(&mut flags.write().unwrap_or_else(PoisonError::into_inner));
+            }
+            if reading {
+                known.chats.push(joining);
+                self.by_url.insert(url.to_string(), known);
+                return None;
+            }
+            request.chats = known.chats;
+            request.answer = known.answer;
+            delay_ms = refresh_due_in.unwrap_or(0);
         }
-        Some(self.schedule(url, request, 0, now))
+        request.chats.push(joining);
+        Some(self.schedule(url, request, delay_ms, now))
     }
 
     /// End the read `id`, which its binding could not start, without a
@@ -185,10 +272,7 @@ impl Requests {
     /// answers the chats waiting for this one.
     fn abandon(&mut self, id: u64) {
         if let Some(request) = self.by_url.values_mut().find(|request| request.id == id) {
-            // No read has id 0, so a result reported for this one changes
-            // nothing.
-            request.id = 0;
-            request.deadline = 0;
+            request.stop();
         }
     }
 
@@ -214,8 +298,10 @@ impl Requests {
     /// Apply the result of the read `id` to the chats waiting for it, and
     /// return the next read for the binding to perform while a chat still
     /// waits: a refresh after an answer, a retry after a result that is no
-    /// answer (a failure, or a response after the read's deadline). A result
-    /// for no read in flight changes nothing.
+    /// answer (a failure, or a response after the read's deadline). Once no
+    /// chat waits there is no next read, and the URL keeps its latest
+    /// answer while it is fresh. A result for no read in flight changes
+    /// nothing.
     fn complete(&mut self, id: u64, status: u16, body: &[u8], now: u64) -> Option<Fetch> {
         let url = self
             .by_url
@@ -233,7 +319,7 @@ impl Requests {
                 for chat in request.chats.iter().filter_map(Weak::upgrade) {
                     on.clone_into(&mut chat.write().unwrap_or_else(PoisonError::into_inner));
                 }
-                request.answer = Some(on);
+                request.answer = Some(Answer { on, at: now });
                 request.failures = 0;
                 request.refresh_ms
             }
@@ -242,10 +328,44 @@ impl Requests {
                 retry_delay_ms(request.failures, request.refresh_ms)
             }
         };
-        if request.chats.is_empty() {
-            return None;
+        let next = if request.chats.is_empty() {
+            request.stop();
+            self.by_url.insert(url, request);
+            None
+        } else {
+            Some(self.schedule(&url, request, delay_ms, now))
+        };
+        self.forget_stale(now);
+        next
+    }
+
+    /// Start every read a chat waits for again, for a binding that lost the
+    /// GETs it was performing and waiting to perform (its process forked):
+    /// the reads for it to perform. A URL whose answer is fresh is read
+    /// when its refresh is due, any other at once.
+    fn restart(&mut self, now: u64) -> Vec<Fetch> {
+        let mut fetches = Vec::new();
+        for (url, mut request) in std::mem::take(&mut self.by_url) {
+            request.chats.retain(|chat| chat.strong_count() > 0);
+            if request.chats.is_empty() {
+                request.stop();
+                self.by_url.insert(url, request);
+                continue;
+            }
+            let delay_ms = request.refresh_due_in(now).unwrap_or(0);
+            fetches.push(self.schedule(&url, request, delay_ms, now));
         }
-        Some(self.schedule(&url, request, delay_ms, now))
+        self.forget_stale(now);
+        fetches
+    }
+
+    /// Forget the URLs no chat reads whose answer is no longer fresh.
+    fn forget_stale(&mut self, now: u64) {
+        self.by_url.retain(|_, request| {
+            now < request.deadline
+                || request.refresh_due_in(now).is_some()
+                || request.chats.iter().any(|chat| chat.strong_count() > 0)
+        });
     }
 }
 
@@ -377,9 +497,12 @@ impl ChatFeatures {
 pub(crate) mod shared {
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
-    use super::{Fetch, Flags, Requests, FEATURES_ENDPOINT};
+    use super::{Fetch, Flags, Requests};
 
     static DEFAULT_ENDPOINT: RwLock<Option<String>> = RwLock::new(None);
+    /// The value of [`super::API_BASE_URL_ENV`] as a binding handed it over,
+    /// for a core that cannot read the environment itself.
+    static API_BASE_URL: RwLock<Option<String>> = RwLock::new(None);
     static CLOCK: RwLock<Option<fn() -> u64>> = RwLock::new(None);
 
     fn requests() -> MutexGuard<'static, Requests> {
@@ -421,12 +544,28 @@ pub(crate) mod shared {
             .unwrap_or_else(PoisonError::into_inner) = endpoint.map(str::to_string);
     }
 
+    pub(crate) fn set_api_base_url(base: Option<&str>) {
+        *API_BASE_URL.write().unwrap_or_else(PoisonError::into_inner) = base.map(str::to_string);
+    }
+
+    /// The endpoint of a chat that does not set its own: the one a test
+    /// set, else the one the environment asks for.
     fn default_endpoint() -> String {
-        DEFAULT_ENDPOINT
+        if let Some(endpoint) = DEFAULT_ENDPOINT
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-            .unwrap_or_else(|| FEATURES_ENDPOINT.to_string())
+        {
+            return endpoint;
+        }
+        match API_BASE_URL
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_deref()
+        {
+            Some(base) => super::endpoint_for(Some(base)),
+            None => super::environment_endpoint(),
+        }
     }
 
     pub(super) fn url(endpoint: Option<&str>, user_id: Option<&str>) -> String {
@@ -451,6 +590,10 @@ pub(crate) mod shared {
 
     pub(crate) fn abandon_fetch(id: u64) {
         requests().abandon(id);
+    }
+
+    pub(crate) fn restart_fetches() -> Vec<Fetch> {
+        requests().restart(now_ms())
     }
 }
 
@@ -730,7 +873,7 @@ mod tests {
         let fetch = start(&mut requests, &dropped, 0);
         drop(dropped);
         assert_eq!(requests.complete(fetch.id, 503, b"", 10), None);
-        assert!(requests.by_url.is_empty());
+        assert!(requests.by_url.is_empty(), "a failed read leaves nothing");
 
         let dropped = chat();
         let fetch = start(&mut requests, &dropped, 20);
@@ -741,7 +884,176 @@ mod tests {
             None,
             "no refresh once the chat is gone"
         );
+    }
+
+    #[test]
+    fn a_chat_created_after_the_last_one_is_gone_takes_its_answer() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        drop(gone);
+        assert_eq!(requests.complete(fetch.id, 200, V1_ON, 100), None);
+
+        let next = chat();
+        let refresh = start(&mut requests, &next, 5_000);
+        assert!(on(&next, V1_SEND), "the latest answer, at once");
+        assert_eq!(
+            (refresh.url.as_str(), refresh.delay_ms),
+            (URL, 100 + FEATURES_REFRESH_MS - 5_000),
+            "its read is the answer's refresh, when that is due"
+        );
+        let another = chat();
+        assert_eq!(join(&mut requests, &another, 6_000), None, "one refresh");
+        assert!(on(&another, V1_SEND));
+
+        let after = requests
+            .complete(refresh.id, 200, V1_OFF, 100 + FEATURES_REFRESH_MS + 50)
+            .unwrap();
+        assert!(!on(&next, V1_SEND) && !on(&another, V1_SEND));
+        assert_eq!(after.delay_ms, FEATURES_REFRESH_MS);
+    }
+
+    #[test]
+    fn a_chat_for_each_send_makes_one_get_each_refresh() {
+        let mut requests = Requests::default();
+        let mut gets = Vec::new();
+        let mut sent_v1 = Vec::new();
+        // A chat every 100 ms for 15 minutes, each gone before the next; a
+        // GET takes 150 ms.
+        let mut in_flight: Option<(Fetch, u64)> = None;
+        for now in (0..3 * FEATURES_REFRESH_MS).step_by(100) {
+            if let Some((fetch, lands)) = &in_flight {
+                if now >= *lands {
+                    assert_eq!(requests.complete(fetch.id, 200, V1_ON, *lands), None);
+                    in_flight = None;
+                }
+            }
+            let chat = chat();
+            if let Some(fetch) = join(&mut requests, &chat, now) {
+                let lands = now + fetch.delay_ms + 150;
+                gets.push(now + fetch.delay_ms);
+                assert!(
+                    in_flight.replace((fetch, lands)).is_none(),
+                    "one GET at a time"
+                );
+            }
+            sent_v1.push(on(&chat, V1_SEND));
+        }
+        let refresh = 150 + FEATURES_REFRESH_MS;
+        assert_eq!(
+            gets,
+            [0, refresh, 2 * refresh, 3 * refresh],
+            "the first read, then one refresh after each answer"
+        );
+        assert_eq!(
+            sent_v1.iter().position(|v1| *v1),
+            Some(2),
+            "v1 from the first chat created after the answer"
+        );
+        assert!(sent_v1[2..].iter().all(|v1| *v1));
+    }
+
+    #[test]
+    fn an_answer_no_chat_holds_ages_out_at_the_refresh_interval() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        drop(gone);
+        requests.complete(fetch.id, 200, V1_ON, 100);
+
+        let late = chat();
+        let own = start(&mut requests, &late, 100 + FEATURES_REFRESH_MS);
+        assert!(!on(&late, V1_SEND), "off until its own read answers");
+        assert_eq!(own.delay_ms, 0, "a first read");
+        requests.complete(own.id, 200, V1_ON, 200 + FEATURES_REFRESH_MS);
+        assert!(on(&late, V1_SEND));
+    }
+
+    #[test]
+    fn a_refresh_that_fails_once_no_chat_waits_leaves_no_answer() {
+        let mut requests = Requests::default();
+        let gone = chat();
+        let fetch = start(&mut requests, &gone, 0);
+        let refresh = requests.complete(fetch.id, 200, V1_ON, 10).unwrap();
+        drop(gone);
+        let failed_at = 10 + FEATURES_REFRESH_MS + 100;
+        assert_eq!(requests.complete(refresh.id, 503, b"", failed_at), None);
         assert!(requests.by_url.is_empty());
+
+        let next = chat();
+        let own = start(&mut requests, &next, failed_at + 10);
+        assert!(!on(&next, V1_SEND));
+        assert_eq!(own.delay_ms, 0);
+    }
+
+    #[test]
+    fn urls_no_chat_reads_are_forgotten_once_their_answers_age_out() {
+        let mut requests = Requests::default();
+        for bucket in 0..50 {
+            let url = features_url(URL, Some(&format!("{bucket:04}")));
+            let gone = chat();
+            let fetch = requests
+                .join(&url, FEATURES_TIMEOUT_MS, FEATURES_REFRESH_MS, &gone, 0)
+                .unwrap();
+            drop(gone);
+            requests.complete(fetch.id, 200, V1_ON, 100);
+        }
+        assert_eq!(requests.by_url.len(), 50, "each fresh answer is kept");
+
+        let kept = chat();
+        let fetch = start(&mut requests, &kept, 200 + FEATURES_REFRESH_MS);
+        requests.complete(fetch.id, 200, V1_ON, 300 + FEATURES_REFRESH_MS);
+        assert_eq!(
+            requests.by_url.keys().collect::<Vec<_>>(),
+            [URL],
+            "the next result drops the answers that aged out"
+        );
+    }
+
+    #[test]
+    fn a_binding_that_lost_its_gets_starts_them_again() {
+        let answered_url = features_url(URL, Some("1001"));
+        let unread_url = features_url(URL, Some("2002"));
+        let mut requests = Requests::default();
+        let waiting = chat();
+        let lost = start(&mut requests, &waiting, 0);
+        let answered = chat();
+        let join_at = |requests: &mut Requests, url: &str, chat: &Arc<Flags>, now| {
+            requests.join(url, FEATURES_TIMEOUT_MS, FEATURES_REFRESH_MS, chat, now)
+        };
+        let fetch = join_at(&mut requests, &answered_url, &answered, 0).unwrap();
+        let lost_refresh = requests.complete(fetch.id, 200, V1_ON, 100).unwrap();
+        let gone = chat();
+        let fetch = join_at(&mut requests, &unread_url, &gone, 0).unwrap();
+        drop(gone);
+        requests.complete(fetch.id, 200, V1_ON, 100);
+
+        let mut restarted = requests.restart(1_000);
+        restarted.sort_by(|a, b| a.url.cmp(&b.url));
+        let reads: Vec<(&str, u64)> = restarted
+            .iter()
+            .map(|fetch| (fetch.url.as_str(), fetch.delay_ms))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                (URL, 0),
+                (answered_url.as_str(), 100 + FEATURES_REFRESH_MS - 1_000)
+            ],
+            "a first read at once, a refresh when it is due, nothing for a URL no chat reads"
+        );
+
+        assert_eq!(requests.complete(lost.id, 200, V1_ON, 1_100), None);
+        assert_eq!(requests.complete(lost_refresh.id, 200, V1_OFF, 1_100), None);
+        assert!(!on(&waiting, V1_SEND) && on(&answered, V1_SEND));
+        assert!(requests
+            .complete(restarted[0].id, 200, V1_ON, 1_200)
+            .is_some());
+        assert!(on(&waiting, V1_SEND), "the restarted read answers");
+
+        let later = chat();
+        assert!(join_at(&mut requests, &unread_url, &later, 1_300).is_some());
+        assert!(on(&later, V1_SEND), "a fresh answer survives the restart");
     }
 
     #[test]
@@ -922,6 +1234,68 @@ mod tests {
             features.enabled(V1_SEND),
             "a chat that reads its own takes no caller's answer"
         );
+    }
+
+    #[test]
+    fn a_base_url_from_the_environment_names_the_endpoint() {
+        assert_eq!(
+            FEATURES_ENDPOINT,
+            format!("https://api.x.com{FEATURES_PATH}")
+        );
+        assert_eq!(endpoint_for(None), FEATURES_ENDPOINT);
+        for (base, endpoint) in [
+            (
+                "https://api.example.com",
+                "https://api.example.com/2/chat/features",
+            ),
+            (
+                " https://api.example.com:443/ ",
+                "https://api.example.com:443/2/chat/features",
+            ),
+            (
+                "http://127.0.0.1:8080/mock",
+                "http://127.0.0.1:8080/mock/2/chat/features",
+            ),
+        ] {
+            assert_eq!(endpoint_for(Some(base)), endpoint, "{base:?}");
+        }
+    }
+
+    #[test]
+    fn a_value_that_is_no_base_url_is_ignored() {
+        for ignored in [
+            "",
+            " ",
+            "api.example.com",
+            "ftp://api.example.com",
+            "https://",
+            "https:///2",
+            "https://user:secret@api.example.com",
+            "https://api.example.com?bucket=1",
+            "https://api.example.com/#features",
+            "https://api.example .com",
+            "https://api.example.com/a\tb",
+        ] {
+            assert_eq!(
+                endpoint_for(Some(ignored)),
+                FEATURES_ENDPOINT,
+                "{ignored:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "bindings")]
+    fn a_base_url_a_binding_hands_over_names_the_endpoint_of_the_next_chats() {
+        shared::set_api_base_url(Some("https://handed-over.test/x-api/"));
+        let read = ChatFeatures::default().start(Some("1001"));
+        shared::set_api_base_url(None);
+        let read = read.expect("a read");
+        assert_eq!(
+            read.url,
+            "https://handed-over.test/x-api/2/chat/features?bucket=1001"
+        );
+        shared::abandon_fetch(read.id);
     }
 
     #[test]

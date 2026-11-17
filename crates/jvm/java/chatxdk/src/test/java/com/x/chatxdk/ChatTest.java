@@ -1900,6 +1900,8 @@ class ChatTest {
                 {first, v.get("event_unencrypted_b64").asText(), mkKeys,
                     v.get("media_unencrypted_hash_key").asText(), "the message is not encrypted"},
                 {first, mkEvent, Map.of(mkVersion, new byte[3]), firstHash, "is not 32 bytes"},
+                {first, v.get("event_reply_named_b64").asText(), conversationKeys(v), firstHash,
+                    "under any key the reply gives for it"},
             };
             for (Object[] c : cases) {
                 @SuppressWarnings("unchecked")
@@ -1973,6 +1975,26 @@ class ChatTest {
             assertEquals(v.get("event_reply_message_key_text").asText(), event.path("content").path("text").asText());
             assertEquals("Valid", event.path("reply_preview_validation").asText());
             assertMediaOpens(v, "event_reply_message_key_b64", conversationKeys(v), "first");
+        }
+    }
+
+    @Test
+    void vectorsReplyNamingAMessageOpensTheQuotedMediaAndStaysUnvalidated() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            DecryptEventParams params =
+                    new DecryptEventParams(v.get("event_reply_named_b64").asText(), conversationKeys(v));
+            params.signingKeys = signingKeysFor(v, v.get("event_sender_id").asText());
+            JsonNode event = chat.decryptEvent(params);
+            assertTrue(event.path("verified").asBoolean());
+            assertEquals(v.get("event_reply_named_text").asText(), event.path("content").path("text").asText());
+            assertTrue(event.path("reply_preview_validation").isMissingNode());
+
+            // The quoted message is under another key version than the reply's.
+            Map<String, byte[]> keys = new LinkedHashMap<>(conversationKeys(v));
+            keys.putAll(messageKeyConversationKeys(v));
+            assertMediaOpens(v, "event_reply_named_b64", keys, "first");
+            assertMediaOpens(v, "event_reply_named_b64", keys, "second");
         }
     }
 

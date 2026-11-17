@@ -27,13 +27,24 @@ Quick Start:
 
 import asyncio as _asyncio
 import atexit as _atexit
+import base64 as _base64
+import heapq as _heapq
 import http.client as _http_client
+import itertools as _itertools
+import os as _os
 import socket as _socket
 import threading as _threading
 import time as _time
 import urllib.parse as _urllib_parse
+import urllib.request as _urllib_request
 from enum import Enum
 from typing import Any, Literal, Optional, TypedDict
+
+# Python imports the idna codec the first time a host name is resolved. Import
+# it here, so it is never mid-import on a request's thread when the process
+# forks: the child would wait for that import for good the first time it
+# resolved a host name.
+import encodings.idna  # noqa: F401
 
 from chat_xdk import _native
 from chat_xdk._native import __version__
@@ -115,37 +126,78 @@ class ScreenCaptureChange(str, Enum):
 # is API.
 
 
-def _start_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Start a feature GET on a daemon thread; the native module calls this
-    when a chat is created and when ``set_identity`` gives it a new URL."""
-    _threading.Thread(
-        target=_perform_feature_fetch,
-        args=(fetch_id, url, timeout, max_bytes),
-        name="chat-xdk-features",
-        daemon=True,
-    ).start()
+def _start_feature_fetch(fetch_id, url, timeout, max_bytes, delay):
+    """Perform a feature GET ``delay`` seconds from now, on a daemon thread
+    of its own. The native module calls this with each GET the core wants: a
+    chat's first read, and each refresh or retry after a result."""
+    global _timer
+    fetch = (fetch_id, url, timeout, max_bytes)
+    if delay <= 0:
+        _threading.Thread(
+            target=_perform_feature_fetch, args=fetch, name="chat-xdk-features", daemon=True
+        ).start()
+        return
+    with _waiting_changed:
+        if _timer is None:
+            timer = _threading.Thread(
+                target=_start_waiting_fetches, name="chat-xdk-features-timer", daemon=True
+            )
+            timer.start()
+            _timer = timer
+        _heapq.heappush(_waiting, (_time.monotonic() + delay, next(_waiting_order), fetch))
+        _waiting_changed.notify()
 
 
 def _perform_feature_fetch(fetch_id, url, timeout, max_bytes):
-    """Perform the GET, then each GET the core returns, a refresh or a
-    retry, after its delay, until none is left or the process exits."""
+    """Perform the GET and report its result to the core, which hands
+    ``_start_feature_fetch`` the next one, a refresh or a retry, while a chat
+    still waits for one."""
+    global _under_way
+    with _fork_gate:
+        _under_way += 1
+    try:
+        status, body = _get_features(url, timeout, max_bytes)
+    except Exception:
+        status, body = 0, b""
+    finally:
+        with _fork_gate:
+            _under_way -= 1
+            _fork_gate.notify_all()
+    _native._feature_complete(fetch_id, status, body)
+
+
+# The GETs waiting for their time, soonest first, and the thread that starts
+# each one when it is due. One thread waits for them all, so a process whose
+# chats read many URLs holds no thread per URL between its GETs.
+_waiting = []
+_waiting_order = _itertools.count()
+_waiting_changed = _threading.Condition()
+_timer = None
+
+
+def _start_waiting_fetches():
+    """Start each waiting GET when its time comes, until the process exits."""
     while True:
+        with _waiting_changed:
+            while not _exit_requested.is_set():
+                wait = _waiting[0][0] - _time.monotonic() if _waiting else None
+                if wait is not None and wait <= 0:
+                    break
+                _waiting_changed.wait(wait)
+            else:
+                return
+            fetch = _heapq.heappop(_waiting)[2]
         try:
-            status, body = _get_features(url, timeout, max_bytes)
-        except Exception:
-            status, body = 0, b""
-        following = _native._feature_complete(fetch_id, status, body)
-        if following is None:
-            return
-        fetch_id, url, timeout, max_bytes, delay = following
-        if _exit_requested.wait(delay):
-            return
+            _start_feature_fetch(*fetch, 0)
+        except RuntimeError:
+            # No thread to perform it on: a failed read, which the core retries.
+            _native._feature_complete(fetch[0], 0, b"")
 
 
 # The sockets of the GETs under way, by thread. At exit they are cut short and
 # waited for: a daemon thread still inside OpenSSL when the process exits races
-# OpenSSL's own cleanup, which can crash the process. A thread waiting for
-# its next GET ends instead of starting it.
+# OpenSSL's own cleanup, which can crash the process. The thread waiting for
+# the next GET ends instead of starting it.
 _requests = {}
 _requests_lock = _threading.Lock()
 _exiting = False
@@ -153,16 +205,64 @@ _exit_requested = _threading.Event()
 _tls_context = None
 
 
+def _proxy_for(scheme, host):
+    """The proxy the environment names for a request to ``host``, as its
+    ``(address, authorization)``, or None for a direct connection:
+    ``HTTPS_PROXY`` or ``HTTP_PROXY`` by ``scheme``, else ``ALL_PROXY``,
+    unless ``NO_PROXY`` exempts the host, each in upper or lower case, as
+    urllib reads them. ``authorization`` is the ``Proxy-Authorization``
+    value for the credentials in the proxy's URL, or None. Only an
+    ``http://`` proxy is used; with any other the request connects
+    directly."""
+    proxies = _urllib_request.getproxies_environment()
+    if _urllib_request.proxy_bypass_environment(host, proxies):
+        return None
+    proxy = proxies.get(scheme) or proxies.get("all")
+    if not proxy:
+        return None
+    parts = _urllib_parse.urlsplit(proxy if "://" in proxy else "http://" + proxy)
+    if parts.scheme != "http" or not parts.hostname:
+        return None
+    authorization = None
+    if parts.username is not None:
+        credentials = "%s:%s" % (
+            _urllib_parse.unquote(parts.username),
+            _urllib_parse.unquote(parts.password or ""),
+        )
+        authorization = "Basic " + _base64.b64encode(credentials.encode()).decode("ascii")
+    return (parts.hostname, parts.port or 80), authorization
+
+
+def _open_tunnel(sock, host, port, authorization):
+    """Ask the proxy on ``sock`` for a tunnel to ``host:port``. Raises
+    OSError unless the proxy opens one."""
+    target = "%s:%d" % ("[%s]" % host if ":" in host else host, port)
+    request = "CONNECT %s HTTP/1.1\r\nHost: %s\r\n" % (target, target)
+    if authorization:
+        request += "Proxy-Authorization: %s\r\n" % authorization
+    sock.sendall((request + "\r\n").encode("ascii"))
+    response = _http_client.HTTPResponse(sock, method="CONNECT")
+    try:
+        response.begin()
+        if response.status != 200:
+            raise OSError("the proxy answered CONNECT with %d" % response.status)
+    finally:
+        response.close()
+
+
 def _get_features(url, timeout, max_bytes):
-    """GET ``url`` within ``timeout`` seconds: the status and the body, read
-    to its end or to one byte past ``max_bytes``. Status 0 when no complete
+    """GET ``url`` within ``timeout`` seconds, through the proxy the
+    environment names for it, if any: the status and the body, read to its
+    end or to one byte past ``max_bytes``. Status 0 when no complete
     response arrived in time."""
     global _tls_context
     deadline = _time.monotonic() + timeout
     parts = _urllib_parse.urlsplit(url)
     secure = parts.scheme == "https"
     port = parts.port or (443 if secure else 80)
-    sock = _socket.create_connection((parts.hostname, port), timeout=timeout)
+    proxy = _proxy_for(parts.scheme, parts.hostname)
+    address, authorization = proxy or ((parts.hostname, port), None)
+    sock = _socket.create_connection(address, timeout=timeout)
     thread = _threading.current_thread()
     with _requests_lock:
         if _exiting:
@@ -171,6 +271,8 @@ def _get_features(url, timeout, max_bytes):
         _requests[thread] = sock
     try:
         if secure:
+            if proxy:
+                _open_tunnel(sock, parts.hostname, port, authorization)
             if _tls_context is None:
                 import ssl
 
@@ -190,7 +292,14 @@ def _get_features(url, timeout, max_bytes):
             connection = _http_client.HTTPConnection(parts.hostname, port, timeout=timeout)
         connection.sock = sock
         target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
-        connection.request("GET", target, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if proxy and not secure:
+            # Without a tunnel the proxy needs the whole URL, and its
+            # credentials travel with the request.
+            target = "http://%s%s" % (parts.netloc, target)
+            if authorization:
+                headers["Proxy-Authorization"] = authorization
+        connection.request("GET", target, headers=headers)
         response = connection.getresponse()
         body = bytearray()
         while len(body) <= max_bytes:
@@ -213,6 +322,8 @@ def _end_feature_requests():
     end, at most 2 seconds."""
     global _exiting
     _exit_requested.set()
+    with _waiting_changed:
+        _waiting_changed.notify_all()
     with _requests_lock:
         _exiting = True
         for sock in _requests.values():
@@ -225,6 +336,60 @@ def _end_feature_requests():
     for thread in threads:
         thread.join(max(0.0, deadline - _time.monotonic()))
 
+
+# A fork copies the process as it is, with only the forking thread in the
+# copy. A GET under way on another thread at that moment may hold a lock of
+# the resolver's or of OpenSSL's, which nothing in the child ever releases:
+# the child then hangs the next time it resolves a name or opens a TLS
+# connection, its own included. So a fork holds new GETs back at this gate
+# and waits for the ones under way, at most _FORK_WAIT seconds.
+_fork_gate = _threading.Condition()
+_under_way = 0
+_FORK_WAIT = 2.0
+
+
+def _wait_for_feature_fetches_before_fork():
+    """Before a fork: hold new GETs back until it is over, and wait for the
+    ones under way."""
+    _fork_gate.acquire()
+    deadline = _time.monotonic() + _FORK_WAIT
+    while _under_way and (remaining := deadline - _time.monotonic()) > 0:
+        _fork_gate.wait(remaining)
+
+
+def _resume_feature_fetches_after_fork():
+    """After a fork, in the parent: let the GETs held back go on."""
+    _fork_gate.release()
+
+
+def _restart_feature_fetches_after_fork():
+    """In a forked child: the threads that perform and wait for GETs stayed
+    in the parent, so let go of its GETs and start again every read a chat of
+    this process still waits for."""
+    global _fork_gate, _under_way, _requests_lock, _waiting_changed, _timer
+    global _exiting, _exit_requested, _tls_context
+    _fork_gate = _threading.Condition()
+    _under_way = 0
+    _requests_lock = _threading.Lock()
+    _waiting_changed = _threading.Condition()
+    _exit_requested = _threading.Event()
+    _exiting = False
+    _timer = None
+    _tls_context = None
+    _waiting.clear()
+    for sock in _requests.values():
+        # This closes the child's handle only: the parent's request goes on.
+        sock.close()
+    _requests.clear()
+    _native._feature_restart()
+
+
+if hasattr(_os, "register_at_fork"):
+    _os.register_at_fork(
+        before=_wait_for_feature_fetches_before_fork,
+        after_in_parent=_resume_feature_fetches_after_fork,
+        after_in_child=_restart_feature_fetches_after_fork,
+    )
 
 _native._feature_set_starter(_start_feature_fetch)
 

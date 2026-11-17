@@ -478,10 +478,12 @@ impl ChatCore {
     /// [`crate::FEATURES_ENDPOINT`] with the bucket of its session identity's
     /// sender, the last four digits of the user id, once
     /// [`Self::set_identity`] has set one. The bucket gives every chat of one
-    /// sender the same answer wherever it runs.
+    /// sender the same answer wherever it runs. Where the
+    /// `CHAT_XDK_API_BASE_URL` environment variable names another base URL
+    /// for the X API, the URL is `/2/chat/features` on that one.
     pub fn feature_switches_url(&self) -> String {
         crate::features::features_url(
-            crate::features::FEATURES_ENDPOINT,
+            &crate::features::environment_endpoint(),
             self.session_user_id().as_deref(),
         )
     }

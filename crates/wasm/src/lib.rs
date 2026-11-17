@@ -169,10 +169,17 @@ fn feature_request(fetch: Option<bindings::Fetch>) -> JsValue {
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
-/// its own, or the X API's when absent.
+/// its own, or the one the environment asks for when absent.
 #[wasm_bindgen(js_name = __featureSetDefaultEndpoint, skip_typescript)]
 pub fn feature_set_default_endpoint(endpoint: Option<String>) {
     bindings::set_default_endpoint(endpoint.as_deref());
+}
+
+/// Hand over the value of the `CHAT_XDK_API_BASE_URL` environment variable,
+/// absent when it is unset: WebAssembly has no environment to read it from.
+#[wasm_bindgen(js_name = __featureSetApiBaseUrl, skip_typescript)]
+pub fn feature_set_api_base_url(base: Option<String>) {
+    bindings::set_api_base_url(base.as_deref());
 }
 
 // Errors. Every error this module throws is a `ChatXdkError`, the class the

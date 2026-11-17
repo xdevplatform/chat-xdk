@@ -187,11 +187,11 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_set_cache_keys(ChatHandle* handle, int enabled);
 
         /// <summary>
-        ///  The URL of this chat's feature switches, in `data`:
-        ///  `CHAT_XDK_FEATURES_ENDPOINT` with `?bucket=` and the last four digits of
-        ///  the user id `chat_xdk_set_identity` set, so every chat of one sender gets
-        ///  the same answer wherever it runs; the bare endpoint before an identity is
-        ///  set.
+        ///  The URL of this chat's feature switches, in `data`: the endpoint
+        ///  (`CHAT_XDK_FEATURES_ENDPOINT`, or `/2/chat/features` on the base URL the
+        ///  `CHAT_XDK_API_BASE_URL` environment variable names) with `?bucket=` and
+        ///  the last four digits of the user id `chat_xdk_set_identity` set, so one
+        ///  sender's chats get one answer; the bare endpoint before an identity is set.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_feature_switches_url", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_feature_switches_url(ChatHandle* handle);

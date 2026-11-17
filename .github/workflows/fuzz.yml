@@ -2,11 +2,19 @@ name: Fuzz
 
 # Short libFuzzer runs over the untrusted parsing entry points: weekly, and
 # on demand. Findings surface as job failures with the crashing input in the
-# uploaded artifacts.
+# uploaded artifacts. A pull request that can change a target runs each one
+# over its starting inputs once instead, without fuzzing, so a target that no
+# longer builds or starts fails the pull request, not the next weekly run.
 on:
   workflow_dispatch:
   schedule:
     - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
+  pull_request:
+    paths:
+      - "crates/core/**"
+      - "Cargo.toml"
+      - "tests/fixtures/sdk_vectors.json"
+      - ".github/workflows/fuzz.yml"
 
 jobs:
   fuzz:
@@ -46,9 +54,9 @@ jobs:
       # Pin the GNU target: cargo-fuzz otherwise selects a musl target on some
       # runners, and musl links libc statically, which the sanitizers the fuzz
       # build enables cannot combine with.
-      - name: Fuzz ${{ matrix.target }} (5 minutes)
+      - name: Fuzz ${{ matrix.target }} (5 minutes; one pass on a pull request)
         working-directory: chat-xdk/crates/core
-        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=300
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- ${{ github.event_name == 'pull_request' && '-runs=0' || '-max_total_time=300' }}
 
       - name: Upload crash artifacts
         if: failure()
