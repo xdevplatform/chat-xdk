@@ -2,29 +2,31 @@
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-11-16
+
 ### Changed
 
-- `decrypt_file` and `file_decryptor` open media a reply quotes when the
-  reply's preview names the quoted message without embedding it, as replies
-  from X clients can. They failed with `the reply does not embed the
-  message it quotes`, for v0 and v1 media alike. The preview names the
-  quoted message by its sender and message id, and the attachment by its id
-  or, without one, by its position in the preview. It does not say which key
-  the message is under, so the file is tried under each key those give with
-  each key in `conversation_keys`, the reply's own key version first: the
-  attachment key of a v1 message, then the conversation key itself, which
-  v0 media is under. The file is authenticated, so only its own key
-  decrypts it. Pass the conversation's whole key map, since the quoted
-  message can be under an older key version than the reply. When no key
-  decrypts the file, the call fails with a decryption error that names the
-  media hash key and says to pass the quoted message's key version or its
-  own event. Nothing ties a file opened this way to the quoted message:
-  `reply_preview_validation` stays absent for a preview that embeds no
-  message, and any member of the conversation can upload a file that opens
-  this way. To check that a file belongs to the quoted message, decrypt it
-  with that message's own event. A reply that embeds the quoted message
-  opens as before, and no call, type or field changes
-  ([CRYPTO.md](docs/CRYPTO.md#media-keys)).
+- Media quoted in a reply opens from the reply alone. `decrypt_file` and
+  `file_decryptor` failed with `the reply does not embed the message it
+  quotes` when the reply's preview named the quoted message without
+  embedding it, as replies from X clients can, for v0 and v1 media alike.
+  The SDK now tries each key the preview's sender, message id and attachment
+  id give, under each key in `conversation_keys` (the reply's own key
+  version first): a v1 message's attachment key, then the conversation key
+  that v0 media is under. Only the file's own key authenticates it. No call,
+  type or field changes, and a reply that embeds the quoted message opens as
+  before.
+  - Pass the conversation's whole key map: the quoted message can be under
+    an older key version than the reply. When no key opens the file, the
+    error names the media hash key and says what to pass.
+  - A file opened this way is not tied to the quoted message:
+    `reply_preview_validation` stays absent, and any member of the
+    conversation can upload a file that opens this way. To check that a file
+    belongs to the quoted message, decrypt it with that message's own event
+    ([CRYPTO.md](docs/CRYPTO.md#media-keys)).
+- The migration guides in `docs/migrating-0.7/` cover the 0.7.x release line
+  instead of a single patch: they install the newest 0.7.x, list what each
+  release from 0.7.0 to 0.7.5 changed, and describe opening quoted media.
 
 ## [0.7.4] - 2026-11-16
 
@@ -1058,7 +1060,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
