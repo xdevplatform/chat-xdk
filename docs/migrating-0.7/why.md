@@ -63,8 +63,11 @@ Upgrade the apps that read your conversations first:
 
 The bindings read the switches with one anonymous request,
 `GET https://api.x.com/2/chat/features`, in the background. It carries no
-credentials. Each chat reads the switches when it is created, again once
-`set_identity` gives it a sender, and again 5 minutes after each answer, so
+credentials. A process that reaches the X API under another host name
+names its base URL in the `CHAT_XDK_API_BASE_URL` environment variable, and
+the request goes to `/2/chat/features` there. Each chat reads the switches
+when it is created, again once `set_identity` gives it a sender, and again
+5 minutes after each answer, so
 a change to a switch reaches running chats with no restart and no new chat.
 The sender's request carries its bucket, the last four digits of the user
 id, so a ramp of `v1_send` picks the same senders wherever they run and

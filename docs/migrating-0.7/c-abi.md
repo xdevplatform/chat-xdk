@@ -180,8 +180,12 @@ chat sends v0 until you make it and hand the answer to
 `chat_xdk_feature_switches_url` returns, `CHAT_XDK_FEATURES_ENDPOINT` with
 the sender's bucket, the last four digits of the user id, without
 credentials, within `CHAT_XDK_FEATURES_TIMEOUT_MS` milliseconds, reading at
-most one byte past `CHAT_XDK_FEATURES_MAX_BODY`. Pass its status, 0 when no
-response arrived, and the bytes of the body you read:
+most one byte past `CHAT_XDK_FEATURES_MAX_BODY`. Where the
+`CHAT_XDK_API_BASE_URL` environment variable names another base URL for the
+X API, for a process that reaches it under another host name, the URL is
+`/2/chat/features` on that one; a value that is not an `https://` or
+`http://` URL is ignored. Pass the request's status, 0 when no response
+arrived, and the bytes of the body you read:
 
 ```c
 // 0.7.4

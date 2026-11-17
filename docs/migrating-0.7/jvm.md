@@ -178,7 +178,11 @@ Chats read the X API's feature switches with one anonymous request,
   attempt fails or is blocked, every switch stays off and its sends stay v0.
 
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
-switch, or block it to keep them v0. There's no code to change.
+switch, or block it to keep them v0. A process that reaches the X API
+under another host name sets the `CHAT_XDK_API_BASE_URL` environment
+variable to its base URL, in place of `https://api.x.com`, before it
+creates its chats; a value that is not an `https://` or `http://` URL is
+ignored. There's no code to change.
 
 ## 1. Symbol index
 

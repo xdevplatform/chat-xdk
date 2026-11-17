@@ -158,8 +158,12 @@ Chats read the X API's feature switches with one anonymous request,
 Allow outbound HTTPS to `api.x.com` if you want your sends to follow the
 switch, or block it to keep them v0. The request goes through the `http://`
 proxy that `HTTPS_PROXY` (or `ALL_PROXY`) names, unless `NO_PROXY` exempts
-`api.x.com`. The requests run on daemon threads, and one still under way or
-waiting at exit is cut short, so they never keep the process alive. A
+`api.x.com`. A process that reaches the X API under another host name sets
+the `CHAT_XDK_API_BASE_URL` environment variable to its base URL, in place
+of `https://api.x.com`, before it creates its chats; a value that is not
+an `https://` or `http://` URL is ignored. The requests run on daemon
+threads, and one still under way or waiting at exit is cut short, so they
+never keep the process alive. A
 process that forks with `os.fork` waits for the requests under way, at most
 2 seconds, and reads the switches again in the child; under uWSGI, set
 `enable-threads` and create the chat in each worker (`lazy-apps`). There's

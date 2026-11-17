@@ -170,7 +170,11 @@ body is a `{"features": {...}}` object no larger than `FEATURES_MAX_BODY`
 replaces the one before. Any other answer changes nothing, so retry a
 request that fails, as the bindings retry theirs: 1 second later, then
 after twice the previous wait, at most 5 minutes apart. A chat that never
-gets an answer keeps sending v0. Without the call there's no code to change.
+gets an answer keeps sending v0. Where the `CHAT_XDK_API_BASE_URL`
+environment variable names another base URL for the X API, for a process
+that reaches it under another host name, `feature_switches_url` returns
+`/2/chat/features` on that one; a value that is not an `https://` or
+`http://` URL is ignored. Without the call there's no code to change.
 
 ## 1. Symbol index
 
