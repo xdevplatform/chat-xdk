@@ -9,7 +9,7 @@
 - Media quoted in a reply opens from the reply alone. `decrypt_file` and
   `file_decryptor` failed with `the reply does not embed the message it
   quotes` when the reply's preview named the quoted message without
-  embedding it, as replies from X clients do, for v0 and v1 media alike.
+  embedding it, as replies from X clients can, for v0 and v1 media alike.
   The SDK now tries each key the preview's sender, message id and attachment
   id give, under each key in `conversation_keys` (the reply's own key
   version first): a v1 message's attachment key, then the conversation key
@@ -1060,7 +1060,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.1...v0.7.2
