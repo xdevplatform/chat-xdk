@@ -131,6 +131,10 @@ the format 0.5.x sends.
 
 The request goes through the `http://` proxy that `HTTPS_PROXY` (or
 `ALL_PROXY`) names, unless `NO_PROXY` exempts `api.x.com`. A process that
+reaches the X API under another host name sets the `CHAT_XDK_API_BASE_URL`
+environment variable to its base URL before it creates its chats: with
+`https://api.example.com` there, the request goes to
+`https://api.example.com/2/chat/features`. A process that
 creates a chat, sends once and exits has no answer yet, so it sends v0: keep
 one chat alive, or one process running, to follow the switch.
 

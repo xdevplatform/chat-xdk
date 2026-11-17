@@ -53,6 +53,18 @@ pub const V1_SEND: &str = "v1_send";
 /// `ChatCore::feature_switches_url`).
 pub const FEATURES_ENDPOINT: &str = "https://api.x.com/2/chat/features";
 
+/// The route of the switches on the X API.
+const FEATURES_PATH: &str = "/2/chat/features";
+
+/// The environment variable that names the base URL of the X API to read
+/// the switches from, in place of `https://api.x.com`: for a process that
+/// reaches the X API under another host name. The route stays
+/// [`FEATURES_PATH`]. Its value is used when it is an `https://` or
+/// `http://` URL with a host and without credentials, a query, a fragment
+/// or white space; any other value is ignored. A chat takes it when it
+/// starts its reads: when it is created and when its identity is set.
+pub(crate) const API_BASE_URL_ENV: &str = "CHAT_XDK_API_BASE_URL";
+
 /// Largest response body accepted, in bytes.
 pub const FEATURES_MAX_BODY: usize = 64 * 1024;
 
@@ -85,6 +97,36 @@ pub(crate) fn features_url(endpoint: &str, user_id: Option<&str>) -> String {
         }
         None => endpoint.to_string(),
     }
+}
+
+/// The endpoint to read when `base` is the value of [`API_BASE_URL_ENV`]:
+/// [`FEATURES_PATH`] on `base` when it is a base URL that variable accepts,
+/// else [`FEATURES_ENDPOINT`].
+pub(crate) fn endpoint_for(base: Option<&str>) -> String {
+    let named = base
+        .map(|base| base.trim().trim_end_matches('/'))
+        .filter(|base| {
+            let authority = base
+                .strip_prefix("https://")
+                .or_else(|| base.strip_prefix("http://"))
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default();
+            !authority.is_empty()
+                && !authority.contains('@')
+                && !base.contains(['?', '#'])
+                && !base.contains(|c: char| c.is_whitespace() || c.is_control())
+        });
+    match named {
+        Some(base) => format!("{base}{FEATURES_PATH}"),
+        None => FEATURES_ENDPOINT.to_string(),
+    }
+}
+
+/// The endpoint this process's environment asks for: see [`endpoint_for`].
+/// WebAssembly has no environment to read, so there this is
+/// [`FEATURES_ENDPOINT`] unless the binding hands the variable over.
+pub(crate) fn environment_endpoint() -> String {
+    endpoint_for(std::env::var(API_BASE_URL_ENV).ok().as_deref())
 }
 
 /// A GET for a language binding to perform.
@@ -455,9 +497,12 @@ impl ChatFeatures {
 pub(crate) mod shared {
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
-    use super::{Fetch, Flags, Requests, FEATURES_ENDPOINT};
+    use super::{Fetch, Flags, Requests};
 
     static DEFAULT_ENDPOINT: RwLock<Option<String>> = RwLock::new(None);
+    /// The value of [`super::API_BASE_URL_ENV`] as a binding handed it over,
+    /// for a core that cannot read the environment itself.
+    static API_BASE_URL: RwLock<Option<String>> = RwLock::new(None);
     static CLOCK: RwLock<Option<fn() -> u64>> = RwLock::new(None);
 
     fn requests() -> MutexGuard<'static, Requests> {
@@ -499,12 +544,28 @@ pub(crate) mod shared {
             .unwrap_or_else(PoisonError::into_inner) = endpoint.map(str::to_string);
     }
 
+    pub(crate) fn set_api_base_url(base: Option<&str>) {
+        *API_BASE_URL.write().unwrap_or_else(PoisonError::into_inner) = base.map(str::to_string);
+    }
+
+    /// The endpoint of a chat that does not set its own: the one a test
+    /// set, else the one the environment asks for.
     fn default_endpoint() -> String {
-        DEFAULT_ENDPOINT
+        if let Some(endpoint) = DEFAULT_ENDPOINT
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-            .unwrap_or_else(|| FEATURES_ENDPOINT.to_string())
+        {
+            return endpoint;
+        }
+        match API_BASE_URL
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_deref()
+        {
+            Some(base) => super::endpoint_for(Some(base)),
+            None => super::environment_endpoint(),
+        }
     }
 
     pub(super) fn url(endpoint: Option<&str>, user_id: Option<&str>) -> String {
@@ -1173,6 +1234,68 @@ mod tests {
             features.enabled(V1_SEND),
             "a chat that reads its own takes no caller's answer"
         );
+    }
+
+    #[test]
+    fn a_base_url_from_the_environment_names_the_endpoint() {
+        assert_eq!(
+            FEATURES_ENDPOINT,
+            format!("https://api.x.com{FEATURES_PATH}")
+        );
+        assert_eq!(endpoint_for(None), FEATURES_ENDPOINT);
+        for (base, endpoint) in [
+            (
+                "https://api.example.com",
+                "https://api.example.com/2/chat/features",
+            ),
+            (
+                " https://api.example.com:443/ ",
+                "https://api.example.com:443/2/chat/features",
+            ),
+            (
+                "http://127.0.0.1:8080/mock",
+                "http://127.0.0.1:8080/mock/2/chat/features",
+            ),
+        ] {
+            assert_eq!(endpoint_for(Some(base)), endpoint, "{base:?}");
+        }
+    }
+
+    #[test]
+    fn a_value_that_is_no_base_url_is_ignored() {
+        for ignored in [
+            "",
+            " ",
+            "api.example.com",
+            "ftp://api.example.com",
+            "https://",
+            "https:///2",
+            "https://user:secret@api.example.com",
+            "https://api.example.com?bucket=1",
+            "https://api.example.com/#features",
+            "https://api.example .com",
+            "https://api.example.com/a\tb",
+        ] {
+            assert_eq!(
+                endpoint_for(Some(ignored)),
+                FEATURES_ENDPOINT,
+                "{ignored:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "bindings")]
+    fn a_base_url_a_binding_hands_over_names_the_endpoint_of_the_next_chats() {
+        shared::set_api_base_url(Some("https://handed-over.test/x-api/"));
+        let read = ChatFeatures::default().start(Some("1001"));
+        shared::set_api_base_url(None);
+        let read = read.expect("a read");
+        assert_eq!(
+            read.url,
+            "https://handed-over.test/x-api/2/chat/features?bucket=1001"
+        );
+        shared::abandon_fetch(read.id);
     }
 
     #[test]

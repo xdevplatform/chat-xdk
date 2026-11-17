@@ -96,7 +96,9 @@ request carries no credentials and never delays or fails a call.
 One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, sends stay in v0,
-the format 0.5.x sends.
+the format 0.5.x sends. A process that reaches the X API under another host
+name sets the `CHAT_XDK_API_BASE_URL` environment variable to its base URL,
+in place of `https://api.x.com`, before it creates its chats.
 
 ## Security limitations
 

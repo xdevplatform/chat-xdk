@@ -159,7 +159,9 @@ One that fails is retried in the background, 1 second later, then after
 twice the previous wait, at most 5 minutes apart. Each answer replaces the
 one before; until an answer for the chat's URL arrives, every switch stays
 off and sends stay in v0, the format 0.5.x sends. Each binding's HTTP stack
-picks the proxy, if any (see
+picks the proxy, if any, and a process that reaches the X API under another
+host name sets `CHAT_XDK_API_BASE_URL` to its base URL, in place of
+`https://api.x.com` (see
 [ARCHITECTURE.md](docs/ARCHITECTURE.md#feature-switches)). The Rust crate and the C
 ABI never make the request: a Rust app or a C caller requests the URL
 `feature_switches_url` (`chat_xdk_feature_switches_url`) returns, again every

@@ -378,6 +378,33 @@ func TestNewReadsTheDefaultEndpoint(t *testing.T) {
 	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
 }
 
+func TestTheEnvironmentsAPIBaseURLNamesTheEndpoint(t *testing.T) {
+	v := loadVectors(t)
+	server := newFeatureServer(t)
+	t.Setenv("CHAT_XDK_API_BASE_URL", strings.TrimSuffix(server.endpoint(), "/2/chat/features")+"/")
+	// The endpoint a test sets comes before the environment's, so none is set here.
+	if err := ffiFeatureSetDefaultEndpoint(""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ffiFeatureSetDefaultEndpoint(offlineFeatures); err != nil {
+			t.Fatal(err)
+		}
+	})
+	chat := New()
+	t.Cleanup(chat.Close)
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "1234561001", SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	waitFor(t, "v1", func() bool { return sendVersion(t, chat, v) == "10" })
+	if seen := strings.Join(server.seen(), ","); !strings.Contains(seen, "bucket=1001") {
+		t.Fatalf("the sender's bucket was not read from the environment's base URL: %q", seen)
+	}
+}
+
 func TestASendNeverWaitsForTheRequest(t *testing.T) {
 	v := loadVectors(t)
 	server := newFeatureServer(t)

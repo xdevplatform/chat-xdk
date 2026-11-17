@@ -275,6 +275,17 @@ validation; without it, every switch stays off:
   default `ProxySelector` (`-Dhttps.proxyHost`, `-Dhttps.proxyPort`). Node
   uses a proxy only where it is told to use the environment's
   (`NODE_USE_ENV_PROXY=1`), and a browser uses its own.
+- **Another host name:** a process that reaches the X API under a host name
+  other than `api.x.com` names its base URL in the `CHAT_XDK_API_BASE_URL`
+  environment variable: with `https://api.example.com` there, a chat
+  requests `https://api.example.com/2/chat/features`. The route, the bucket
+  and everything else about the request stay the same. The core reads the
+  variable when a chat starts its reads, that is when the chat is created
+  and when its identity is set, so every binding follows it; WebAssembly
+  has no environment, so in Node the wrapper hands the variable to the
+  core, and a browser has none. `feature_switches_url` follows it too. A
+  value that is not an `https://` or `http://` URL with a host, or that
+  carries credentials, a query or a fragment, is ignored.
 - **Browsers:** the request is a simple cross-origin GET (an `Accept` header
   and nothing else, so no preflight). A browser app reads the answer only
   while the endpoint sends `Access-Control-Allow-Origin: *`; without it the

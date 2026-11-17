@@ -140,6 +140,24 @@ async function createChatReadsTheSwitches(v, server) {
   }
 }
 
+async function theEnvironmentsApiBaseUrlNamesTheEndpoint(v, server) {
+  // The endpoint a test sets comes before the environment's, so none is set here.
+  __featureSetDefaultEndpoint(undefined);
+  process.env.CHAT_XDK_API_BASE_URL = server.endpoint.slice(0, -"/2/chat/features".length) + "/";
+  try {
+    const juiceboxModule = { Client: class {}, Configuration: class {} };
+    const created = await createChat({ getAuthToken: async () => "", juiceboxModule });
+    created.generateKeypairs();
+    created.setIdentity({ userId: "1234561001", signingKeyVersion: "1" });
+    await waitFor("v1", () => send(created, v) === "10");
+    assert.ok(server.queries.includes("bucket=1001"), server.queries.join());
+    created.free();
+  } finally {
+    delete process.env.CHAT_XDK_API_BASE_URL;
+    keepOffline();
+  }
+}
+
 async function aSendNeverWaitsForTheRequest(v, server) {
   server.delayMs = 2000;
   const chat = newChat(v, server.endpoint, { timeoutMs: 3000 });
@@ -420,6 +438,7 @@ async function main() {
     (server) => chatsOfOneSenderShareTheirBucketsRead(v, server),
     (server) => aRefreshReachesARunningChat(v, server),
     (server) => createChatReadsTheSwitches(v, server),
+    (server) => theEnvironmentsApiBaseUrlNamesTheEndpoint(v, server),
     (server) => aSendNeverWaitsForTheRequest(v, server),
     (server) => chatsCreatedWhileARequestIsInFlightShareIt(v, server),
     (server) => theAnswerHoldsUntilTheNextRefresh(v, server),

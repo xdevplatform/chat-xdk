@@ -4,6 +4,20 @@
 
 ## [0.7.4] - 2026-11-16
 
+### Added
+
+- The `CHAT_XDK_API_BASE_URL` environment variable names the base URL of the
+  X API to read the feature switches from, in place of `https://api.x.com`,
+  for a process that reaches the X API under another host name. With
+  `CHAT_XDK_API_BASE_URL=https://api.example.com` a chat requests
+  `https://api.example.com/2/chat/features`; nothing else about the request
+  changes. A chat takes the variable when it is created and when its
+  identity is set. A value that is not an `https://` or `http://` URL with a
+  host, or that carries credentials, a query or a fragment, is ignored.
+  Python, Go, .NET and the JVM follow it, Node does too (a browser has no
+  environment), and so does the URL `feature_switches_url`
+  (`chat_xdk_feature_switches_url`) returns to a Rust app or a C caller.
+
 ### Fixed
 
 - An app that creates a chat for each send, or closes its chats between

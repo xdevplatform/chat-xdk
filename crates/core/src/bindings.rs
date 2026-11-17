@@ -114,6 +114,13 @@ pub fn set_clock(clock: fn() -> u64) {
     shared::set_clock(clock);
 }
 
+/// Hand over the value of the `CHAT_XDK_API_BASE_URL` environment variable,
+/// `None` when it is unset, for the chats that start their reads from now
+/// on. Only WebAssembly needs it: its core has no environment to read.
+pub fn set_api_base_url(base: Option<&str>) {
+    shared::set_api_base_url(base);
+}
+
 /// Report the result of the GET `id`: its HTTP status, 0 when no response
 /// arrived, and the body, read to its end or to [`Fetch::max_bytes`] plus one
 /// byte, whichever comes first. A request that ended any other way reports
@@ -139,7 +146,7 @@ pub fn restart_fetches() -> Vec<Fetch> {
 }
 
 /// For this repository's tests: the endpoint of every chat that does not set
-/// its own, or the X API's when `None`.
+/// its own, or the one the environment asks for when `None`.
 pub fn set_default_endpoint(endpoint: Option<&str>) {
     shared::set_default_endpoint(endpoint);
 }

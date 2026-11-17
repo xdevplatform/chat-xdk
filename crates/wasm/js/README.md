@@ -149,7 +149,10 @@ one before; until an answer for the chat's URL arrives, sends stay in v0,
 the format 0.5.x sends. From Node 20.16 these requests, and the waits before
 them, never keep the process alive; before it, a request in flight can delay
 exit until it ends, at most 2 seconds. In a browser, the request is a simple
-cross-origin GET made with `fetch`.
+cross-origin GET made with `fetch`. A Node process that reaches the X API
+under another host name sets the `CHAT_XDK_API_BASE_URL` environment variable
+to its base URL, in place of `https://api.x.com`, before it creates its
+chats.
 
 ## Security limitations
 

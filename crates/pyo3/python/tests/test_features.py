@@ -185,6 +185,24 @@ class TestFeatureSwitches(unittest.TestCase):
         finally:
             keep_offline()
 
+    def test_the_environments_api_base_url_names_the_endpoint(self):
+        # The endpoint a test sets comes before the environment's, so the
+        # script sets none. Were the variable ignored, the read of the X
+        # API's own URL would end at a proxy nothing listens on.
+        script = """
+            chat_xdk._native._feature_set_default_endpoint(None)
+            chat = keyed(chat_xdk.Chat())
+            chat.set_identity(chat_xdk.SetIdentityParams("1234561001", "1"))
+            print(wait_for(lambda: send(chat) == "10", 5.0))
+            """
+        environment = {
+            "CHAT_XDK_API_BASE_URL": self.server.url[: -len("/2/chat/features")] + "/",
+            "HTTPS_PROXY": "http://127.0.0.1:9",
+            "NO_PROXY": "127.0.0.1",
+        }
+        self.assertEqual(self._run(script, env=environment), "True")
+        self.assertIn("bucket=1001", self.server.queries)
+
     def test_a_send_never_waits_for_the_request(self):
         self.server.delay = 2.0
         chat = self._chat(timeout=3.0)
