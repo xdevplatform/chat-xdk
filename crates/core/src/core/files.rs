@@ -100,6 +100,18 @@ impl ChatCore {
     /// finds that attachment in the event and derives its key from the key
     /// for the message's version.
     ///
+    /// A reply's preview may show quoted media without embedding the quoted
+    /// message. The preview then names that message and the attachment but
+    /// not the key the message is under, so the file is tried under the
+    /// keys they give with each key in `params.conversation_keys`: the key
+    /// of an attachment of a message with a message key, then the
+    /// conversation key itself. The file is authenticated, so only its own
+    /// key decrypts it. Nothing then ties the file to the quoted message:
+    /// [`Self::decrypt_event`] reports no `reply_preview_validation` for
+    /// such a preview, and any member of the conversation could have
+    /// uploaded the file. To check that, decrypt it with the quoted
+    /// message's own event.
+    ///
     /// Errors say what to pass instead when the key map lacks the message's
     /// key version, the event is not an encrypted message with files, the
     /// media hash key is not in it, or `params.encrypted` is not the
@@ -112,8 +124,7 @@ impl ChatCore {
             &params.media_hash_key,
         )?;
         Ok(crate::crypto::encryption::decrypt_media(
-            &key,
-            &params.media_hash_key,
+            key.decryptor(&params.media_hash_key)?,
             &params.encrypted,
         )?)
     }
@@ -128,7 +139,7 @@ impl ChatCore {
             &params.conversation_keys,
             &params.media_hash_key,
         )?;
-        Ok(FileDecryptor::for_media(&key, &params.media_hash_key)?)
+        Ok(key.decryptor(&params.media_hash_key)?)
     }
 
     /// Encrypt a file under a key the caller already holds, rather than

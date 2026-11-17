@@ -9,11 +9,19 @@
 //! key derived from the message key and the attachment's id, and a link
 //! card's banner and favicon share the card's key. The key comes from the
 //! caller's arguments alone.
+//!
+//! A reply's preview shows the media it quotes and names the quoted message,
+//! and it may embed that message. When it does, the embedded message gives
+//! the key. When it does not, the preview alone doesn't say whether the
+//! quoted message has a message key or which conversation key it is under,
+//! so the lookup returns each key the file can be under and the file, which
+//! is authenticated, decrypts under its own.
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use super::ChatCore;
-use crate::crypto::encryption::decrypt_message as decrypt_message_bytes;
+use crate::crypto::encryption::{decrypt_message as decrypt_message_bytes, FileDecryptor};
 use crate::crypto::keys::XChatConversationKey;
 use crate::crypto::message_keys;
 use crate::error::{CryptoError, SdkError};
@@ -22,6 +30,25 @@ use crate::thrift::product::{
     MessageAttachment, MessageContents, MessageEntryContents, ReplyingToPreview, UrlAttachment,
 };
 
+/// The key of a media file, or the keys it can be under.
+pub(super) enum MediaKey {
+    /// The file's key, from the message that carries the file.
+    Exact(XChatConversationKey),
+    /// The keys the file can be under, likeliest first: a reply shows the
+    /// file in a preview that does not embed the quoted message.
+    Quoted(Vec<XChatConversationKey>),
+}
+
+impl MediaKey {
+    /// A decryptor for the file, which `media_hash_key` names.
+    pub(super) fn decryptor(&self, media_hash_key: &str) -> Result<FileDecryptor, CryptoError> {
+        match self {
+            Self::Exact(key) => FileDecryptor::for_media(key, media_hash_key),
+            Self::Quoted(keys) => FileDecryptor::for_quoted_media(keys, media_hash_key),
+        }
+    }
+}
+
 /// The key of the media file `media_hash_key` names in the message event
 /// `event_b64`, using the key for the message's version from
 /// `conversation_keys`.
@@ -29,7 +56,7 @@ pub(super) fn media_key(
     event_b64: &str,
     conversation_keys: &HashMap<String, XChatConversationKey>,
     media_hash_key: &str,
-) -> Result<XChatConversationKey, SdkError> {
+) -> Result<MediaKey, SdkError> {
     if media_hash_key.is_empty() {
         return Err(invalid_input(
             "media_hash_key is empty: pass the media hash key of the attachment, from the \
@@ -52,23 +79,37 @@ pub(super) fn media_key(
         KeySource::Map,
     )?;
     if let Some(key) = message.attachment_key(media_hash_key)? {
-        return Ok(key);
+        return Ok(MediaKey::Exact(key));
     }
 
     let mut known = media_hash_keys(message.contents.attachments.as_deref());
     if let Some(preview) = message.contents.replying_to_preview.as_deref() {
         let shown = media_hash_keys(preview.attachments.as_deref());
-        match open_quoted(&event, preview, conversation_keys) {
-            Ok(quoted) => {
-                if let Some(key) = quoted.attachment_key(media_hash_key)? {
-                    return Ok(key);
+        match preview.raw_event_message_create.as_ref() {
+            Some(quoted) => match open_quoted(&event, quoted, preview, conversation_keys) {
+                Ok(quoted) => {
+                    if let Some(key) = quoted.attachment_key(media_hash_key)? {
+                        return Ok(MediaKey::Exact(key));
+                    }
+                    known.extend(media_hash_keys(quoted.contents.attachments.as_deref()));
                 }
-                known.extend(media_hash_keys(quoted.contents.attachments.as_deref()));
+                // When the preview shows this media, why its message cannot
+                // be opened is the answer; otherwise the media is not quoted
+                // here.
+                Err(error) if shown.iter().any(|shown| shown == media_hash_key) => {
+                    return Err(error)
+                }
+                Err(_) => known.extend(shown),
+            },
+            None => {
+                let reply_version = create.conversation_key_version.as_deref();
+                if let Some(keys) =
+                    preview_keys(preview, reply_version, conversation_keys, media_hash_key)?
+                {
+                    return Ok(MediaKey::Quoted(keys));
+                }
+                known.extend(shown);
             }
-            // When the preview shows this media, why its message cannot be
-            // opened is the answer; otherwise the media is not quoted here.
-            Err(error) if shown.iter().any(|shown| shown == media_hash_key) => return Err(error),
-            Err(_) => known.extend(shown),
         }
     }
 
@@ -296,18 +337,14 @@ fn open_message(
     Ok(OpenedMessage { contents, keys })
 }
 
-/// Decrypt the message a reply quotes, embedded in the reply's preview.
+/// Decrypt `quoted`, the message a reply quotes, embedded in the reply's
+/// preview.
 fn open_quoted(
     reply: &MessageEvent,
+    quoted: &MessageEvent,
     preview: &ReplyingToPreview,
     conversation_keys: &HashMap<String, XChatConversationKey>,
 ) -> Result<OpenedMessage, SdkError> {
-    let Some(quoted) = preview.raw_event_message_create.as_ref() else {
-        return Err(invalid_input(
-            "the reply does not embed the message it quotes, so that message's media can't be \
-             opened through the reply: pass the quoted message's own event",
-        ));
-    };
     if quoted.conversation_id.is_none() || quoted.conversation_id != reply.conversation_id {
         return Err(invalid_input(
             "the reply quotes a message from another conversation: pass the quoted message's \
@@ -328,6 +365,60 @@ fn open_quoted(
         "the quoted message",
         KeySource::Map,
     )
+}
+
+/// The keys the media `media_hash_key` can be under when `preview` shows it
+/// without embedding the quoted message, likeliest first; `None` when the
+/// preview does not show it.
+///
+/// The preview names the quoted message by its sender and message id, and
+/// the attachment by its id or, without one, by its place in the preview.
+/// It says neither whether that message has a message key nor which
+/// conversation key it is under. So each key in `conversation_keys` gives
+/// two keys: the attachment key a message with a message key derives, then
+/// the conversation key itself, which a message without one encrypts its
+/// media under. The reply's own key version, `reply_version`, comes first,
+/// since a reply is most often under the key of the message it quotes, then
+/// the other versions from the newest.
+fn preview_keys(
+    preview: &ReplyingToPreview,
+    reply_version: Option<&str>,
+    conversation_keys: &HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+) -> Result<Option<Vec<XChatConversationKey>>, SdkError> {
+    let attachments = preview.attachments.as_deref().unwrap_or_default();
+    let Some((position, own_id)) = find_attachment(attachments, media_hash_key) else {
+        return Ok(None);
+    };
+    let quoted = preview
+        .sender_id
+        .zip(preview.replying_to_message_id.as_deref());
+
+    let mut versions: Vec<(&String, &XChatConversationKey)> = conversation_keys.iter().collect();
+    versions.sort_unstable_by_key(|&(version, _)| {
+        (
+            Some(version.as_str()) != reply_version,
+            Reverse(version.parse::<u64>().ok()),
+            Reverse(version),
+        )
+    });
+
+    let mut keys = Vec::with_capacity(2 * versions.len());
+    for (_, conversation_key) in versions {
+        if let Some((sender_id, message_id)) = quoted {
+            let message_key = message_keys::derive_message_key(
+                conversation_key,
+                &sender_id.to_string(),
+                message_id,
+            )?;
+            keys.push(message_keys::derive_attachment_key(
+                &message_key,
+                &message_keys::resolve_attachment_id(own_id, message_id, position),
+            )?);
+        }
+        keys.push(conversation_key.clone());
+    }
+    Ok(Some(keys))
 }
 
 fn message_id(event: &MessageEvent, which: &str) -> Result<String, SdkError> {

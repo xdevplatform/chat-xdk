@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `decrypt_file` and `file_decryptor` open media a reply quotes when the
+  reply's preview names the quoted message without embedding it, as replies
+  from X clients can. They failed with `the reply does not embed the
+  message it quotes`, for v0 and v1 media alike. The preview names the
+  quoted message by its sender and message id, and the attachment by its id
+  or, without one, by its position in the preview. It does not say which key
+  the message is under, so the file is tried under each key those give with
+  each key in `conversation_keys`, the reply's own key version first: the
+  attachment key of a v1 message, then the conversation key itself, which
+  v0 media is under. The file is authenticated, so only its own key
+  decrypts it. Pass the conversation's whole key map, since the quoted
+  message can be under an older key version than the reply. When no key
+  decrypts the file, the call fails with a decryption error that names the
+  media hash key and says to pass the quoted message's key version or its
+  own event. Nothing ties a file opened this way to the quoted message:
+  `reply_preview_validation` stays absent for a preview that embeds no
+  message, and any member of the conversation can upload a file that opens
+  this way. To check that a file belongs to the quoted message, decrypt it
+  with that message's own event. A reply that embeds the quoted message
+  opens as before, and no call, type or field changes
+  ([CRYPTO.md](docs/CRYPTO.md#media-keys)).
+
 ## [0.7.4] - 2026-11-16
 
 ### Added

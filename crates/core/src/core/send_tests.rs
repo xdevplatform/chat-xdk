@@ -696,6 +696,55 @@ fn a_reply_encrypts_its_own_files_and_quotes_the_originals() {
 }
 
 #[test]
+fn files_a_reply_quotes_by_the_preview_fields_open_through_the_reply() {
+    let author = author();
+    let ckey = key(3);
+    let original = author
+        .core
+        .encrypt_message(&with_attachments(
+            message_params("two photos", &ckey),
+            vec![image("photo-a"), image("photo-b")],
+        ))
+        .unwrap();
+    let photo_a = encrypt_file(&original, &ckey, "photo-a", b"photo a").unwrap();
+    let photo_b = encrypt_file(&original, &ckey, "photo-b", b"photo b").unwrap();
+
+    // A reply from a sender that no longer holds the original's event names
+    // the original and lists its attachments, and embeds no event.
+    let mut params = EncryptReplyParams::new(CONVERSATION, "which one?", "")
+        .with_conversation_key(ckey.to_bytes(), KEY_VERSION);
+    params.reply_to_sequence_id = Some("100".to_string());
+    params.reply_to_message_id = Some(original.message_id.clone());
+    params.reply_to_sender_id = Some(AUTHOR.to_string());
+    params.reply_to_attachments = Some(vec![image("photo-a"), image("photo-b")]);
+    let reply = author.core.encrypt_reply(&params).unwrap();
+
+    let event = delivered(&reply, "200");
+    assert_eq!(
+        open_file(&event, &ckey, "photo-a", &photo_a).unwrap(),
+        b"photo a"
+    );
+    assert_eq!(
+        open_file(&event, &ckey, "photo-b", &photo_b).unwrap(),
+        b"photo b"
+    );
+    let err = error_text(open_file(&event, &ckey, "photo-a", &photo_b));
+    assert!(
+        err.contains("under any key the reply gives for it"),
+        "{err}"
+    );
+
+    let unvalidated = decrypt_message(
+        &ChatCore::new(),
+        &event,
+        &keys(KEY_VERSION, &ckey),
+        std::slice::from_ref(&author.entry),
+    )
+    .unwrap();
+    assert_eq!(unvalidated.reply_preview_validation, None);
+}
+
+#[test]
 fn a_rebuilt_message_keeps_its_encrypted_files_valid() {
     let author = author();
     let ckey = key(3);

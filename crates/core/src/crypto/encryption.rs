@@ -268,11 +268,13 @@ pub fn encrypt_file<R: Read, W: Write>(
 /// Input may be split across `push` calls at any byte boundary; frames are
 /// reassembled internally.
 pub struct FileDecryptor {
-    /// Stream key bytes, used to initialize `pull` once the header is
-    /// complete. Held as a wiped-on-drop array because
+    /// Stream key bytes the file can be under, in the order to try them:
+    /// the one that authenticates the first frame initializes `pull`, and
+    /// the list is then emptied. Held as wiped-on-drop arrays because
     /// `crypto_secretstream::Key` does not zeroize itself.
-    key: zeroize::Zeroizing<[u8; 32]>,
-    /// Underlying secretstream puller; `None` until the header is consumed.
+    keys: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    /// Underlying secretstream puller; `None` until a key has authenticated
+    /// the first frame.
     pull: Option<crypto_secretstream::PullStream>,
     /// Header bytes accumulated until the 24-byte header is complete.
     header: Vec<u8>,
@@ -284,6 +286,9 @@ pub struct FileDecryptor {
     saw_final: bool,
     /// Media hash key of the file being decrypted, named in errors.
     media_hash_key: Option<String>,
+    /// Whether the file is media a reply quotes without embedding the
+    /// message that carries it, so `keys` are the keys it can be under.
+    quoted: bool,
 }
 
 /// Ways a stream fails to decrypt.
@@ -305,13 +310,14 @@ impl FileDecryptor {
     /// Create a decryptor for one file.
     pub fn new(key: &XChatConversationKey) -> Result<Self, CryptoError> {
         Ok(Self {
-            key: secretstream_key_bytes(key)?,
+            keys: vec![secretstream_key_bytes(key)?],
             pull: None,
             header: Vec::new(),
             buf: Vec::new(),
             saw_chunk: false,
             saw_final: false,
             media_hash_key: None,
+            quoted: false,
         })
     }
 
@@ -324,6 +330,29 @@ impl FileDecryptor {
         let mut decryptor = Self::new(key)?;
         decryptor.media_hash_key = Some(media_hash_key.to_string());
         Ok(decryptor)
+    }
+
+    /// Create a decryptor for the media file named by `media_hash_key` that
+    /// a reply quotes without embedding the message that carries it. The
+    /// file is under one of `keys`: the first that authenticates its first
+    /// frame decrypts it, and when none does the error says what to pass.
+    pub(crate) fn for_quoted_media(
+        keys: &[XChatConversationKey],
+        media_hash_key: &str,
+    ) -> Result<Self, CryptoError> {
+        Ok(Self {
+            keys: keys
+                .iter()
+                .map(secretstream_key_bytes)
+                .collect::<Result<_, _>>()?,
+            pull: None,
+            header: Vec::new(),
+            buf: Vec::new(),
+            saw_chunk: false,
+            saw_final: false,
+            media_hash_key: Some(media_hash_key.to_string()),
+            quoted: true,
+        })
     }
 
     fn fault(&self, fault: StreamFault) -> CryptoError {
@@ -339,6 +368,20 @@ impl FileDecryptor {
             );
         };
         CryptoError::DecryptionFailed(match fault {
+            // No key authenticated the first frame, and the keys a reply
+            // gives for media it quotes may not include the file's own.
+            StreamFault::BadFrame | StreamFault::BadLastFrame if self.quoted && !self.saw_chunk => {
+                format!(
+                    "the bytes are not the encrypted file of media_hash_key '{hash}' under any \
+                     key the reply gives for it: the reply shows that media in a preview that \
+                     does not embed the quoted message, so its file was tried under each key in \
+                     conversation_keys and under the attachment key each derives from the \
+                     preview's sender, message id and attachment. Pass the complete bytes \
+                     downloaded for that media hash key and the conversation's key map \
+                     including the quoted message's key version, or pass the quoted message's \
+                     own event"
+                )
+            }
             StreamFault::BadFrame => format!(
                 "the bytes are not the encrypted file of media_hash_key '{hash}', or they are \
                  corrupted: pass the bytes downloaded for that media hash key"
@@ -359,6 +402,31 @@ impl FileDecryptor {
         })
     }
 
+    /// Decrypt `frame` in place and return its tag, or `None` when it does
+    /// not authenticate. The file's first frame is tried under each key in
+    /// turn, each on a stream of its own, and the key that authenticates it
+    /// decrypts the rest of the file.
+    fn pull_frame(&mut self, frame: &mut Vec<u8>) -> Option<crypto_secretstream::Tag> {
+        if let Some(pull) = self.pull.as_mut() {
+            return pull.pull(frame, &[]).ok();
+        }
+        let mut header = [0u8; SECRETSTREAM_HEADER_SIZE];
+        header.copy_from_slice(&self.header);
+        let (pull, opened, tag) = self.keys.iter().find_map(|key| {
+            let mut pull = crypto_secretstream::PullStream::init(
+                crypto_secretstream::Header::from(header),
+                &crypto_secretstream::Key::from(**key),
+            );
+            let mut opened = frame.clone();
+            let tag = pull.pull(&mut opened, &[]).ok()?;
+            Some((pull, opened, tag))
+        })?;
+        *frame = opened;
+        self.pull = Some(pull);
+        self.keys.clear();
+        Some(tag)
+    }
+
     /// Decrypt a ciphertext chunk, returning the plaintext recoverable so far.
     ///
     /// The final frame is held back for [`finish`](Self::finish), so the
@@ -370,7 +438,7 @@ impl FileDecryptor {
         let mut input = ciphertext;
 
         // Consume the header before any frame can be pulled.
-        if self.pull.is_none() {
+        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
             let need = SECRETSTREAM_HEADER_SIZE - self.header.len();
             let take = need.min(input.len());
             self.header.extend_from_slice(&input[..take]);
@@ -378,12 +446,6 @@ impl FileDecryptor {
             if self.header.len() < SECRETSTREAM_HEADER_SIZE {
                 return Ok(Vec::new());
             }
-            let mut hdr = [0u8; SECRETSTREAM_HEADER_SIZE];
-            hdr.copy_from_slice(&self.header);
-            self.pull = Some(crypto_secretstream::PullStream::init(
-                crypto_secretstream::Header::from(hdr),
-                &crypto_secretstream::Key::from(*self.key),
-            ));
         }
 
         self.buf.extend_from_slice(input);
@@ -393,8 +455,7 @@ impl FileDecryptor {
         let mut out = Vec::new();
         while self.buf.len() > ENCRYPTED_CHUNK_SIZE {
             let mut frame: Vec<u8> = self.buf.drain(..ENCRYPTED_CHUNK_SIZE).collect();
-            let pull = self.pull.as_mut().expect("pull initialized above");
-            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+            let Some(tag) = self.pull_frame(&mut frame) else {
                 return Err(self.fault(StreamFault::BadFrame));
             };
             self.saw_chunk = true;
@@ -412,14 +473,14 @@ impl FileDecryptor {
     /// detects truncation. A file of only the 24-byte header decrypts to
     /// empty output.
     pub fn finish(mut self) -> Result<Vec<u8>, CryptoError> {
-        let Some(pull) = self.pull.as_mut() else {
+        if self.header.len() < SECRETSTREAM_HEADER_SIZE {
             return Err(self.fault(StreamFault::TruncatedHeader));
-        };
+        }
 
         let mut out = Vec::new();
         if !self.buf.is_empty() {
             let mut frame = std::mem::take(&mut self.buf);
-            let Ok(tag) = pull.pull(&mut frame, &[]) else {
+            let Some(tag) = self.pull_frame(&mut frame) else {
                 return Err(self.fault(StreamFault::BadLastFrame));
             };
             self.saw_chunk = true;
@@ -436,14 +497,12 @@ impl FileDecryptor {
     }
 }
 
-/// Decrypt the whole encrypted media file named by `media_hash_key` (see
-/// [`FileDecryptor::for_media`]).
+/// Decrypt the whole encrypted media file `decryptor` was created for (see
+/// [`FileDecryptor::for_media`] and [`FileDecryptor::for_quoted_media`]).
 pub(crate) fn decrypt_media(
-    key: &XChatConversationKey,
-    media_hash_key: &str,
+    mut decryptor: FileDecryptor,
     encrypted: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let mut decryptor = FileDecryptor::for_media(key, media_hash_key)?;
     let mut plaintext = Vec::with_capacity(encrypted.len());
     for chunk in encrypted.chunks(ENCRYPTED_CHUNK_SIZE) {
         plaintext.extend_from_slice(&decryptor.push(chunk)?);
@@ -1065,8 +1124,9 @@ mod tests {
         let key = XChatConversationKey::from_bytes(vec![0x42u8; 32]).unwrap();
         for len in [0usize, 1, 1024, 1025, 5000] {
             let (plaintext, encrypted) = encrypted_media(&key, len);
+            let decryptor = FileDecryptor::for_media(&key, "h").unwrap();
             assert_eq!(
-                decrypt_media(&key, "h", &encrypted).unwrap(),
+                decrypt_media(decryptor, &encrypted).unwrap(),
                 plaintext,
                 "len={len}"
             );
@@ -1079,7 +1139,7 @@ mod tests {
         let other = XChatConversationKey::from_bytes(vec![0x43u8; 32]).unwrap();
         let (_, encrypted) = encrypted_media(&key, 3000);
         let error = |key: &XChatConversationKey, bytes: &[u8]| {
-            decrypt_media(key, "photo-1", bytes)
+            decrypt_media(FileDecryptor::for_media(key, "photo-1").unwrap(), bytes)
                 .unwrap_err()
                 .to_string()
         };
@@ -1144,5 +1204,105 @@ mod tests {
             .unwrap();
         let err = decryptor.finish().unwrap_err().to_string();
         assert!(err.contains("are truncated"), "{err}");
+    }
+
+    fn quoted_keys(bytes: [u8; 3]) -> Vec<XChatConversationKey> {
+        bytes
+            .into_iter()
+            .map(|byte| XChatConversationKey::from_bytes(vec![byte; 32]).unwrap())
+            .collect()
+    }
+
+    fn decrypt_quoted_in_steps(
+        keys: &[XChatConversationKey],
+        encrypted: &[u8],
+        step: usize,
+    ) -> Result<Vec<u8>, CryptoError> {
+        let mut decryptor = FileDecryptor::for_quoted_media(keys, "photo-1")?;
+        let mut out = Vec::new();
+        for chunk in encrypted.chunks(step) {
+            out.extend(decryptor.push(chunk)?);
+        }
+        out.extend(decryptor.finish()?);
+        Ok(out)
+    }
+
+    #[test]
+    fn test_quoted_media_opens_under_whichever_key_is_its_own() {
+        let keys = quoted_keys([0x41, 0x42, 0x43]);
+        // One frame (the key is picked in `finish`), several (in `push`),
+        // and an empty file, which is its header alone.
+        for len in [0usize, 1, 1024, 1025, 5000] {
+            for key in &keys {
+                let (plaintext, encrypted) = encrypted_media(key, len);
+                let decryptor = FileDecryptor::for_quoted_media(&keys, "photo-1").unwrap();
+                assert_eq!(decrypt_media(decryptor, &encrypted).unwrap(), plaintext);
+                for step in [1, 24, 333, 1041, 4096] {
+                    assert_eq!(
+                        decrypt_quoted_in_steps(&keys, &encrypted, step).unwrap(),
+                        plaintext,
+                        "len={len} step={step}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_quoted_media_under_none_of_the_keys_says_what_to_pass() {
+        let keys = quoted_keys([0x41, 0x42, 0x43]);
+        let other = XChatConversationKey::from_bytes(vec![0x44u8; 32]).unwrap();
+        for len in [1usize, 1024, 5000] {
+            let (_, encrypted) = encrypted_media(&other, len);
+            let decryptor = FileDecryptor::for_quoted_media(&keys, "photo-1").unwrap();
+            for err in [
+                decrypt_media(decryptor, &encrypted).unwrap_err(),
+                decrypt_quoted_in_steps(&keys, &encrypted, 333).unwrap_err(),
+                decrypt_quoted_in_steps(&[], &encrypted, 333).unwrap_err(),
+            ] {
+                let err = err.to_string();
+                assert!(
+                    err.contains(
+                        "not the encrypted file of media_hash_key 'photo-1' under any key the \
+                         reply gives for it"
+                    ),
+                    "len={len}: {err}"
+                );
+                assert!(
+                    err.contains("pass the quoted message's own event"),
+                    "len={len}: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_quoted_media_reports_a_damaged_file_once_a_key_has_opened_it() {
+        let keys = quoted_keys([0x41, 0x42, 0x43]);
+        let (_, encrypted) = encrypted_media(&keys[2], 3000);
+        let error = |bytes: &[u8]| {
+            let decryptor = FileDecryptor::for_quoted_media(&keys, "photo-1").unwrap();
+            decrypt_media(decryptor, bytes).unwrap_err().to_string()
+        };
+
+        let cut_at_frame = error(&encrypted[..SECRETSTREAM_HEADER_SIZE + ENCRYPTED_CHUNK_SIZE]);
+        assert!(
+            cut_at_frame.contains("media_hash_key 'photo-1' are truncated"),
+            "{cut_at_frame}"
+        );
+        let cut_in_header = error(&encrypted[..10]);
+        assert!(cut_in_header.contains("are truncated"), "{cut_in_header}");
+        let cut_in_frame = error(&encrypted[..encrypted.len() - 5]);
+        assert!(
+            cut_in_frame.contains("not the complete encrypted file of media_hash_key 'photo-1'"),
+            "{cut_in_frame}"
+        );
+        let mut damaged = encrypted.clone();
+        damaged[SECRETSTREAM_HEADER_SIZE + ENCRYPTED_CHUNK_SIZE + 7] ^= 1;
+        let damaged = error(&damaged);
+        assert!(
+            damaged.contains("not the encrypted file of media_hash_key 'photo-1', or"),
+            "{damaged}"
+        );
     }
 }
