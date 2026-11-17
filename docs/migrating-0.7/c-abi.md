@@ -64,8 +64,8 @@ call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.4`. A
-snippet with only a `// 0.7.4` half shows code 0.7.4 adds. CI compiles the
+under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI compiles the
 0.7.4 half of every snippet on this page with `gcc` against the 0.7.4
 `chat_xdk.h`, and passes every params document a 0.7.4 half shows to its
 call in the 0.7.4 library, failing on a document the library can't parse
@@ -188,7 +188,7 @@ X API, for a process that reaches it under another host name, the URL is
 arrived, and the bytes of the body you read:
 
 ```c
-// 0.7.4
+// 0.7.x
 char *url = take(chat_xdk_feature_switches_url(chat));
 uint8_t *body = NULL;
 size_t body_len = 0;
@@ -217,7 +217,7 @@ return different values, so compare the two before the first call: a
 header and a library of different versions don't match.
 
 ```c
-// 0.7.4
+// 0.7.x
 if (chat_xdk_abi_version() != CHAT_XDK_ABI_VERSION) abort();
 ```
 
@@ -293,7 +293,7 @@ such as a key that isn't base64, is an error naming it. `chat_xdk_lock`,
 int32_t valid = chat_xdk_verify(chat, public_key_b64, signature_b64, data, data_len);
 chat_xdk_set_cache_keys(chat, 1);
 
-// 0.7.4
+// 0.7.x
 char *verified = take(chat_xdk_verify(chat, public_key_b64, signature_b64, data, data_len));
 bool valid = strcmp(verified, "true") == 0;
 take(chat_xdk_set_cache_keys(chat, 1));
@@ -318,7 +318,7 @@ defined, so define it before you include `chat_xdk.h`, or pass
 struct ChatHandle *chat = chat_xdk_new();
 take(chat_xdk_unlock(chat, "2580", juicebox_config_json));
 
-// 0.7.4
+// 0.7.x
 struct ChatHandle *chat = NULL;
 take(chat_xdk_new(juicebox_config_json, &chat));
 take(chat_xdk_unlock(chat, pin, pin_len));
@@ -347,7 +347,7 @@ public keys, `{"identity": "...", "signing": "..."}`, without a version.
 // {"public_key": {...}, "version": "...", "generate_version": true}
 char *registration = take(chat_xdk_generate_keypairs(chat));
 
-// 0.7.4
+// 0.7.x
 // {"public_key": {"public_key": "...", "signing_public_key": "...", "identity_public_key_signature": "...", ...}}
 char *registration = take(chat_xdk_generate_keypairs(chat));
 char *response = api_post("/2/users/4201/public_keys", registration);
@@ -364,7 +364,7 @@ versions](#user-ids-and-key-versions-are-strings-of-digits)).
 // 0.5.x
 take(chat_xdk_set_identity(chat, "4201", "1"));
 
-// 0.7.4
+// 0.7.x
 take(chat_xdk_set_identity(chat, "{\"user_id\":\"4201\",\"signing_key_version\":\"1\"}"));
 ```
 
@@ -382,7 +382,7 @@ keys](#chat_xdk_export_keys-fails-without-keys)).
 take(chat_xdk_import_keys(chat, keys_b64));
 take(chat_xdk_import_keys_with_version(chat, keys, keys_len, "1"));
 
-// 0.7.4
+// 0.7.x
 take(chat_xdk_import_keys(chat, keys, keys_len, "{}"));
 take(chat_xdk_import_keys(chat, keys, keys_len, "{\"signing_key_version\":\"1\"}"));
 ```
@@ -402,7 +402,7 @@ events decrypt drops included; `chat_xdk_decrypt_event` fails for one.
 char *batch = take(chat_xdk_decrypt_events(chat, events_json, signing_keys_json));
 char *event = take(chat_xdk_decrypt_event(chat, event_b64, conversation_keys_json, signing_keys_json));
 
-// 0.7.4
+// 0.7.x
 // {"events": ["..."], "signing_keys": [{"user_id": "4201", "public_key_version": "1", "public_key": "...",
 //  "identity_public_key": "...", "identity_public_key_signature": "..."}]}
 char *batch = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
@@ -434,7 +434,7 @@ recipients receive it: keep it to encrypt the message's files (see
 // {"message_id": "...", "encrypted_content": "...", "signature": "...", "encoded_event_signature": "...", ...}
 char *payload = take(chat_xdk_encrypt_message(chat, message_json));
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "text": "hello"}
 char *payload = take(chat_xdk_encrypt_message(chat, message_json));
 // POST /2/chat/conversations/1001-1002/messages
@@ -476,7 +476,7 @@ message first:
 char *encrypted = take(chat_xdk_encrypt_stream(chat, photo_b64, conversation_key_b64));
 char *photo_message = take(chat_xdk_encrypt_message(chat, photo_message_json));
 
-// 0.7.4
+// 0.7.x
 char *total_bytes = take(chat_xdk_encrypted_file_size(24000));
 // {"conversation_id": "1001:1002", "text": "a photo", "attachments": [{"attachment_type": "media",
 //  "media_hash_key": "...", "width": 1200, "height": 630, "filesize_bytes": 24432, "filename": "photo.jpg"}]}
@@ -513,7 +513,7 @@ from `chat_xdk_decrypt_event` for that.
 // 0.5.x
 char *plaintext = take(chat_xdk_decrypt_stream(chat, downloaded_b64, conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"encrypted": "...", "event_b64": "...", "conversation_keys": {"1": "..."}, "media_hash_key": "..."}
 char *plaintext = take(chat_xdk_decrypt_file(chat, decrypt_file_json));
 ```
@@ -543,7 +543,7 @@ complete file encrypted under the key with one of kind `decryption`.
 char *encrypted = take(chat_xdk_encrypt_stream(chat, file_b64, conversation_key_b64));
 char *plaintext = take(chat_xdk_decrypt_stream(chat, downloaded_b64, conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"file": "...", "key": "..."}
 char *encrypted = take(chat_xdk_encrypt_file_with_key(chat, encrypt_file_with_key_json));
 // {"encrypted": "...", "key": "..."}
@@ -577,7 +577,7 @@ char *head = take(chat_xdk_stream_encryptor_push(encryptor, photo_b64));
 char *tail = take(chat_xdk_stream_encryptor_finish(encryptor));
 chat_xdk_stream_encryptor_free(encryptor);
 
-// 0.7.4
+// 0.7.x
 char *size = take(chat_xdk_encrypted_file_size(1100));
 struct FileEncryptorHandle *encryptor = NULL;
 // {"event_b64": "...", "media_hash_key": "..."}
@@ -607,7 +607,7 @@ entries as the request's `action_signatures` as returned:
 //  "signature": "...", "signature_version": "7", "public_key_version": "1", "signature_payload": "..."}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "4201", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "4202", "identity_public_key": "...", "public_key_version": "1"}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
@@ -630,7 +630,7 @@ names fails with ``Invalid params JSON: missing field
 // {"public_keys": [{"user_id": "4201", "public_key": "...", "key_version": "1"}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "4201", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "4202", "identity_public_key": "...", "public_key_version": "1"}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
@@ -655,7 +655,7 @@ returned, without renaming:
 // {..., "participant_keys": [{"user_id": "...", "encrypted_key": "...", "public_key_version": "..."}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "4201", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "4202", "identity_public_key": "...", "public_key_version": "1"}]}
 char *prepared = take(chat_xdk_prepare_conversation_key_change(chat, key_change_json));
@@ -679,7 +679,7 @@ uses: `conversation_participant_keys`, each entry with `user_id`,
 // {"type": "KeyChange", ..., "participant_keys": [{"user_id": "...", "encrypted_key": "...", ...}]}
 char *encrypted = json_get(key_change_json, "participant_keys.0.encrypted_key");
 
-// 0.7.4
+// 0.7.x
 // {"type": "KeyChange", ..., "conversation_participant_keys": [{"user_id": "...",
 //  "encrypted_conversation_key": "...", "public_key_version": "..."}]}
 char *encrypted = json_get(key_change_json, "conversation_participant_keys.0.encrypted_conversation_key");
@@ -699,7 +699,7 @@ nested](#action-signatures-come-nested) shows. Read the action's
 char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 char *message_id = json_get(deletion, "message_id");
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "sequence_ids": ["7"], "delete_for_all": false}
 char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 char *message_id = json_get(deletion, "action_signatures.0.message_id");
@@ -715,7 +715,7 @@ Thrift events give it, and the name the encrypt params take:
 // 0.5.x
 char *message_version = json_get(message_json, "key_version");
 
-// 0.7.4
+// 0.7.x
 char *message_version = json_get(message_json, "conversation_key_version");
 ```
 
@@ -742,7 +742,7 @@ char *text = json_get(message_json, "content.new_text");
 char *deleted = json_get(deleted_json, "message_ids.0");
 char *seen_until = json_get(receipt_json, "seen_until_id");
 
-// 0.7.4
+// 0.7.x
 // {"type": "Message", ..., "content": {"content_type": "Edit", "target_message_sequence_id": "7", "updated_text": "..."}}
 char *target = json_get(message_json, "content.target_message_sequence_id");
 char *text = json_get(message_json, "content.updated_text");
@@ -767,7 +767,7 @@ attempts Juicebox reports left (`0` once the stored keys are locked):
 // "Juicebox error: Invalid PIN: guesses_remaining=2"
 struct FfiResult r = chat_xdk_unlock(chat, "2580", juicebox_config_json);
 
-// 0.7.4
+// 0.7.x
 // {"kind": "invalid_pin", "message": "Juicebox error: Invalid PIN: guesses_remaining=2", "guesses_remaining": 2}
 struct FfiResult r = chat_xdk_unlock(chat, pin, pin_len);
 char *kind = r.error != NULL ? json_get(r.error, "kind") : NULL;
@@ -805,7 +805,7 @@ the field, such as `Invalid sender_id 'user-1': pass a numeric user id
 // {"conversation_id": "...", "text": "pong", "reply_to_sender_id": 4201, ...}
 char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "text": "pong", "reply_to_sequence_id": "7", "reply_to_sender_id": "4201",
 //  "reply_to_text": "ping", "reply_to_message_id": "0b4f7c2e-5a1d-4e8b-9c3f-6d2a1b8e7f90"}
 char *reply = take(chat_xdk_encrypt_reply(chat, reply_json));
@@ -841,7 +841,7 @@ fail with an `invalid_input` error naming the value, where 0.5.x sent it:
   `rest_id` nor `post_url`, fail.
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "text": "café @bob", "entities": [[6, 10, "mention"]]}
 char *sent = take(chat_xdk_encrypt_message(chat, mention_json));
 ```
@@ -865,7 +865,7 @@ highest key in `keys`:
 char *batch = take(chat_xdk_decrypt_events(chat, events_json, signing_keys_json));
 char *version = json_get(batch, "conversation_keys.latest_version");
 
-// 0.7.4
+// 0.7.x
 // [{"user_id": "4201", "public_key_version": "1", "public_key": "...", "identity_public_key": "...",
 //  "identity_public_key_signature": "..."}]
 take(chat_xdk_set_signing_keys(chat, signing_keys_json));
@@ -942,7 +942,7 @@ application data with it; the SDK signs events itself. Any other data signs
 as in 0.5.x:
 
 ```c
-// 0.7.4
+// 0.7.x
 struct FfiResult signed_data = chat_xdk_sign(chat, data, data_len);
 if (signed_data.error != NULL) {
     // An invalid_input error: the data reads as an event or a public key,
@@ -973,7 +973,7 @@ unchanged title:
 //  "new_title": "<ciphertext>"}}}], ...}
 char *batch = take(chat_xdk_decrypt_events(chat, events_json, signing_keys_json));
 
-// 0.7.4
+// 0.7.x
 // {"events": ["..."]}
 char *batch = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
 // {"events": [...], "conversation_keys": {...},
@@ -984,7 +984,7 @@ A loop over single events reads the error, as it reads an unverified
 event's, and moves on to the next event:
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"event_b64": "...", "conversation_keys": {"2": "..."}}
 struct FfiResult r = chat_xdk_decrypt_event(chat, decrypt_event_json);
 if (r.error != NULL) {
@@ -1009,7 +1009,7 @@ if (exported.data == NULL && exported.error == NULL) {
     // no keys
 }
 
-// 0.7.4
+// 0.7.x
 char *has_keys = take(chat_xdk_has_identity_key(chat));
 char *exported = strcmp(has_keys, "true") == 0 ? take(chat_xdk_export_keys(chat)) : NULL;
 ```
@@ -1086,7 +1086,7 @@ char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 //    "signing_public_key": "..."}}]}
 api_post("/2/chat/conversations/1001-1002/messages/delete", delete_request_json);
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "sequence_ids": ["7"], "delete_for_all": true}
 char *deletion = take(chat_xdk_prepare_message_delete(chat, delete_json));
 // POST /2/chat/conversations/1001-1002/messages/delete
@@ -1112,7 +1112,7 @@ sends an unsigned receipt, which recipients drop.
 // 0.5.x
 api_post("/2/chat/conversations/1001-1002/read", "{}");
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "1001:1002", "seen_until_sequence_id": "7"}
 char *receipt = take(chat_xdk_prepare_mark_conversation_read(chat, mark_read_json));
 // POST /2/chat/conversations/1001-1002/read
@@ -1153,7 +1153,7 @@ create returns.
 char *prepared = take(chat_xdk_prepare_group_create(chat, create_json));
 // POST /2/chat/conversations/group {..., "group_name": "Team", "group_avatar_url": "https://..."}
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "111", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "222", "identity_public_key": "...", "public_key_version": "1"}],
 //  "conversation_id": "g1", "member_ids": ["111", "222"], "admin_ids": ["111"], "title": "Team"}
@@ -1187,7 +1187,7 @@ plaintext, and arrives as `Text`. The encrypted `group_name` and
 // {"type": "GroupChange", ..., "change": {"change_type": "Created", ..., "title": "<ciphertext>"}}
 char *title = take(chat_xdk_decrypt(chat, json_get(group_change_json, "change.title"), conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"type": "GroupChange", ..., "change": {"change_type": "Created", ...,
 //  "title": {"kind": "Text", "text": "Team"}, "avatar_url": null, "conversation_key_version": "..."}}
 char *kind = json_get(group_change_json, "change.title.kind");
@@ -1217,7 +1217,7 @@ removal.
 //  "current_admin_ids": ["111"], "current_pending_member_ids": [], "current_title": "Team"}
 char *prepared = take(chat_xdk_prepare_group_members_change(chat, add_json));
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "111", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "222", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "333", "identity_public_key": "...", "public_key_version": "1"}],
@@ -1288,7 +1288,7 @@ sends v0, as 0.5.x readers verify, and at version 10 while it sends v1 (see
 // 0.5.x
 api_post("/2/chat/conversations/g1/members/remove", "{\"user_ids\":[\"222\"]}");
 
-// 0.7.4
+// 0.7.x
 // {"public_keys": [{"user_id": "111", "identity_public_key": "...", "public_key_version": "1"},
 //  {"user_id": "333", "identity_public_key": "...", "public_key_version": "1"}],
 //  "conversation_id": "g1", "user_ids": ["222"], "title": "Team", "description": "About"}
@@ -1310,7 +1310,7 @@ resolves the old one. Store the new key and version, and pass them to every
 encrypt and prepare call until the cache holds them:
 
 ```c
-// 0.7.4
+// 0.7.x
 store_conversation_key("g1", prepared);
 
 // {"conversation_id": "g1", "text": "hello", "conversation_key": "...", "conversation_key_version": "2"}
@@ -1330,7 +1330,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"events": ["...", "...", "...", "..."]}
 char *batch = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
 // {"events": [{"event": {"type": "GroupChange", ..., "change": {"change_type": "MembersRemoved",
@@ -1351,7 +1351,7 @@ sends v1. Send them as a removal of your own id:
 // 0.5.x
 api_post("/2/chat/conversations/g1/members/remove", "{\"user_ids\":[\"111\"]}");
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "promote_admin_id": "333"}
 char *left = take(chat_xdk_prepare_group_leave(chat, leave_json));
 // POST /2/chat/conversations/g1/members/remove
@@ -1376,7 +1376,7 @@ char *encrypted_title = take(chat_xdk_encrypt(chat, title, conversation_key_b64)
 // {"group_name": <encrypted_title>, "conversation_key_version": "2", "modified_fields": ["group_name"]}
 api_put("/2/chat/conversations/g1", title_request_json);
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "new_title": "Team"}
 char *prepared = take(chat_xdk_prepare_group_title_change(chat, title_json));
 // PUT /2/chat/conversations/g1
@@ -1399,7 +1399,7 @@ A change that removes the title decrypts to an empty title.
 // {"type": "GroupChange", ..., "change": {"change_type": "TitleChanged", "new_title": "<ciphertext>"}}
 char *title = take(chat_xdk_decrypt(chat, json_get(group_change_json, "change.new_title"), conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"type": "GroupChange", ..., "change": {"change_type": "TitleChanged", "new_title": {"kind": "Text", "text": "Team"}}}
 char *kind = json_get(group_change_json, "change.new_title.kind");
 char *title = json_get(group_change_json, strcmp(kind, "Text") == 0 ? "change.new_title.text" : "change.new_title.raw");
@@ -1419,7 +1419,7 @@ description never arrives as one.
 // 0.5.x
 char *encrypted_description = take(chat_xdk_encrypt(chat, description, conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "new_description": "About"}
 char *prepared = take(chat_xdk_prepare_group_description_change(chat, description_json));
 // PUT /2/chat/conversations/g1
@@ -1452,7 +1452,7 @@ avatar holds an empty `new_avatar_url`.
 char *encrypted = take(chat_xdk_encrypt_stream(chat, image_b64, conversation_key_b64));
 char *encrypted_avatar_url = take(chat_xdk_encrypt(chat, avatar_url, conversation_key_b64));
 
-// 0.7.4
+// 0.7.x
 // {"file": "...", "key": "..."}
 char *encrypted = take(chat_xdk_encrypt_file_with_key(chat, encrypt_avatar_json));
 // {"conversation_id": "g1", "new_avatar_url": "https://ton.x.com/...", "conversation_key_version": "2"}
@@ -1480,7 +1480,7 @@ verified `SettingsChange` events.
 // 0.5.x
 api_post("/2/chat/conversations/g1/admins", "{\"user_ids\":[\"333\"]}");
 
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "user_ids": ["333"]}
 char *added = take(chat_xdk_prepare_group_admins_add(chat, admins_json));
 // POST /2/chat/conversations/g1/admins {"user_ids": ["333"], "action_signatures": <added.action_signatures>}
@@ -1497,7 +1497,7 @@ expiry as `validity_expiry_timestamp_msec`, and only with the same value
 the params signed:
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "invite_url": "https://x.com/i/chat/group_join/g1/abcdefghij",
 //  "expires_at_msec": 1700000000000}
 char *invite = take(chat_xdk_prepare_group_invite_enable(chat, invite_json));
@@ -1515,7 +1515,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1"}
 char *request = take(chat_xdk_prepare_group_join_request(chat, join_json));
 // POST /2/chat/conversations/g1/join_requests {"token": "abcdefghij", "action_signatures": <request.action_signatures>}
@@ -1530,7 +1530,7 @@ api_post("/2/chat/conversations/g1/join_requests/reject", reject_request_json);
 A TTL change signs `ttl_msec` only; a negative one is rejected:
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "ttl_msec": 86400000}
 char *ttl = take(chat_xdk_prepare_message_ttl_change(chat, ttl_json));
 // PUT /2/chat/conversations/g1/message_ttl {"message_ttl_ms": "86400000", "action_signatures": <ttl.action_signatures>}
@@ -1547,7 +1547,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```c
-// 0.7.4
+// 0.7.x
 // {"conversation_id": "g1", "change": "BlockingEnabled"}
 char *capture = take(chat_xdk_prepare_screen_capture(chat, capture_json));
 // PUT /2/chat/conversations/g1/screen_capture
@@ -1591,7 +1591,7 @@ verify. The documents hold only base64, ids and digits, so `snprintf`
 builds them:
 
 ```c
-// 0.7.4
+// 0.7.x
 struct ChatHandle *alice = NULL;
 struct ChatHandle *bob = NULL;
 take(chat_xdk_new(NULL, &alice));

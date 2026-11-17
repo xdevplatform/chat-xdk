@@ -64,8 +64,8 @@ that nothing reports, and `[new]` a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.4`. A
-snippet with only a `// 0.7.4` half shows code 0.7.4 adds. CI compiles the
+under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI compiles the
 0.7.4 half of every snippet on this page against 0.7.4 with `dotnet build`
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)), as
 the body of an `async` method, with nullable reference types and implicit
@@ -247,7 +247,7 @@ its keys with `ImportKeys` and `ExportKeys` alone:
 using var chat = new Chat();
 chat.Unlock(Encoding.UTF8.GetString(pin), juiceboxConfig);
 
-// 0.7.4
+// 0.7.x
 using var chat = new Chat(juiceboxConfig);
 await chat.UnlockAsync(pin);
 Array.Clear(pin);
@@ -281,7 +281,7 @@ var response = api.Post($"/2/users/{userId}/public_keys", new
 });
 chat.SetIdentity(userId, response.GetProperty("data").GetProperty("public_key_version").GetString()!);
 
-// 0.7.4
+// 0.7.x
 var registration = chat.GenerateKeypairs();
 var response = api.Post($"/2/users/{userId}/public_keys", new { public_key = registration.PublicKey });
 chat.SetIdentity(new SetIdentityParams(userId, response.GetProperty("data").GetProperty("public_key_version").GetString()!));
@@ -302,7 +302,7 @@ throws `ChatXdkException` when either value is invalid (see
 // 0.5.x
 chat.SetIdentity(userId, signingKeyVersion);
 
-// 0.7.4
+// 0.7.x
 chat.SetIdentity(new SetIdentityParams(userId, signingKeyVersion));
 ```
 
@@ -320,7 +320,7 @@ keys](#exportkeys-throws-without-keys) for a chat without keys).
 chat.ImportKeys(privateKeys);
 chat.ImportKeys(privateKeys, signingKeyVersion);
 
-// 0.7.4
+// 0.7.x
 chat.ImportKeys(new ImportKeysParams(privateKeys));
 chat.ImportKeys(new ImportKeysParams(privateKeys) { SigningKeyVersion = signingKeyVersion });
 ```
@@ -343,7 +343,7 @@ var result = chat.DecryptEvents(events, signingKeys);
 foreach (var decrypted in result.Messages) Handle(decrypted.Event);
 var fromQuery = chat.DecryptEvents(events, signingKeyQuery);
 
-// 0.7.4
+// 0.7.x
 var result = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeys });
 foreach (var decrypted in result.Events) Handle(decrypted.Event);
 var fromQuery = chat.DecryptEvents(new DecryptEventsParams(events) { SigningKeys = signingKeyQuery.ToList() });
@@ -368,7 +368,7 @@ description re-encryptions](#decrypt-drops-a-removals-title-and-description-re-e
 var evt = chat.DecryptEvent(eventB64, keys, signingKeys);
 var fromBundle = chat.DecryptEvent(eventB64, bundle, signingKeys);
 
-// 0.7.4
+// 0.7.x
 var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, keys) { SigningKeys = signingKeys });
 var fromBundle = chat.DecryptEvent(new DecryptEventParams(eventB64, bundle.Keys) { SigningKeys = signingKeys });
 ```
@@ -390,7 +390,7 @@ var body = new Dictionary<string, string>
     ["encoded_message_event_signature"] = payload.EncodedEventSignature,
 };
 
-// 0.7.4
+// 0.7.x
 var body = new Dictionary<string, string>
 {
     ["message_id"] = payload.MessageId,
@@ -431,7 +431,7 @@ var banner = new UrlAttachmentImageDescriptor
     Width = 1200,
 };
 
-// 0.7.4
+// 0.7.x
 var mention = new EntityDescriptor(0, 5, "mention");
 var banner = new UrlAttachmentImageDescriptor(
     mediaHashKey, (long)ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length), "banner.jpg")
@@ -469,7 +469,7 @@ var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "a ph
     Attachments = new[] { PhotoAttachment(mediaHashKey) },
 });
 
-// 0.7.4
+// 0.7.x
 var upload = api.Post("/2/chat/media/upload/initialize", new
 {
     conversation_id = conversationId,
@@ -529,7 +529,7 @@ signature: use `verified` from `DecryptEvent` for that.
 // 0.5.x
 var plaintext = chat.DecryptStream(downloaded, keys[conversationKeyVersion]);
 
-// 0.7.4
+// 0.7.x
 var plaintext = chat.DecryptFile(new DecryptFileParams(downloaded, fileEventB64, keys, fileHashKey));
 ```
 
@@ -556,7 +556,7 @@ aren't a complete file encrypted under the key one of kind
 var encrypted = chat.EncryptStream(data, conversationKey);
 var plaintext = chat.DecryptStream(downloaded, conversationKey);
 
-// 0.7.4
+// 0.7.x
 var encrypted = chat.EncryptFileWithKey(new EncryptFileWithKeyParams(data, conversationKey));
 var plaintext = chat.DecryptFileWithKey(new DecryptFileWithKeyParams(downloaded, conversationKey));
 ```
@@ -583,7 +583,7 @@ var size = ChatXdkUtilities.EncryptedStreamSize((ulong)photo.Length);
 using StreamEncryptor encryptor = chat.StreamEncryptor(conversationKey);
 using StreamDecryptor decryptor = chat.StreamDecryptor(keys[conversationKeyVersion]);
 
-// 0.7.4
+// 0.7.x
 var size = ChatXdkUtilities.EncryptedFileSize((ulong)photo.Length);
 using FileEncryptor encryptor = chat.FileEncryptor(new FileEncryptorParams(payload.EventB64, mediaHashKey));
 using FileDecryptor decryptor = chat.FileDecryptor(new FileDecryptorParams(fileEventB64, keys, fileHashKey));
@@ -615,7 +615,7 @@ var actionSignatures = prepared.ActionSignatures.Select(sig => new Dictionary<st
     },
 }).ToList();
 
-// 0.7.4
+// 0.7.x
 var actionSignatures = prepared.ActionSignatures;
 ```
 
@@ -630,7 +630,7 @@ their identity key. All three properties stay `required`:
 // 0.5.x
 var input = new PublicKeyInput { UserId = userId, PublicKey = identityPublicKey, KeyVersion = publicKeyVersion };
 
-// 0.7.4
+// 0.7.x
 var input = new PublicKeyInput { UserId = userId, IdentityPublicKey = identityPublicKey, PublicKeyVersion = publicKeyVersion };
 ```
 
@@ -658,7 +658,7 @@ var conversationParticipantKeys = prepared.ParticipantKeys
     })
     .ToList();
 
-// 0.7.4
+// 0.7.x
 var conversationParticipantKeys = prepared.ConversationParticipantKeys;
 ```
 
@@ -674,7 +674,7 @@ into `ConversationParticipantKey`. Read them under those names:
 // 0.5.x
 var encrypted = keyChange.GetProperty("participant_keys")[0].GetProperty("encrypted_key").GetString();
 
-// 0.7.4
+// 0.7.x
 var encrypted = keyChange.GetProperty("conversation_participant_keys")[0]
     .GetProperty("encrypted_conversation_key").GetString();
 ```
@@ -693,7 +693,7 @@ var deletion = chat.PrepareMessageDelete(
     new MessageDeleteParams(conversationId, sequenceIds, deleteForAll: false));
 var messageId = deletion.MessageId;
 
-// 0.7.4
+// 0.7.x
 var deletion = chat.PrepareMessageDelete(
     new MessageDeleteParams(conversationId, sequenceIds, deleteForAll: false));
 var messageId = deletion.ActionSignatures[0].MessageId;
@@ -710,7 +710,7 @@ events give it, and the name the encrypt params serialize to:
 var messageVersion = message.GetProperty("key_version").GetString();
 var keyChangeVersion = keyChange.GetProperty("key_version").GetString();
 
-// 0.7.4
+// 0.7.x
 var messageVersion = message.GetProperty("conversation_key_version").GetString();
 var keyChangeVersion = keyChange.GetProperty("conversation_key_version").GetString();
 ```
@@ -741,7 +741,7 @@ if (content.GetProperty("content_type").GetString() == "Edit")
 var deletedSequenceIds = deleted.GetProperty("message_ids");
 var seenUntil = receipt.GetProperty("seen_until_id").GetString();
 
-// 0.7.4
+// 0.7.x
 var content = message.GetProperty("content");
 if (content.GetProperty("content_type").GetString() == "Edit")
 {
@@ -778,7 +778,7 @@ prefix. Tell them apart by kind rather than by message:
 // 0.5.x
 var invalidInput = !e.Message.StartsWith("Invalid state:");
 
-// 0.7.4
+// 0.7.x
 var invalidInput = e.Kind == ChatXdkErrorKind.InvalidInput;
 ShowGuessesLeft(e.GuessesRemaining);
 ```
@@ -826,7 +826,7 @@ throws `ChatXdkException` naming the field, such as `Invalid sender_id
 // 0.5.x
 var reply = new EncryptReplyParams(conversationId, "pong", eventB64) { ReplyToSenderId = 4201 };
 
-// 0.7.4
+// 0.7.x
 var reply = new EncryptReplyParams(conversationId, "pong", eventB64) { ReplyToSenderId = "4201" };
 ```
 
@@ -871,7 +871,7 @@ Count an entity's offsets in bytes of UTF-8 when the text holds characters
 outside ASCII:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var text = "café @bob";
 var start = Encoding.UTF8.GetByteCount(text[..text.IndexOf("@bob")]);
 var end = start + Encoding.UTF8.GetByteCount("@bob");
@@ -900,7 +900,7 @@ under the highest key in `Keys`:
 var result = chat.DecryptEvents(events, signingKeys);
 var version = result.ConversationKeys.LatestVersion;
 
-// 0.7.4
+// 0.7.x
 chat.SetSigningKeys(signingKeys);
 var result = chat.DecryptEvents(new DecryptEventsParams(events));
 var version = result.ConversationKeys.LatestVersion;
@@ -970,7 +970,7 @@ rest:
 // 0.5.x
 var saved = JsonSerializer.Serialize(prepared);
 
-// 0.7.4
+// 0.7.x
 StoreConversationKey(prepared.ConversationId, prepared.ConversationKeyVersion, prepared.ConversationKey);
 var saved = JsonSerializer.Serialize(prepared);
 ```
@@ -988,7 +988,7 @@ identity key. Sign only your own application data with `Sign`; the SDK
 signs events itself. Any other data signs as in 0.5.x:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 byte[]? signature;
 try
 {
@@ -1027,7 +1027,7 @@ foreach (var decrypted in result.Messages)
     }
 }
 
-// 0.7.4
+// 0.7.x
 var result = chat.DecryptEvents(new DecryptEventsParams(events));
 foreach (var decrypted in result.Events)
 {
@@ -1044,7 +1044,7 @@ A loop over single events catches the exception, as it catches an
 unverified event's, and moves on to the next event:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 foreach (var item in page.GetProperty("data").EnumerateArray())
 {
     var eventB64 = item.GetProperty("encoded_event").GetString()!;
@@ -1072,7 +1072,7 @@ check `HasIdentityKey` first where that can happen:
 // 0.5.x
 var exported = chat.ExportKeys();
 
-// 0.7.4
+// 0.7.x
 var exported = chat.HasIdentityKey ? chat.ExportKeys() : null;
 ```
 
@@ -1159,7 +1159,7 @@ api.Post($"/2/chat/conversations/{pathId}/messages/delete", new
     },
 });
 
-// 0.7.4
+// 0.7.x
 var deletion = chat.PrepareMessageDelete(new MessageDeleteParams(conversationId, sequenceIds, deleteForAll: true));
 api.Post($"/2/chat/conversations/{pathId}/messages/delete", new
 {
@@ -1186,7 +1186,7 @@ receipt, which recipients drop.
 // 0.5.x
 api.Post($"/2/chat/conversations/{pathId}/read", new { });
 
-// 0.7.4
+// 0.7.x
 var receipt = chat.PrepareMarkConversationRead(
     new MarkConversationReadParams(conversationId, seenUntilSequenceId));
 api.Post($"/2/chat/conversations/{pathId}/read", new { action_signatures = receipt.ActionSignatures });
@@ -1223,7 +1223,7 @@ var prepared = chat.PrepareGroupCreate(
     new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title, AvatarUrl = avatarUrl });
 var body = new { group_name = title, group_avatar_url = avatarUrl };
 
-// 0.7.4
+// 0.7.x
 var prepared = chat.PrepareGroupCreate(
     new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds) { Title = title });
 api.Post("/2/chat/conversations/group", new
@@ -1262,7 +1262,7 @@ if (change.GetProperty("change_type").GetString() == "Created"
     ShowTitle(chat.Decrypt(encryptedTitle, keys[conversationKeyVersion]));
 }
 
-// 0.7.4
+// 0.7.x
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "Created"
     && change.GetProperty("title").Deserialize<GroupText>() is GroupText groupTitle)
@@ -1295,7 +1295,7 @@ var prepared = chat.PrepareGroupMembersChange(
         CurrentTitle = title,
     });
 
-// 0.7.4
+// 0.7.x
 var prepared = chat.PrepareGroupMembersChange(
     new GroupMembersChangeParams(publicKeys, conversationId, newMemberIds, memberIds, adminIds, new List<string>())
     {
@@ -1365,7 +1365,7 @@ first](#upgrade-readers-first)).
 // 0.5.x
 api.Post($"/2/chat/conversations/{pathId}/members/remove", new { user_ids = userIds });
 
-// 0.7.4
+// 0.7.x
 var prepared = chat.PrepareGroupMembersRemove(
     new GroupMembersRemoveParams(remainingPublicKeys, conversationId, userIds)
     {
@@ -1394,7 +1394,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 StoreConversationKey(conversationId, prepared.ConversationKeyVersion, prepared.ConversationKey);
 var sent = chat.EncryptMessage(new EncryptMessageParams(conversationId, "hello")
 {
@@ -1416,7 +1416,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var result = chat.DecryptEvents(new DecryptEventsParams(events));
 foreach (var decrypted in result.Events)
 {
@@ -1442,7 +1442,7 @@ id:
 // 0.5.x
 api.Post($"/2/chat/conversations/{pathId}/members/remove", new { user_ids = new[] { myUserId } });
 
-// 0.7.4
+// 0.7.x
 var left = chat.PrepareGroupLeave(new GroupLeaveParams(conversationId) { PromoteAdminId = promoteAdminId });
 api.Post($"/2/chat/conversations/{pathId}/members/remove", new
 {
@@ -1471,7 +1471,7 @@ api.Put($"/2/chat/conversations/{pathId}", new
     modified_fields = new[] { "group_name" },
 });
 
-// 0.7.4
+// 0.7.x
 var prepared = chat.PrepareGroupTitleChange(new GroupTitleChangeParams(conversationId, title));
 api.Put($"/2/chat/conversations/{pathId}", new
 {
@@ -1499,7 +1499,7 @@ if (change.GetProperty("change_type").GetString() == "TitleChanged")
     ShowTitle(chat.Decrypt(change.GetProperty("new_title").GetString()!, keys[conversationKeyVersion]));
 }
 
-// 0.7.4
+// 0.7.x
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "TitleChanged")
 {
@@ -1523,7 +1523,7 @@ api.Put($"/2/chat/conversations/{pathId}", new
     modified_fields = new[] { "group_description" },
 });
 
-// 0.7.4
+// 0.7.x
 var prepared = chat.PrepareGroupDescriptionChange(new GroupDescriptionChangeParams(conversationId, description));
 api.Put($"/2/chat/conversations/{pathId}", new
 {
@@ -1541,7 +1541,7 @@ empty description. A removal's re-encrypted description never arrives as
 one:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "DescriptionChanged")
 {
@@ -1572,7 +1572,7 @@ api.Put($"/2/chat/conversations/{pathId}", new
     modified_fields = new[] { "group_avatar_url" },
 });
 
-// 0.7.4
+// 0.7.x
 var encrypted = chat.EncryptFileWithKey(new EncryptFileWithKeyParams(photo, keys[conversationKeyVersion]));
 var prepared = chat.PrepareGroupAvatarChange(
     new GroupAvatarChangeParams(conversationId, avatarUrl, conversationKeyVersion));
@@ -1592,7 +1592,7 @@ received `AvatarChanged` change holds `new_avatar_url` as sent and its
 the avatar holds an empty `new_avatar_url`.
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var change = groupChange.GetProperty("change");
 if (change.GetProperty("change_type").GetString() == "AvatarChanged")
 {
@@ -1620,7 +1620,7 @@ verified `SettingsChange` events.
 // 0.5.x
 api.Post($"/2/chat/conversations/{pathId}/admins", new { user_ids = userIds });
 
-// 0.7.4
+// 0.7.x
 var added = chat.PrepareGroupAdminsAdd(new GroupAdminsAddParams(conversationId, userIds));
 api.Post($"/2/chat/conversations/{pathId}/admins", new
 {
@@ -1641,7 +1641,7 @@ as `validity_expiry_timestamp_msec`, and only with the same value the params
 signed:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var invite = chat.PrepareGroupInviteEnable(
     new GroupInviteEnableParams(conversationId, inviteUrl) { ExpiresAtMsec = expiresAtMsec });
 api.Post($"/2/chat/conversations/{pathId}/invite", new
@@ -1658,7 +1658,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var request = chat.PrepareGroupJoinRequest(new GroupJoinRequestParams(conversationId));
 api.Post($"/2/chat/conversations/{pathId}/join_requests", new
 {
@@ -1676,7 +1676,7 @@ api.Post($"/2/chat/conversations/{pathId}/join_requests/reject", new
 A TTL change signs `TtlMsec` only; a negative one is rejected:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var ttl = chat.PrepareMessageTtlChange(new MessageTtlChangeParams(conversationId, ttlMsec));
 api.Put($"/2/chat/conversations/{pathId}/message_ttl", new
 {
@@ -1693,7 +1693,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 var capture = chat.PrepareScreenCapture(
     new ScreenCaptureParams(conversationId, ScreenCaptureChange.BlockingEnabled));
 api.Put($"/2/chat/conversations/{pathId}/screen_capture", new
@@ -1736,7 +1736,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `SetRejectUnverified` on, the default, so the signature has to verify:
 
 ```csharp
-// 0.7.4
+// 0.7.x
 using var alice = new Chat();
 using var bob = new Chat();
 var aliceKeys = alice.GenerateKeypairs().PublicKey;

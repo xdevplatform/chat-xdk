@@ -62,8 +62,8 @@ a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `# 0.5.x`, and then as 0.7.4 code writes them, under `# 0.7.4`. A
-snippet with only a `# 0.7.4` half shows code 0.7.4 adds. CI runs the
+under `# 0.5.x`, and then as 0.7.4 code writes them, under `# 0.7.x`. A
+snippet with only a `# 0.7.x` half shows code 0.7.4 adds. CI runs the
 0.7.4 half of every snippet on this page against 0.7.4
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)),
 so each one runs as written.
@@ -246,7 +246,7 @@ try:
 except ValueError as err:
     guesses_left = guesses_remaining(err)
 
-# 0.7.4
+# 0.7.x
 try:
     chat.unlock(pin)
 except InvalidPinError as err:
@@ -279,7 +279,7 @@ response = api.post(f"/2/users/{user_id}/public_keys", {
 })
 chat.set_identity(user_id, response["data"]["public_key_version"])
 
-# 0.7.4
+# 0.7.x
 registration = chat.generate_keypairs()
 response = api.post(f"/2/users/{user_id}/public_keys", {"public_key": public_key})
 chat.set_identity(SetIdentityParams(user_id, response["data"]["public_key_version"]))
@@ -300,7 +300,7 @@ raises `InvalidInputError` when either value is invalid (see
 # 0.5.x
 chat.set_identity(user_id, signing_key_version)
 
-# 0.7.4
+# 0.7.x
 chat.set_identity(SetIdentityParams(user_id, signing_key_version))
 ```
 
@@ -317,7 +317,7 @@ keys](#export_keys-raises-without-keys) for a chat without keys).
 chat.import_keys(private_keys)
 chat.import_keys(private_keys, version=signing_key_version)
 
-# 0.7.4
+# 0.7.x
 chat.import_keys(ImportKeysParams(private_keys))
 chat.import_keys(ImportKeysParams(private_keys, signing_key_version=signing_key_version))
 ```
@@ -337,7 +337,7 @@ result holds the decrypted events, of every event type, under `events`:
 result = chat.decrypt_events(events, signing_keys)
 decrypted = result["messages"]
 
-# 0.7.4
+# 0.7.x
 result = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
 decrypted = result["events"]
 ```
@@ -359,7 +359,7 @@ description re-encryptions](#decrypt-drops-a-removals-title-and-description-re-e
 # 0.5.x
 event = chat.decrypt_event(event_b64, keys, signing_keys)
 
-# 0.7.4
+# 0.7.x
 event = chat.decrypt_event(DecryptEventParams(event_b64, keys, signing_keys=signing_keys))
 ```
 
@@ -388,7 +388,7 @@ reaction = chat.encrypt_add_reaction(event_b64, "👍")
 edit = chat.encrypt_edit(event_b64, "fixed text")
 prepared = chat.prepare_conversation_key_change(public_keys, conversation_id=conversation_id)
 
-# 0.7.4
+# 0.7.x
 payload = chat.encrypt_message(EncryptMessageParams(conversation_id, "hello", ttl_msec=60_000))
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(event_b64, "👍"))
 edit = chat.encrypt_edit(EncryptEditParams(event_b64, "fixed text"))
@@ -416,7 +416,7 @@ argument of `bytes_to_base64`, `bytes_to_hex`, `detect_mime_type` and
 result: dict = chat.decrypt_events(events, signing_keys)
 prepared: dict = chat.prepare_conversation_key_change(public_keys, conversation_id=conversation_id)
 
-# 0.7.4
+# 0.7.x
 result: DecryptEventsResult = chat.decrypt_events(DecryptEventsParams(events, signing_keys=signing_keys))
 prepared: PreparedConversationChange = chat.prepare_conversation_key_change(
     ConversationKeyChangeParams(public_keys, conversation_id=conversation_id)
@@ -439,7 +439,7 @@ body = {
     "encoded_message_event_signature": payload.encoded_event_signature,
 }
 
-# 0.7.4
+# 0.7.x
 body = {
     "message_id": payload.message_id,
     "encoded_message_create_event": payload.encoded_message_create_event,
@@ -484,7 +484,7 @@ upload = api.post("/2/chat/media/upload/initialize", {
 media_hash_key = upload["media_hash_key"]
 payload = chat.encrypt_message(conversation_id, "a photo", attachments=[photo_attachment(media_hash_key)])
 
-# 0.7.4
+# 0.7.x
 upload = api.post("/2/chat/media/upload/initialize", {
     "conversation_id": conversation_id, "total_bytes": encrypted_file_size(len(photo)),
 })["data"]
@@ -539,7 +539,7 @@ signature: use `verified` from `decrypt_event` for that.
 # 0.5.x
 plaintext = chat.decrypt_stream(downloaded, keys[conversation_key_version])
 
-# 0.7.4
+# 0.7.x
 plaintext = chat.decrypt_file(DecryptFileParams(downloaded, file_event_b64, keys, file_hash_key))
 ```
 
@@ -565,7 +565,7 @@ the key raise `DecryptionError`.
 encrypted = chat.encrypt_stream(data, keys[conversation_key_version])
 plaintext = chat.decrypt_stream(downloaded, keys[conversation_key_version])
 
-# 0.7.4
+# 0.7.x
 encrypted = chat.encrypt_file_with_key(EncryptFileWithKeyParams(data, keys[conversation_key_version]))
 plaintext = chat.decrypt_file_with_key(DecryptFileWithKeyParams(downloaded, keys[conversation_key_version]))
 ```
@@ -595,7 +595,7 @@ size = encrypted_stream_size(len(photo))
 encryptor: StreamEncryptor = chat.stream_encryptor(conversation_key)
 decryptor: StreamDecryptor = chat.stream_decryptor(keys[conversation_key_version])
 
-# 0.7.4
+# 0.7.x
 from chat_xdk import FileDecryptor, FileEncryptor
 
 size = encrypted_file_size(len(photo))
@@ -627,7 +627,7 @@ action_signatures = [
     for sig in prepared["action_signatures"]
 ]
 
-# 0.7.4
+# 0.7.x
 action_signatures = prepared["action_signatures"]
 ```
 
@@ -642,7 +642,7 @@ API returns for a user is their identity key:
 # 0.5.x
 public_keys = [{"user_id": user_id, "public_key": identity_public_key, "key_version": public_key_version}]
 
-# 0.7.4
+# 0.7.x
 public_keys: list[PublicKeyInput] = [
     {"user_id": user_id, "identity_public_key": identity_public_key, "public_key_version": public_key_version}
 ]
@@ -670,7 +670,7 @@ conversation_participant_keys = [
     for key in prepared["participant_keys"]
 ]
 
-# 0.7.4
+# 0.7.x
 conversation_participant_keys = prepared["conversation_participant_keys"]
 ```
 
@@ -686,7 +686,7 @@ names:
 # 0.5.x
 encrypted = key_change["participant_keys"][0]["encrypted_key"]
 
-# 0.7.4
+# 0.7.x
 encrypted = key_change["conversation_participant_keys"][0]["encrypted_conversation_key"]
 ```
 
@@ -703,7 +703,7 @@ nested](#action-signatures-come-nested) shows. Read the action's
 deletion = chat.prepare_message_delete(conversation_id, sequence_ids, False)
 message_id = deletion["message_id"]
 
-# 0.7.4
+# 0.7.x
 deletion = chat.prepare_message_delete(MessageDeleteParams(conversation_id, sequence_ids, False))
 message_id = deletion["action_signatures"][0]["message_id"]
 ```
@@ -719,7 +719,7 @@ events give it, and the name the encrypt methods take:
 message_version = message["key_version"]
 key_change_version = key_change["key_version"]
 
-# 0.7.4
+# 0.7.x
 message_version = message["conversation_key_version"]
 key_change_version = key_change["conversation_key_version"]
 ```
@@ -747,7 +747,7 @@ if content["content_type"] == "Edit":
 deleted_sequence_ids = deleted["message_ids"]
 seen_until = receipt["seen_until_id"]
 
-# 0.7.4
+# 0.7.x
 content = message["content"]
 if content["content_type"] == "Edit":
     show_edit(content["target_message_sequence_id"], content["updated_text"])
@@ -787,7 +787,7 @@ except ValueError as err:
     if str(err).startswith("Invalid state:"):
         raise
 
-# 0.7.4
+# 0.7.x
 try:
     chat.set_identity(SetIdentityParams(user_id, signing_key_version))
 except InvalidInputError:
@@ -817,7 +817,7 @@ reply = chat.encrypt_reply(
     conversation_id, "pong", reply_to_sequence_id="7", reply_to_sender_id=4201, reply_to_text="ping",
 )
 
-# 0.7.4
+# 0.7.x
 reply = chat.encrypt_reply(EncryptReplyParams(
     conversation_id, "pong", reply_to_sequence_id="7", reply_to_sender_id="4201", reply_to_text="ping",
     reply_to_message_id="0b4f7c2e-5a1d-4e8b-9c3f-6d2a1b8e7f90",
@@ -867,7 +867,7 @@ Count an entity's offsets in bytes of UTF-8 when the text holds characters
 outside ASCII:
 
 ```python
-# 0.7.4
+# 0.7.x
 text = "café @bob"
 start = len(text[: text.index("@bob")].encode("utf-8"))
 payload = chat.encrypt_message(
@@ -894,7 +894,7 @@ under the highest key in `keys`:
 result = chat.decrypt_events(events, signing_keys)
 version = result["conversation_keys"]["latest_version"]
 
-# 0.7.4
+# 0.7.x
 chat.set_signing_keys(signing_keys)
 result = chat.decrypt_events(DecryptEventsParams(events))
 version = result["conversation_keys"]["latest_version"]
@@ -964,7 +964,7 @@ Sign only your own application data with `sign`; the SDK signs events
 itself. Any other data signs as in 0.5.x:
 
 ```python
-# 0.7.4
+# 0.7.x
 try:
     signature = chat.sign(data)
 except InvalidInputError:
@@ -993,7 +993,7 @@ for item in result["messages"]:
     if change.get("change_type") == "TitleChanged":
         show_title(chat.decrypt(change["new_title"], keys[conversation_key_version]))
 
-# 0.7.4
+# 0.7.x
 result = chat.decrypt_events(DecryptEventsParams(events))
 for item in result["events"]:
     change = item["event"].get("change", {})
@@ -1006,7 +1006,7 @@ A loop over single events catches the error, as it catches an unverified
 event's, and moves on to the next event:
 
 ```python
-# 0.7.4
+# 0.7.x
 for item in page["data"]:
     try:
         event = chat.decrypt_event(DecryptEventParams(item["encoded_event"], keys))
@@ -1024,7 +1024,7 @@ for item in page["data"]:
 # 0.5.x
 private_keys = chat.export_keys()
 
-# 0.7.4
+# 0.7.x
 private_keys = chat.export_keys() if chat.has_identity_key() else None
 ```
 
@@ -1104,7 +1104,7 @@ api.post(f"/2/chat/conversations/{path_id}/messages/delete", {
     }],
 })
 
-# 0.7.4
+# 0.7.x
 deletion = chat.prepare_message_delete(MessageDeleteParams(conversation_id, sequence_ids, True))
 api.post(f"/2/chat/conversations/{path_id}/messages/delete", {
     "sequence_ids": sequence_ids,
@@ -1130,7 +1130,7 @@ unsigned receipt, which recipients drop.
 # 0.5.x
 api.post(f"/2/chat/conversations/{path_id}/read", {})
 
-# 0.7.4
+# 0.7.x
 receipt = chat.prepare_mark_conversation_read(
     MarkConversationReadParams(conversation_id, seen_until_sequence_id)
 )
@@ -1170,7 +1170,7 @@ prepared = chat.prepare_group_create(
 )
 body = {"group_name": title, "group_avatar_url": avatar_url}
 
-# 0.7.4
+# 0.7.x
 prepared = chat.prepare_group_create(
     GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids, title=title)
 )
@@ -1206,7 +1206,7 @@ change = group_change["change"]
 if change["change_type"] == "Created" and change["title"]:
     show_title(chat.decrypt(change["title"], keys[conversation_key_version]))
 
-# 0.7.4
+# 0.7.x
 change = group_change["change"]
 if change["change_type"] == "Created" and change["title"]:
     title = change["title"]
@@ -1235,7 +1235,7 @@ prepared = chat.prepare_group_members_change(
     public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [], current_title=title
 )
 
-# 0.7.4
+# 0.7.x
 prepared = chat.prepare_group_members_change(
     GroupMembersChangeParams(
         public_keys, conversation_id, new_member_ids, member_ids, admin_ids, [],
@@ -1305,7 +1305,7 @@ first](#upgrade-readers-first)).
 # 0.5.x
 api.post(f"/2/chat/conversations/{path_id}/members/remove", {"user_ids": user_ids})
 
-# 0.7.4
+# 0.7.x
 prepared = chat.prepare_group_members_remove(
     GroupMembersRemoveParams(
         remaining_public_keys, conversation_id, user_ids, title=title, description=description
@@ -1331,7 +1331,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```python
-# 0.7.4
+# 0.7.x
 store_conversation_key(conversation_id, prepared["conversation_key_version"], prepared["conversation_key"])
 payload = chat.encrypt_message(EncryptMessageParams(
     conversation_id, "hello",
@@ -1353,7 +1353,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```python
-# 0.7.4
+# 0.7.x
 result = chat.decrypt_events(DecryptEventsParams(events))
 for item in result["events"]:
     event = item["event"]
@@ -1375,7 +1375,7 @@ own id:
 # 0.5.x
 api.post(f"/2/chat/conversations/{path_id}/members/remove", {"user_ids": [my_user_id]})
 
-# 0.7.4
+# 0.7.x
 left = chat.prepare_group_leave(
     GroupLeaveParams(conversation_id, promote_admin_id=promote_admin_id)
 )
@@ -1404,7 +1404,7 @@ api.put(f"/2/chat/conversations/{path_id}", {
     "modified_fields": ["group_name"],
 })
 
-# 0.7.4
+# 0.7.x
 prepared = chat.prepare_group_title_change(GroupTitleChangeParams(conversation_id, title))
 api.put(f"/2/chat/conversations/{path_id}", {
     "group_name": prepared["encrypted_value"],
@@ -1429,7 +1429,7 @@ change = group_change["change"]
 if change["change_type"] == "TitleChanged":
     show_title(chat.decrypt(change["new_title"], keys[conversation_key_version]))
 
-# 0.7.4
+# 0.7.x
 change = group_change["change"]
 if change["change_type"] == "TitleChanged":
     new_title = change["new_title"]
@@ -1450,7 +1450,7 @@ api.put(f"/2/chat/conversations/{path_id}", {
     "modified_fields": ["group_description"],
 })
 
-# 0.7.4
+# 0.7.x
 prepared = chat.prepare_group_description_change(
     GroupDescriptionChangeParams(conversation_id, description)
 )
@@ -1468,7 +1468,7 @@ A received description change is a `DescriptionChanged` change holding
 description. A removal's re-encrypted description never arrives as one:
 
 ```python
-# 0.7.4
+# 0.7.x
 change = group_change["change"]
 if change["change_type"] == "DescriptionChanged":
     new_description = change["new_description"]
@@ -1498,7 +1498,7 @@ api.put(f"/2/chat/conversations/{path_id}", {
     "modified_fields": ["group_avatar_url"],
 })
 
-# 0.7.4
+# 0.7.x
 encrypted = chat.encrypt_file_with_key(EncryptFileWithKeyParams(photo, keys[conversation_key_version]))
 prepared = chat.prepare_group_avatar_change(
     GroupAvatarChangeParams(conversation_id, avatar_url, conversation_key_version)
@@ -1518,7 +1518,7 @@ A received `AvatarChanged` change holds `new_avatar_url` as sent and its
 removes the avatar holds an empty `new_avatar_url`.
 
 ```python
-# 0.7.4
+# 0.7.x
 change = group_change["change"]
 if change["change_type"] == "AvatarChanged" and change["conversation_key_version"]:
     image = chat.decrypt_file_with_key(
@@ -1542,7 +1542,7 @@ verified `SettingsChange` events.
 # 0.5.x
 api.post(f"/2/chat/conversations/{path_id}/admins", {"user_ids": user_ids})
 
-# 0.7.4
+# 0.7.x
 added = chat.prepare_group_admins_add(GroupAdminsAddParams(conversation_id, user_ids))
 api.post(f"/2/chat/conversations/{path_id}/admins", {
     "user_ids": user_ids, "action_signatures": added["action_signatures"],
@@ -1559,7 +1559,7 @@ expiry as `validity_expiry_timestamp_msec`, and only with the same value the
 params signed:
 
 ```python
-# 0.7.4
+# 0.7.x
 invite = chat.prepare_group_invite_enable(
     GroupInviteEnableParams(conversation_id, invite_url, expires_at_msec=expires_at_msec)
 )
@@ -1578,7 +1578,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```python
-# 0.7.4
+# 0.7.x
 request = chat.prepare_group_join_request(GroupJoinRequestParams(conversation_id))
 api.post(f"/2/chat/conversations/{path_id}/join_requests", {
     "token": invite_token, "action_signatures": request["action_signatures"],
@@ -1592,7 +1592,7 @@ api.post(f"/2/chat/conversations/{path_id}/join_requests/reject", {
 A TTL change signs `ttl_msec` only; a negative one is rejected:
 
 ```python
-# 0.7.4
+# 0.7.x
 ttl = chat.prepare_message_ttl_change(MessageTtlChangeParams(conversation_id, ttl_msec))
 api.put(f"/2/chat/conversations/{path_id}/message_ttl", {
     "message_ttl_ms": str(ttl_msec), "action_signatures": ttl["action_signatures"],
@@ -1609,7 +1609,7 @@ names its signatures after the setting, `blocking_action_signatures` or
 `detection_action_signatures`, not `action_signatures`:
 
 ```python
-# 0.7.4
+# 0.7.x
 capture = chat.prepare_screen_capture(
     ScreenCaptureParams(conversation_id, ScreenCaptureChange.BlockingEnabled)
 )
@@ -1650,7 +1650,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `reject_unverified` on, the default, so the signature has to verify:
 
 ```python
-# 0.7.4
+# 0.7.x
 import chat_xdk
 
 alice, bob = Chat(), Chat()

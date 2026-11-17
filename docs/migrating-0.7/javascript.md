@@ -64,8 +64,8 @@ first call), `[runtime]` a change in behavior that nothing reports, and
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.4`. A
-snippet with only a `// 0.7.4` half shows code 0.7.4 adds. CI type-checks
+under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI type-checks
 the 0.7.4 half of every snippet on this page against the package's typings
 with `strict` on
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)).
@@ -102,7 +102,7 @@ objects the package returns through `toSnake`, the converter the
 [examples](../../examples/js/src/x-api.mjs) use:
 
 ```js
-// 0.7.4
+// 0.7.x
 /** CamelCase object keys to the snake_case the X API reads. */
 function toSnake(value) {
   if (Array.isArray(value)) return value.map(toSnake);
@@ -263,7 +263,7 @@ set it in the config:
 // 0.5.x
 const chat = await createChat({ juiceboxConfig, getAuthToken, maxGuessCount: 10 });
 
-// 0.7.4
+// 0.7.x
 const chat = await createChat({
   juiceboxConfig: JSON.stringify({ ...JSON.parse(juiceboxConfig), max_guess_count: 10 }),
   getAuthToken,
@@ -287,7 +287,7 @@ try {
   showGuessesLeft(guessesRemaining(err));
 }
 
-// 0.7.4
+// 0.7.x
 try {
   await chat.unlock(pin);
 } catch (err) {
@@ -318,7 +318,7 @@ const response = await api.post(`/2/users/${userId}/public_keys`, {
 });
 chat.setIdentity(userId, response.data.public_key_version);
 
-// 0.7.4
+// 0.7.x
 const registration = chat.generateKeypairs();
 const response = await api.post(`/2/users/${userId}/public_keys`, {
   public_key: toSnake(registration.publicKey),
@@ -341,7 +341,7 @@ signingKeyVersion }`. It throws when either value is invalid (see
 // 0.5.x
 chat.setIdentity(userId, signingKeyVersion);
 
-// 0.7.4
+// 0.7.x
 chat.setIdentity({ userId, signingKeyVersion });
 ```
 
@@ -362,7 +362,7 @@ creates has neither call, so no script in a page can ask it for the keys;
 never bundle the server package into a browser app:
 
 ```js
-// 0.7.4
+// 0.7.x
 import { createChat } from "@xdevplatform/chat-xdk-server";
 
 const chat = await createChat();
@@ -383,7 +383,7 @@ decrypted events, of every event type, in `events`:
 const result = chat.decryptEvents(events, signingKeys);
 const decrypted = result.messages;
 
-// 0.7.4
+// 0.7.x
 const result = chat.decryptEvents({ events, signingKeys });
 const decrypted = result.events;
 ```
@@ -408,7 +408,7 @@ error naming its version, where 0.5.x skipped it: pass the `keys` map
 // 0.5.x
 const event = chat.decryptEvent(eventB64, keys, signingKeys);
 
-// 0.7.4
+// 0.7.x
 const event = chat.decryptEvent({ eventB64, conversationKeys: keys, signingKeys });
 ```
 
@@ -429,7 +429,7 @@ const body = {
   encoded_message_event_signature: payload.encodedEventSignature,
 };
 
-// 0.7.4
+// 0.7.x
 const body = {
   message_id: payload.messageId,
   encoded_message_create_event: payload.encodedMessageCreateEvent,
@@ -474,7 +474,7 @@ const payload = chat.encryptMessage({
   conversationId, text: "a photo", attachments: [photoAttachment(upload.media_hash_key)],
 });
 
-// 0.7.4
+// 0.7.x
 const { data: upload } = await api.post("/2/chat/media/upload/initialize", {
   conversation_id: conversationId, total_bytes: encryptedFileSize(photo.length),
 });
@@ -528,7 +528,7 @@ use `verified` from `decryptEvent` for that.
 // 0.5.x
 const plaintext = chat.decryptStream(downloaded, keys[conversationKeyVersion]);
 
-// 0.7.4
+// 0.7.x
 const plaintext = chat.decryptFile({
   encrypted: downloaded, eventB64: fileEventB64, conversationKeys: keys, mediaHashKey: fileHashKey,
 });
@@ -556,7 +556,7 @@ encrypted under the key one of kind `decryption`.
 const encrypted = chat.encryptStream(data, conversationKey);
 const plaintext = chat.decryptStream(downloaded, conversationKey);
 
-// 0.7.4
+// 0.7.x
 const encrypted = chat.encryptFileWithKey({ file: data, key: conversationKey });
 const plaintext = chat.decryptFileWithKey({ encrypted: downloaded, key: conversationKey });
 ```
@@ -583,7 +583,7 @@ const size = encryptedStreamSize(photo.length);
 const encryptor = chat.streamEncryptor(conversationKey);
 const decryptor = chat.streamDecryptor(keys[conversationKeyVersion]);
 
-// 0.7.4
+// 0.7.x
 const size = encryptedFileSize(photo.length);
 const encryptor = chat.fileEncryptor({ eventB64: payload.eventB64, mediaHashKey });
 const decryptor = chat.fileDecryptor({
@@ -615,7 +615,7 @@ const actionSignatures = prepared.actionSignatures.map((sig) => ({
   },
 }));
 
-// 0.7.4
+// 0.7.x
 const actionSignatures = toSnake(prepared.actionSignatures);
 ```
 
@@ -630,7 +630,7 @@ returns for a user is their identity key:
 // 0.5.x
 const publicKeys = [{ userId, publicKey: identityPublicKey, keyVersion: publicKeyVersion }];
 
-// 0.7.4
+// 0.7.x
 const publicKeys = [{ userId, identityPublicKey, publicKeyVersion }];
 ```
 
@@ -654,7 +654,7 @@ const conversationParticipantKeys = prepared.participantKeys.map((key) => ({
   public_key_version: key.publicKeyVersion,
 }));
 
-// 0.7.4
+// 0.7.x
 const conversationParticipantKeys = toSnake(prepared.conversationParticipantKeys);
 ```
 
@@ -671,7 +671,7 @@ those names:
 const [mine] = keyChange.participantKeys ?? [];
 const encrypted = mine.encryptedKey;
 
-// 0.7.4
+// 0.7.x
 const [mine] = keyChange.conversationParticipantKeys ?? [];
 const encrypted = mine?.encryptedConversationKey;
 ```
@@ -685,7 +685,7 @@ import type { EncryptedKeyForRecipient, ParticipantKey } from "@xdevplatform/cha
 const sent: EncryptedKeyForRecipient[] = prepared.participantKeys;
 const received: ParticipantKey[] = keyChange.participantKeys ?? [];
 
-// 0.7.4
+// 0.7.x
 import type { ConversationParticipantKey } from "@xdevplatform/chat-xdk";
 const sent: ConversationParticipantKey[] = prepared.conversationParticipantKeys;
 const received: ConversationParticipantKey[] = keyChange.conversationParticipantKeys ?? [];
@@ -704,7 +704,7 @@ messages](#deleting-messages) for the request):
 const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
 const messageId = deletion.messageId;
 
-// 0.7.4
+// 0.7.x
 const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: false });
 const messageId = deletion.actionSignatures[0].messageId;
 ```
@@ -720,7 +720,7 @@ camelCased, and the name the encrypt methods take:
 const messageVersion = message.keyVersion;
 const keyChangeVersion = keyChange.keyVersion;
 
-// 0.7.4
+// 0.7.x
 const messageVersion = message.conversationKeyVersion;
 const keyChangeVersion = keyChange.conversationKeyVersion;
 ```
@@ -748,7 +748,7 @@ if (message.content.contentType === 'edit') {
 const deletedSequenceIds = deleted.messageIds;
 const seenUntil = receipt.seenUntilId;
 
-// 0.7.4
+// 0.7.x
 const content = message.content;
 if (content?.contentType === 'edit' && content.targetMessageSequenceId && content.updatedText) {
   showEdit(content.targetMessageSequenceId, content.updatedText);
@@ -784,7 +784,7 @@ than by message:
 // 0.5.x
 const invalidInput = !err.message.startsWith("Invalid state:");
 
-// 0.7.4
+// 0.7.x
 const invalidInput = err instanceof ChatXdkError && err.kind === "invalidInput";
 ```
 
@@ -801,7 +801,7 @@ let session: Chat;
 let crypto: ChatCrypto;
 let encryptor: StreamEncryptor;
 
-// 0.7.4
+// 0.7.x
 import type { ChatWithJuicebox, FileEncryptor } from "@xdevplatform/chat-xdk";
 let session: ChatWithJuicebox;
 let crypto: ChatWithJuicebox;
@@ -830,7 +830,7 @@ snippets](#about-the-snippets)). Build each body field by field: a prepared
 change passed whole through `toSnake` would carry its `conversationKey`.
 
 ```js
-// 0.7.4
+// 0.7.x
 await api.post(`/2/chat/conversations/${pathId}/keys`, {
   conversation_key_version: prepared.conversationKeyVersion,
   conversation_participant_keys: toSnake(prepared.conversationParticipantKeys),
@@ -856,7 +856,7 @@ const reply = chat.encryptReply({
   conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: 4201, replyToText: "ping",
 });
 
-// 0.7.4
+// 0.7.x
 const reply = chat.encryptReply({
   conversationId, text: "pong", replyToSequenceId: "7", replyToSenderId: "4201", replyToText: "ping",
   replyToMessageId: "0b4f7c2e-5a1d-4e8b-9c3f-6d2a1b8e7f90",
@@ -916,7 +916,7 @@ Count an entity's offsets in bytes of UTF-8 when the text holds characters
 outside ASCII:
 
 ```js
-// 0.7.4
+// 0.7.x
 const utf8Length = (text) => new TextEncoder().encode(text).length;
 const text = "café @bob";
 const start = utf8Length(text.slice(0, text.indexOf("@bob")));
@@ -943,7 +943,7 @@ again, rather than encrypting under the highest key in `keys`:
 const result = chat.decryptEvents(events, signingKeys);
 const version = result.conversationKeys.latestVersion;
 
-// 0.7.4
+// 0.7.x
 chat.setSigningKeys(signingKeys);
 const result = chat.decryptEvents({ events });
 const version = result.conversationKeys.latestVersion;
@@ -1009,7 +1009,7 @@ the key yourself, and serialize the rest:
 // 0.5.x
 const saved = JSON.stringify(prepared);
 
-// 0.7.4
+// 0.7.x
 storeConversationKey(prepared.conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 const saved = JSON.stringify(prepared);
 ```
@@ -1027,7 +1027,7 @@ identity key. Sign only your own application data with `sign`; the SDK
 signs events itself. Any other data signs as in 0.5.x:
 
 ```js
-// 0.7.4
+// 0.7.x
 function signOwnData(data) {
   try {
     return chat.sign(data);
@@ -1062,7 +1062,7 @@ for (const { event } of result.messages) {
   }
 }
 
-// 0.7.4
+// 0.7.x
 const result = chat.decryptEvents({ events });
 for (const { event } of result.events) {
   if (event.change?.changeType === "titleChanged") {
@@ -1076,7 +1076,7 @@ A loop over single events catches the error, as it catches an unverified
 event's, and moves on to the next event:
 
 ```js
-// 0.7.4
+// 0.7.x
 for (const item of page.data) {
   let event;
   try {
@@ -1095,7 +1095,7 @@ for (const item of page.data) {
 `ChatXdkError` of kind `invalidState` when no identity key is loaded:
 
 ```js
-// 0.7.4
+// 0.7.x
 import { createChat } from "@xdevplatform/chat-xdk-server";
 
 const chat = await createChat({ juiceboxConfig, getAuthToken });
@@ -1179,7 +1179,7 @@ await api.post(`/2/chat/conversations/${pathId}/messages/delete`, {
   }],
 });
 
-// 0.7.4
+// 0.7.x
 const deletion = chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll: true });
 await api.post(`/2/chat/conversations/${pathId}/messages/delete`, {
   sequence_ids: sequenceIds,
@@ -1205,7 +1205,7 @@ drop.
 // 0.5.x
 await api.post(`/2/chat/conversations/${pathId}/read`, {});
 
-// 0.7.4
+// 0.7.x
 const receipt = chat.prepareMarkConversationRead({ conversationId, seenUntilSequenceId });
 await api.post(`/2/chat/conversations/${pathId}/read`, {
   action_signatures: toSnake(receipt.actionSignatures),
@@ -1242,7 +1242,7 @@ image encrypted under the key the create returns.
 const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title, avatarUrl });
 const body = { group_name: title, group_avatar_url: avatarUrl };
 
-// 0.7.4
+// 0.7.x
 const prepared = chat.prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title });
 await api.post("/2/chat/conversations/group", {
   conversation_id: conversationId,
@@ -1276,7 +1276,7 @@ if (groupChange.change.changeType === 'created' && groupChange.change.title) {
   showTitle(chat.decrypt(groupChange.change.title, keys[conversationKeyVersion]));
 }
 
-// 0.7.4
+// 0.7.x
 const change = groupChange.change;
 if (change.changeType === 'created' && change.title) {
   showTitle(change.title.kind === 'text' ? change.title.text : change.title.raw);
@@ -1307,7 +1307,7 @@ const prepared = chat.prepareGroupMembersChange({
   currentTitle: title,
 });
 
-// 0.7.4
+// 0.7.x
 const prepared = chat.prepareGroupMembersChange({
   publicKeys, conversationId, newMemberIds,
   currentMemberIds: memberIds, currentAdminIds: adminIds, currentPendingMemberIds: [],
@@ -1374,7 +1374,7 @@ first](#upgrade-readers-first)).
 // 0.5.x
 await api.post(`/2/chat/conversations/${pathId}/members/remove`, { user_ids: userIds });
 
-// 0.7.4
+// 0.7.x
 const prepared = chat.prepareGroupMembersRemove({
   publicKeys: remainingPublicKeys,
   conversationId,
@@ -1402,7 +1402,7 @@ the new key and version, and pass them to every encrypt and prepare call
 until the cache holds them:
 
 ```js
-// 0.7.4
+// 0.7.x
 storeConversationKey(conversationId, prepared.conversationKeyVersion, prepared.conversationKey);
 const payload = chat.encryptMessage({
   conversationId,
@@ -1425,7 +1425,7 @@ removal's title and description
 re-encryptions](#decrypt-drops-a-removals-title-and-description-re-encryptions)):
 
 ```js
-// 0.7.4
+// 0.7.x
 const result = chat.decryptEvents({ events });
 for (const { event } of result.events) {
   if (event.type === "groupChange" && event.change.changeType === "membersRemoved") {
@@ -1448,7 +1448,7 @@ id:
 // 0.5.x
 await api.post(`/2/chat/conversations/${pathId}/members/remove`, { user_ids: [myUserId] });
 
-// 0.7.4
+// 0.7.x
 const left = chat.prepareGroupLeave({ conversationId, promoteAdminId });
 await api.post(`/2/chat/conversations/${pathId}/members/remove`, {
   user_ids: [myUserId],
@@ -1474,7 +1474,7 @@ await api.put(`/2/chat/conversations/${pathId}`, {
   modified_fields: ["group_name"],
 });
 
-// 0.7.4
+// 0.7.x
 const prepared = chat.prepareGroupTitleChange({ conversationId, newTitle: title });
 await api.put(`/2/chat/conversations/${pathId}`, {
   group_name: prepared.encryptedValue,
@@ -1499,7 +1499,7 @@ if (groupChange.change.changeType === 'titleChanged') {
   showTitle(chat.decrypt(groupChange.change.newTitle, keys[conversationKeyVersion]));
 }
 
-// 0.7.4
+// 0.7.x
 const { changeType, newTitle } = groupChange.change;
 if (changeType === 'titleChanged') {
   showTitle(newTitle.kind === 'text' ? newTitle.text : newTitle.raw);
@@ -1520,7 +1520,7 @@ await api.put(`/2/chat/conversations/${pathId}`, {
   modified_fields: ["group_description"],
 });
 
-// 0.7.4
+// 0.7.x
 const prepared = chat.prepareGroupDescriptionChange({ conversationId, newDescription: description });
 await api.put(`/2/chat/conversations/${pathId}`, {
   group_description: prepared.encryptedValue,
@@ -1536,7 +1536,7 @@ change that removes the description decrypts to an empty description. A
 removal's re-encrypted description never arrives as one:
 
 ```js
-// 0.7.4
+// 0.7.x
 const { changeType, newDescription } = groupChange.change;
 if (changeType === 'descriptionChanged') {
   showDescription(newDescription.kind === 'text' ? newDescription.text : newDescription.raw);
@@ -1564,7 +1564,7 @@ await api.put(`/2/chat/conversations/${pathId}`, {
   modified_fields: ["group_avatar_url"],
 });
 
-// 0.7.4
+// 0.7.x
 const encrypted = chat.encryptFileWithKey({ file: photo, key: keys[conversationKeyVersion] });
 const prepared = chat.prepareGroupAvatarChange({
   conversationId,
@@ -1586,7 +1586,7 @@ received `avatarChanged` change holds `newAvatarUrl` as sent and its
 the avatar holds an empty `newAvatarUrl`.
 
 ```js
-// 0.7.4
+// 0.7.x
 const change = groupChange.change;
 if (change.changeType === 'avatarChanged' && change.conversationKeyVersion) {
   const image = chat.decryptFileWithKey({ encrypted: downloaded, key: keys[change.conversationKeyVersion] });
@@ -1609,7 +1609,7 @@ verified `settingsChange` events.
 // 0.5.x
 await api.post(`/2/chat/conversations/${pathId}/admins`, { user_ids: userIds });
 
-// 0.7.4
+// 0.7.x
 const added = chat.prepareGroupAdminsAdd({ conversationId, userIds });
 await api.post(`/2/chat/conversations/${pathId}/admins`, {
   user_ids: userIds, action_signatures: toSnake(added.actionSignatures),
@@ -1626,7 +1626,7 @@ as `validity_expiry_timestamp_msec`, and only with the same value the params
 signed:
 
 ```js
-// 0.7.4
+// 0.7.x
 const invite = chat.prepareGroupInviteEnable({ conversationId, inviteUrl, expiresAtMsec });
 await api.post(`/2/chat/conversations/${pathId}/invite`, {
   invite_url: inviteUrl,
@@ -1643,7 +1643,7 @@ A join request signs the requesting user, who defaults to the sender; the
 invite token travels in the request but not in the signature:
 
 ```js
-// 0.7.4
+// 0.7.x
 const request = chat.prepareGroupJoinRequest({ conversationId });
 await api.post(`/2/chat/conversations/${pathId}/join_requests`, {
   token: inviteToken, action_signatures: toSnake(request.actionSignatures),
@@ -1657,7 +1657,7 @@ await api.post(`/2/chat/conversations/${pathId}/join_requests/reject`, {
 A TTL change signs `ttlMsec` only; a negative one is rejected:
 
 ```js
-// 0.7.4
+// 0.7.x
 const ttl = chat.prepareMessageTtlChange({ conversationId, ttlMsec });
 await api.put(`/2/chat/conversations/${pathId}/message_ttl`, {
   message_ttl_ms: String(ttlMsec), action_signatures: toSnake(ttl.actionSignatures),
@@ -1675,7 +1675,7 @@ request names its signatures after the setting,
 `action_signatures`:
 
 ```js
-// 0.7.4
+// 0.7.x
 const capture = chat.prepareScreenCapture({ conversationId, change: "blockingEnabled" });
 await api.put(`/2/chat/conversations/${pathId}/screen_capture`, {
   blocking: true, blocking_action_signatures: toSnake(capture.actionSignatures),
@@ -1714,7 +1714,7 @@ registers both, starts a conversation, sends a message and decrypts it with
 `setRejectUnverified` on, the default, so the signature has to verify:
 
 ```js
-// 0.7.4
+// 0.7.x
 const alice = await createChat();
 const bob = await createChat();
 const aliceKeys = alice.generateKeypairs().publicKey;
