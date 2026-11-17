@@ -739,6 +739,28 @@ async function main() {
       b64ToBytes(v.media_first_plaintext_b64),
     );
 
+    // A reply that names the quoted message without embedding it opens the
+    // quoted media with that message's conversation key, and its preview
+    // stays unvalidated.
+    const namedReply = new Chat().decryptEvent({
+      eventB64: v.event_reply_named_b64,
+      conversationKeys: fixtureKeys,
+      signingKeys: signingKeysFor(v.event_sender_id),
+    });
+    assert.equal(namedReply.content.text, v.event_reply_named_text);
+    assert.equal(namedReply.replyPreviewValidation ?? null, null);
+    for (const name of ["first", "second"]) {
+      assert.deepEqual(
+        openMedia(
+          v.event_reply_named_b64,
+          { ...fixtureKeys, ...mkKeys },
+          v[`media_${name}_hash_key`],
+          v[`media_${name}_encrypted_b64`],
+        ),
+        b64ToBytes(v[`media_${name}_plaintext_b64`]),
+      );
+    }
+
     // Each error says what to pass.
     const first = b64ToBytes(v.media_first_encrypted_b64);
     const second = b64ToBytes(v.media_second_encrypted_b64);
@@ -752,6 +774,7 @@ async function main() {
       [first.subarray(0, first.length >> 1), v.event_message_key_b64, mkKeys, firstHash, "truncated"],
       [first, v.event_unencrypted_b64, mkKeys, v.media_unencrypted_hash_key, "the message is not encrypted"],
       [first, v.event_message_key_b64, { [mkVersion]: new Uint8Array(5) }, firstHash, "is not 32 bytes"],
+      [first, v.event_reply_named_b64, fixtureKeys, firstHash, "under any key the reply gives for it"],
     ];
     for (const [encrypted, eventB64, keys, mediaHashKey, expected] of errorCases) {
       assert.throws(

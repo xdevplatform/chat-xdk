@@ -80,6 +80,8 @@ namespace ChatXdk.Tests
             [JsonPropertyName("event_key_change_message_key_b64")] public string EventKeyChangeMessageKeyB64 { get; init; } = "";
             [JsonPropertyName("event_reply_message_key_b64")] public string EventReplyMessageKeyB64 { get; init; } = "";
             [JsonPropertyName("event_reply_message_key_text")] public string EventReplyMessageKeyText { get; init; } = "";
+            [JsonPropertyName("event_reply_named_b64")] public string EventReplyNamedB64 { get; init; } = "";
+            [JsonPropertyName("event_reply_named_text")] public string EventReplyNamedText { get; init; } = "";
             [JsonPropertyName("media_first_hash_key")] public string MediaFirstHashKey { get; init; } = "";
             [JsonPropertyName("media_first_encrypted_b64")] public string MediaFirstEncryptedB64 { get; init; } = "";
             [JsonPropertyName("media_first_plaintext_b64")] public string MediaFirstPlaintextB64 { get; init; } = "";
@@ -2412,6 +2414,8 @@ namespace ChatXdk.Tests
                 (first, v.EventMessageKeyB64,
                     new Dictionary<string, byte[]> { [v.MessageKeyConversationKeyVersion] = new byte[3] },
                     v.MediaFirstHashKey, "is not 32 bytes"),
+                (first, v.EventReplyNamedB64, ConversationKeys(v), v.MediaFirstHashKey,
+                    "under any key the reply gives for it"),
             };
             foreach (var c in cases)
             {
@@ -2493,6 +2497,33 @@ namespace ChatXdk.Tests
                 Convert.FromBase64String(v.MediaFirstPlaintextB64),
                 OpenMedia(v.EventReplyMessageKeyB64, ConversationKeys(v), v.MediaFirstHashKey,
                     v.MediaFirstEncryptedB64));
+        }
+
+        [Fact]
+        public void Vectors_ReplyNamingAMessage_OpensTheQuotedMediaAndStaysUnvalidated()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            var keys = ConversationKeys(v);
+            var e = chat.DecryptEvent(
+                new DecryptEventParams(v.EventReplyNamedB64, keys)
+                {
+                    SigningKeys = SigningKeysFor(v, v.EventSenderId),
+                });
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            Assert.Equal(v.EventReplyNamedText,
+                e.GetProperty("content").GetProperty("text").GetString());
+            Assert.False(e.TryGetProperty("reply_preview_validation", out _));
+
+            // The quoted message is under another key version than the reply's.
+            foreach (var (version, key) in MessageKeyConversationKeys(v))
+                keys[version] = key;
+            Assert.Equal(
+                Convert.FromBase64String(v.MediaFirstPlaintextB64),
+                OpenMedia(v.EventReplyNamedB64, keys, v.MediaFirstHashKey, v.MediaFirstEncryptedB64));
+            Assert.Equal(
+                Convert.FromBase64String(v.MediaSecondPlaintextB64),
+                OpenMedia(v.EventReplyNamedB64, keys, v.MediaSecondHashKey, v.MediaSecondEncryptedB64));
         }
 
         [Fact]

@@ -1671,6 +1671,27 @@ the conversation key. Everything comes from these values, so any instance can
 decrypt any file at any time, before or after the message itself. Signatures
 are not checked here; use the `verified` flag from `decrypt_event`.
 
+**Media a reply quotes.** A reply's preview lists the media of the message it
+quotes, and the reply's event opens those files too. A reply that embeds the
+quoted message gives the file's key through it. A reply can also only name
+the quoted message, by its sender and message id, as replies from X clients
+can. The preview then does not say which key that message is under, so the
+SDK tries the file under each key the preview and the key map give: for each
+key version in the map, the reply's own first, the key of an attachment of a
+message with its own key, derived from the preview's sender, message id and
+attachment (its id, or without one its position in the preview), then the
+conversation key itself, which older messages encrypt media under. The file
+is authenticated, so only its own key decrypts it. Pass the conversation's
+whole key map: the quoted message can be under an older key version than the
+reply.
+
+A file opened through a preview that embeds no message is not checked
+against the quoted message. `reply_preview_validation` is absent for such a
+preview, and every member of the conversation holds its keys, so a member
+can upload a file that opens this way and show it as another member's.
+Treat it as what the reply claims to quote. To check that a file belongs to
+the quoted message, decrypt it with that message's own event.
+
 ```js
 const keys = result.conversationKeys.keys;
 const message = chat.decryptEvent({ eventB64, conversationKeys: keys });
@@ -1725,7 +1746,7 @@ The file calls raise an error that says what to pass instead when:
 - (encrypting) `media_hash_key` names media the reply quotes: that file belongs to the quoted message, so there is nothing to encrypt;
 - (decrypting) the bytes are not the file's complete encrypted form: another file, corrupted, or truncated;
 - (decrypting) the message is not encrypted, so neither is its media: use the downloaded bytes as they are;
-- (decrypting) a reply shows quoted media but does not embed the quoted message: pass the quoted message's own event.
+- (decrypting) a reply shows quoted media without embedding the quoted message, and the bytes are under none of the keys its preview and the key map give: pass the key map with the quoted message's key version, or the quoted message's own event.
 
 ### Group Metadata
 

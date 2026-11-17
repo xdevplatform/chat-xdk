@@ -435,11 +435,37 @@ key from those alone:
    its own version from the map — or, when the map lacks that version and the
    quoted message uses a message key, with the key the reply carries for it —
    and find the attachment there.
-5. Decrypt the bytes with that key alone.
+5. Otherwise, when the message is a reply whose preview shows the media
+   without embedding the quoted message, the preview names that message by
+   its sender (`sender_id`) and message id (`replying_to_message_id`), and
+   the attachment by its `attachment_id` or, without one, by its position in
+   the preview's attachment list. It does not say whether the quoted message
+   uses a message key, or which conversation key version it is under. So the
+   file can be under two keys for each version in the map: the attachment key
+   a message with a message key derives from that conversation key, the
+   sender, the message id and the attachment id, and the conversation key
+   itself, which a message without one encrypts its media under. A preview
+   that names no sender or no message id gives only the conversation keys.
+6. Decrypt the bytes with that key alone. In step 5, try the keys in order,
+   those of the reply's own key version first, then of the other versions
+   from the newest, the attachment key before the conversation key: the
+   file's first frame authenticates under its own key only, and that key
+   decrypts the rest. When none authenticates it, the file does not open.
 
 Nothing is kept between calls, so the result does not depend on what the
 instance decrypted before. Signatures are not checked here; the `verified` flag
 from `decrypt_event` covers the message.
+
+A file opened in step 5 is not tied to the quoted message. With the embedded
+message of step 4, the attachment is found in a message whose signature
+`decrypt_event` checks when it validates the preview. In step 5 the sender,
+message id and attachment come from the reply alone, and every member of the
+conversation holds its keys, so a member can upload a file under the key a
+preview names and show it as another member's. `decrypt_event` reports no
+`reply_preview_validation` for such a preview (see
+[Reply preview validation](#reply-preview-validation)): treat its media as
+what the reply claims to quote. A caller that holds the quoted message's own
+event checks the file by decrypting it with that event.
 
 ---
 
@@ -944,7 +970,9 @@ The outcome is surfaced on the decrypted message as
 for an invalid preview — the message itself is authentic, only the quoted
 material inside it is untrusted. A preview without an embedded raw event
 passes through with no validation outcome, so histories written before raw
-events were embedded remain readable.
+events were embedded remain readable. The media such a preview shows still
+opens, under a key found from the preview's own fields, and is as
+unvalidated as the preview (see [Media Keys](#media-keys)).
 
 ---
 

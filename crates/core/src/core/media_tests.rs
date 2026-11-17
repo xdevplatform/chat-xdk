@@ -1,9 +1,9 @@
 //! Decrypting media with the message event that carries it.
 
 use super::test_support::{
-    envelope, frame, hex_key, holder, key, keys, known_answer_media_message, media, message_event,
-    message_key, Party, KAT_CONVERSATION_KEY, KAT_FIRST_ATTACHMENT_KEY, KAT_KEY_SENDER,
-    KAT_SECOND_ATTACHMENT_KEY,
+    decrypt_message, envelope, frame, hex_key, holder, key, keys, known_answer_media_message,
+    media, message_event, message_key, Party, KAT_CONVERSATION_KEY, KAT_FIRST_ATTACHMENT_KEY,
+    KAT_KEY_SENDER, KAT_SECOND_ATTACHMENT_KEY,
 };
 use super::*;
 use crate::crypto::encryption::encrypt_file;
@@ -398,6 +398,34 @@ impl Quote {
         )
     }
 
+    /// A preview that shows the original's photo and names the original by
+    /// its sender and message id, without embedding it or carrying its key.
+    fn bare_preview(&self) -> ThriftPreview {
+        ThriftPreview {
+            raw_event_message_create: None,
+            raw_event_message_key: None,
+            ..self.preview()
+        }
+    }
+
+    /// The replier's reply under the original's own key version, "7".
+    fn reply_under_the_originals_key(&self, preview: ThriftPreview) -> ThriftEvent {
+        message_event(
+            &self.replier,
+            "reply-1",
+            "300",
+            "7",
+            None,
+            7,
+            &self.original_ckey,
+            &holder(MessageContents {
+                message_text: Some("a reply".to_string()),
+                replying_to_preview: Some(Box::new(preview)),
+                ..Default::default()
+            }),
+        )
+    }
+
     fn photo_key(&self) -> XChatConversationKey {
         match &self.original_message_key {
             Some(message_key) => attachment_key(message_key, "orig-1"),
@@ -497,20 +525,6 @@ fn a_quoted_message_whose_key_version_is_missing_names_that_version() {
 }
 
 #[test]
-fn a_reply_that_does_not_embed_the_quoted_message_says_to_pass_that_message() {
-    let quote = Quote::new(true);
-    let mut preview = quote.preview();
-    preview.raw_event_message_create = None;
-    let reply = quote.reply(preview, Vec::new());
-    let err = error_text(open(&reply, &quote.reply_keys(), "photo", b"bytes"));
-    assert!(
-        err.contains("does not embed the message it quotes"),
-        "{err}"
-    );
-    assert!(err.contains("pass the quoted message's own event"), "{err}");
-}
-
-#[test]
 fn a_quoted_message_from_another_conversation_is_refused() {
     let quote = Quote::new(true);
     let mut preview = quote.preview();
@@ -534,6 +548,234 @@ fn a_wrong_carried_key_says_which_version_to_pass() {
         err.contains("pass the conversation key for version '7'"),
         "{err}"
     );
+}
+
+// Media quoted from a message the reply names but does not embed.
+
+/// A file of three frames, and one of a single frame: the decryptor picks
+/// the key on the first frame, which is the last frame of a short file.
+fn quoted_files() -> [Vec<u8>; 2] {
+    [
+        (0..3000u32).map(|i| (i % 251) as u8).collect(),
+        b"quoted photo".to_vec(),
+    ]
+}
+
+fn assert_opens(
+    reply: &ThriftEvent,
+    map: &HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+    key: &XChatConversationKey,
+) {
+    for plaintext in quoted_files() {
+        let encrypted = encrypt_media(key, &plaintext);
+        assert_eq!(
+            open(reply, map, media_hash_key, &encrypted).unwrap(),
+            plaintext
+        );
+        for step in [1, 24, 1041, 4096] {
+            assert_eq!(
+                open_incrementally(reply, map, media_hash_key, &encrypted, step).unwrap(),
+                plaintext,
+                "step={step}"
+            );
+        }
+    }
+}
+
+fn assert_no_key_opens(
+    reply: &ThriftEvent,
+    map: &HashMap<String, XChatConversationKey>,
+    media_hash_key: &str,
+    key: &XChatConversationKey,
+) {
+    for plaintext in quoted_files() {
+        let encrypted = encrypt_media(key, &plaintext);
+        for err in [
+            error_text(open(reply, map, media_hash_key, &encrypted)),
+            error_text(open_incrementally(
+                reply,
+                map,
+                media_hash_key,
+                &encrypted,
+                100,
+            )),
+        ] {
+            assert!(
+                err.contains(&format!(
+                    "not the encrypted file of media_hash_key '{media_hash_key}' under any key \
+                     the reply gives for it"
+                )),
+                "{err}"
+            );
+            assert!(err.contains("does not embed the quoted message"), "{err}");
+            assert!(err.contains("pass the quoted message's own event"), "{err}");
+        }
+    }
+}
+
+#[test]
+fn quoted_media_with_a_message_key_opens_without_the_embedded_message() {
+    let quote = Quote::new(true);
+    let reply = quote.reply(quote.bare_preview(), Vec::new());
+    assert_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+}
+
+#[test]
+fn quoted_old_format_media_opens_without_the_embedded_message() {
+    let quote = Quote::new(false);
+    let reply = quote.reply(quote.bare_preview(), Vec::new());
+    assert_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+}
+
+#[test]
+fn a_reply_under_the_quoted_messages_key_version_needs_only_that_key() {
+    for uses_message_key in [true, false] {
+        let quote = Quote::new(uses_message_key);
+        let reply = quote.reply_under_the_originals_key(quote.bare_preview());
+        let map = keys("7", &quote.original_ckey);
+        assert_opens(&reply, &map, "photo", &quote.photo_key());
+    }
+}
+
+#[test]
+fn the_quoted_messages_key_version_is_found_among_many() {
+    for uses_message_key in [true, false] {
+        let quote = Quote::new(uses_message_key);
+        let reply = quote.reply(quote.bare_preview(), Vec::new());
+        let mut map = quote.both_keys();
+        for (version, byte) in [("5", 5), ("6", 6), ("9", 9), ("not-a-number", 10)] {
+            map.insert(version.to_string(), key(byte));
+        }
+        assert_opens(&reply, &map, "photo", &quote.photo_key());
+    }
+}
+
+#[test]
+fn a_preview_attachment_is_keyed_by_its_id_or_its_place_in_the_preview() {
+    let quote = Quote::new(true);
+    let message_key = quote.original_message_key.clone().unwrap();
+    let mut preview = quote.bare_preview();
+    preview.attachments = Some(vec![
+        media("first", None),
+        media("second", None),
+        media("third", Some("att-3")),
+        link_card("banner", "favicon"),
+    ]);
+    let reply = quote.reply(preview, Vec::new());
+    for (media_hash_key, attachment_id) in [
+        ("first", "orig-1"),
+        ("second", "orig-1#1"),
+        ("third", "att-3"),
+        ("banner", "orig-1#3"),
+        ("favicon", "orig-1#3"),
+    ] {
+        assert_opens(
+            &reply,
+            &quote.both_keys(),
+            media_hash_key,
+            &attachment_key(&message_key, attachment_id),
+        );
+    }
+}
+
+#[test]
+fn a_replys_own_media_and_media_it_quotes_without_embedding_each_use_their_own_key() {
+    let quote = Quote::new(true);
+    let reply = quote.reply(quote.bare_preview(), vec![media("reply-photo", None)]);
+    let map = quote.both_keys();
+    assert_opens(&reply, &map, "reply-photo", &quote.reply_ckey);
+    assert_opens(&reply, &map, "photo", &quote.photo_key());
+    assert_no_key_opens(&reply, &map, "photo", &key(9));
+
+    // A file under the quoted media's key is not the reply's own file.
+    let quoted = encrypt_media(&quote.photo_key(), b"quoted photo");
+    let err = error_text(open(&reply, &map, "reply-photo", &quoted));
+    assert!(
+        err.contains("not the complete encrypted file of media_hash_key 'reply-photo'"),
+        "{err}"
+    );
+}
+
+#[test]
+fn quoted_media_under_a_key_version_the_map_lacks_does_not_open() {
+    for uses_message_key in [true, false] {
+        let quote = Quote::new(uses_message_key);
+        let reply = quote.reply(quote.bare_preview(), Vec::new());
+        assert_no_key_opens(&reply, &quote.reply_keys(), "photo", &quote.photo_key());
+    }
+}
+
+#[test]
+fn quoted_media_does_not_open_when_the_preview_names_another_sender_message_or_attachment() {
+    let quote = Quote::new(true);
+    let another_sender = ThriftPreview {
+        sender_id: Some(REPLIER.parse().unwrap()),
+        ..quote.bare_preview()
+    };
+    let another_message = ThriftPreview {
+        replying_to_message_id: Some("orig-2".to_string()),
+        ..quote.bare_preview()
+    };
+    let another_attachment = ThriftPreview {
+        attachments: Some(vec![media("photo", Some("att-2"))]),
+        ..quote.bare_preview()
+    };
+    for preview in [another_sender, another_message, another_attachment] {
+        let reply = quote.reply(preview, Vec::new());
+        assert_no_key_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+    }
+}
+
+#[test]
+fn a_preview_that_names_no_message_opens_only_old_format_media() {
+    for uses_message_key in [true, false] {
+        let quote = Quote::new(uses_message_key);
+        let no_sender = ThriftPreview {
+            sender_id: None,
+            ..quote.bare_preview()
+        };
+        let no_message_id = ThriftPreview {
+            replying_to_message_id: None,
+            ..quote.bare_preview()
+        };
+        for preview in [no_sender, no_message_id] {
+            let reply = quote.reply(preview, Vec::new());
+            if uses_message_key {
+                assert_no_key_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+            } else {
+                assert_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_preview_without_the_embedded_message_stays_unvalidated() {
+    let quote = Quote::new(true);
+    let reply = quote.reply(quote.bare_preview(), Vec::new());
+    let message = decrypt_message(
+        &ChatCore::new(),
+        &reply,
+        &quote.both_keys(),
+        std::slice::from_ref(&quote.replier.entry),
+    )
+    .unwrap();
+    assert!(message.verified);
+    assert_eq!(message.reply_preview_validation, None);
+    assert_opens(&reply, &quote.both_keys(), "photo", &quote.photo_key());
+}
+
+#[test]
+fn media_hash_keys_a_preview_shows_without_embedding_are_listed_too() {
+    let quote = Quote::new(true);
+    let reply = quote.reply(quote.bare_preview(), vec![media("reply-photo", None)]);
+    let err = error_text(open(&reply, &quote.both_keys(), "photo-z", b"bytes"));
+    assert!(
+        err.contains("media_hash_key 'photo-z' is not in the message"),
+        "{err}"
+    );
+    assert!(err.contains("reply-photo, photo"), "{err}");
 }
 
 // Errors.
