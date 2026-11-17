@@ -76,6 +76,7 @@ const MK_SHORT_ATTACHMENT_KEY_HEX: &str =
     "4f7d8ca1ef7cb1319743204496358333126086d0a23bdae26bbe5186ba8de093";
 const MK_SHORT_MEDIA_HASH_KEY: &str = "fixture-short-media";
 const MK_REPLY_TEXT: &str = "fixture reply to a message-key message";
+const MK_NAMED_REPLY_TEXT: &str = "fixture reply naming a message-key message";
 
 // Media vectors. The link-card message reuses the known-answer sender and
 // message id, so its card, the second attachment, is under the known second
@@ -541,6 +542,46 @@ fn main() {
     )
     .expect("frame reply to message-key message");
 
+    // A reply that names the message-key message and lists its files without
+    // embedding it, as a sender that holds no event of the message builds
+    // one. Its preview's attachments carry no id, so each file is keyed by
+    // its place in the preview.
+    let mut named_reply_params =
+        chat_xdk_core::EncryptReplyParams::new(EVENT_CONVERSATION_ID, MK_NAMED_REPLY_TEXT, "")
+            .with_conversation_key(conversation_key.to_vec(), EVENT_CONVERSATION_KEY_VERSION);
+    named_reply_params.reply_to_sequence_id = Some("1".to_string());
+    named_reply_params.reply_to_message_id = Some(MK_MESSAGE_ID.to_string());
+    named_reply_params.reply_to_sender_id = Some(MK_SENDER_ID.to_string());
+    named_reply_params.reply_to_text = Some(MK_MESSAGE_TEXT.to_string());
+    named_reply_params.reply_to_attachments = Some(
+        [
+            (MK_MEDIA_HASH_KEYS[0], media_first_encrypted.len()),
+            (MK_MEDIA_HASH_KEYS[1], media_second_encrypted.len()),
+        ]
+        .into_iter()
+        .map(|(media_hash_key, size)| AttachmentDescriptor::Media {
+            media_hash_key: media_hash_key.to_string(),
+            width: 4,
+            height: 3,
+            filesize_bytes: size as i64,
+            filename: format!("{media_hash_key}.jpg"),
+            media_type: Some(1),
+            duration_millis: None,
+            plaintext_sha256: None,
+        })
+        .collect(),
+    );
+    let named_reply = replier
+        .encrypt_reply(&named_reply_params)
+        .expect("encrypt reply naming the message-key message");
+    let event_reply_named_b64 = internals::frame_send_payload(
+        &named_reply,
+        &named_reply.message_id,
+        EVENT_SENDER_ID,
+        EVENT_CONVERSATION_ID,
+    )
+    .expect("frame reply naming the message-key message");
+
     let mut obj = json!({
         "identity_private_b64": B64.encode(identity_private),
         "signing_private_b64": B64.encode(signing_private),
@@ -602,6 +643,8 @@ fn main() {
         "event_key_change_message_key_b64": event_key_change_message_key_b64,
         "event_reply_message_key_b64": event_reply_message_key_b64,
         "event_reply_message_key_text": MK_REPLY_TEXT,
+        "event_reply_named_b64": event_reply_named_b64,
+        "event_reply_named_text": MK_NAMED_REPLY_TEXT,
         "payload_message_v10_cev1": PAYLOAD_MESSAGE_V10_CEV1,
         "payload_message_v10": PAYLOAD_MESSAGE_V10,
         "signature_v10_cev1_public_key_b64": SIGNATURE_V10_CEV1_PUBLIC_KEY_B64,

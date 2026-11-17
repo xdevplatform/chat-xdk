@@ -965,6 +965,8 @@ class TestPythonSdkVectors(unittest.TestCase):
              "the message is not encrypted"),
             (first, v["event_message_key_b64"], {v["message_key_conversation_key_version"]: b"short"},
              first_hash, "is not 32 bytes"),
+            (first, v["event_reply_named_b64"], fixture_keys, first_hash,
+             "under any key the reply gives for it"),
         ]
         for encrypted, event, keys, media_hash_key, expected in cases:
             with self.subTest(expected=expected):
@@ -1049,6 +1051,34 @@ class TestPythonSdkVectors(unittest.TestCase):
             ),
             base64.b64decode(v["media_first_plaintext_b64"]),
         )
+
+    def test_reply_naming_a_message_opens_the_quoted_media_and_stays_unvalidated(self):
+        from chat_xdk import Chat, DecryptEventParams, hex_to_bytes
+
+        v = _load_vectors()
+        chat = Chat()
+        keys = {v["event_conversation_key_version"]: base64.b64decode(v["conversation_key_b64"])}
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                v["event_reply_named_b64"], keys,
+                signing_keys=_signing_keys_for(v, v["event_sender_id"]),
+            )
+        )
+        self.assertTrue(event["verified"])
+        self.assertEqual(event["content"]["text"], v["event_reply_named_text"])
+        self.assertIsNone(event.get("reply_preview_validation"))
+
+        # The quoted message is under another key version than the reply's.
+        keys[v["message_key_conversation_key_version"]] = hex_to_bytes(v["message_key_conversation_key_hex"])
+        for name in ("first", "second"):
+            with self.subTest(media=name):
+                self.assertEqual(
+                    self._open_media(
+                        v["event_reply_named_b64"], keys, v[f"media_{name}_hash_key"],
+                        v[f"media_{name}_encrypted_b64"],
+                    ),
+                    base64.b64decode(v[f"media_{name}_plaintext_b64"]),
+                )
 
     def test_known_signature_covers_the_contents_encryption_version(self):
         from chat_xdk import Chat
