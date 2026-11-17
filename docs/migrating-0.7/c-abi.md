@@ -1,27 +1,32 @@
-# Migrating C ABI callers to chat-xdk 0.7.4
+# Migrating C ABI callers to chat-xdk 0.7.x
 
 This page moves code that calls the chat-xdk C ABI directly, written for
-0.5.x (0.5.0, 0.5.1 or 0.5.2), to 0.7.4. The ABI is declared in
+0.5.x (0.5.0, 0.5.1 or 0.5.2), to 0.7.x. The ABI is declared in
 [`go/chatxdk/include/chat_xdk.h`](../../go/chatxdk/include/chat_xdk.h), and
 the native libraries in the Go module and the .NET and JVM packages export
 the same functions. Work through the page top to bottom: [Before you
 start](#0-before-you-start) sets up the upgrade, the [symbol
 index](#1-symbol-index) maps every 0.5.x prototype and document field to its
-0.7.4 form, [Compile-time changes](#2-compile-time-changes) and [Runtime
+0.7.x form, [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.4
+request, and [Verify](#5-verify) checks the result. [Why 0.7.x
 changes](why.md) explains each change, and the [index](README.md) lists the
 language bindings' pages. [API.md](../API.md) documents every call.
+
+The page describes the newest 0.7.x release, which is the one to install. If
+your app already runs an earlier 0.7.x release, [what each 0.7.x release
+changed](README.md#what-each-07x-release-changed) lists what the later ones
+change for it.
 
 ## Checklist
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a changed prototype, which the compiler reports, `[runtime]` a
-changed document or value, which only a call reports, and `[new]` a 0.7.4
+changed document or value, which only a call reports, and `[new]` a 0.7.x
 call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.4: swap the header and the library](#install-074)
+- [ ] `[rollout]` [Install the newest 0.7.x release: swap the header and the library](#install-07x)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Hand a chat the X API's feature switches to send v1](#the-feature-switch-request)
 - [ ] `[rollout]` [Check the ABI version](#check-the-abi-version)
@@ -65,11 +70,12 @@ call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
-snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI compiles the
-0.7.4 half of every snippet on this page with `gcc` against the 0.7.4
-`chat_xdk.h`, and passes every params document a 0.7.4 half shows to its
-call in the 0.7.4 library, failing on a document the library can't parse
+under `// 0.5.x`, and then as 0.7.x code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.x adds. CI compiles the
+0.7.x half of every snippet on this page with `gcc` against the newest 0.7.x
+`chat_xdk.h`, and passes every params document a 0.7.x half shows to its
+call in the newest 0.7.x library, failing on a document the library can't
+parse
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)).
 
 `chat` is a `struct ChatHandle *` with your keys loaded. `take(r)` stands
@@ -111,12 +117,13 @@ value of the wrong JSON type fails with an `invalid_input` error such as
 
 ## 0. Before you start
 
-### Install 0.7.4
+### Install 0.7.x
 
-Swap your copy of `chat_xdk.h` for the 0.7.4 header,
-`go/chatxdk/include/chat_xdk.h` in the 0.7.4 release, and link the 0.7.4
-library. Its name differs from the 0.5.x library's (see the [symbol
-index](#1-symbol-index)), so change the name your build links or loads:
+Swap your copy of `chat_xdk.h` for the header of the newest 0.7.x release,
+0.7.5 or later (`go/chatxdk/include/chat_xdk.h` in that release), and link
+that release's library. Its name differs from the 0.5.x library's (see the
+[symbol index](#1-symbol-index)), so change the name your build links or
+loads:
 
 - `libchat_xdk_ffi.a`, the static library the Go module carries under
   `go/chatxdk/libs/<os>_<arch>/`;
@@ -124,10 +131,11 @@ index](#1-symbol-index)), so change the name your build links or loads:
   `chat_xdk_ffi.dll`), the shared library the .NET package and the JVM jar
   carry.
 
-`cargo build -p chat-xdk-ffi --release` builds both from the 0.7.4 source.
-The libraries are built with Juicebox, and the header declares the Juicebox
-functions only when `CHAT_XDK_JUICEBOX` is defined, so define it to call
-them (see [Keys stored in Juicebox](#keys-stored-in-juicebox)). On Linux:
+`cargo build -p chat-xdk-ffi --release` builds both from that release's
+source. The libraries are built with Juicebox, and the header declares the
+Juicebox functions only when `CHAT_XDK_JUICEBOX` is defined, so define it to
+call them (see [Keys stored in Juicebox](#keys-stored-in-juicebox)). On
+Linux:
 
 ```sh
 cc -DCHAT_XDK_JUICEBOX -I go/chatxdk/include app.c \
@@ -136,12 +144,13 @@ cc -DCHAT_XDK_JUICEBOX -I go/chatxdk/include app.c \
 
 On macOS, link `-framework Security -framework CoreFoundation -framework
 SystemConfiguration -lresolv` in place of `-lm -ldl -lpthread`. Every app
-that shares conversations with yours reads the formats 0.7.4 sends only
-once it runs a 0.7 release too, so plan the rollout below before you deploy.
+that shares conversations with yours reads the formats 0.7.x sends only
+once it runs a 0.7.x release too, so plan the rollout below before you
+deploy.
 
 ### Upgrade readers first
 
-0.7.4 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.x sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -157,14 +166,14 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.4 before:
+every app that reads your conversations to 0.7.x before:
 
 - any of your senders can send v1, that is, before you hand your chats a
   `v1_send` switch that is on;
 - you pass a description to
   [`chat_xdk_prepare_group_members_change`](#adding-members).
 
-0.7.4 reads both formats, including v1 reply previews, edits and files.
+0.7.x reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read the send
 payload's `signature_info.signature_version`, `"7"` for v0 and `"10"` for
 v1.
@@ -224,15 +233,15 @@ if (chat_xdk_abi_version() != CHAT_XDK_ABI_VERSION) abort();
 
 ## 1. Symbol index
 
-Every 0.5.x prototype and document field that changes, with its 0.7.4 form
+Every 0.5.x prototype and document field that changes, with its 0.7.x form
 and the section that shows the change. A function or field not listed here
 keeps its 0.5.x form. The compiler reports each changed prototype; search
 your code for each document field in the first column, since only a call
 reports those. [Verify](#5-verify) gives the search as one command.
 
-| 0.5.x | 0.7.4 | Section |
+| 0.5.x | 0.7.x | Section |
 |---|---|---|
-| `libchat_xdk_go.a`, `chat_xdk_dotnet` | `libchat_xdk_ffi.a`, `chat_xdk_ffi` | [Install](#install-074) |
+| `libchat_xdk_go.a`, `chat_xdk_dotnet` | `libchat_xdk_ffi.a`, `chat_xdk_ffi` | [Install](#install-07x) |
 | `struct ChatHandle *chat_xdk_new(void)` | `struct FfiResult chat_xdk_new(const char *juicebox_config_json, struct ChatHandle **out_chat)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chat_xdk_setup(handle, const char *pin, const char *config_json)`, `chat_xdk_unlock(handle, const char *pin, const char *config_json)` | `chat_xdk_setup(handle, const uint8_t *pin, uintptr_t pin_len)`, `chat_xdk_unlock(handle, const uint8_t *pin, uintptr_t pin_len)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chat_xdk_change_pin(handle, const char *old_pin, const char *new_pin)` | `chat_xdk_change_pin(handle, const uint8_t *old_pin, uintptr_t old_pin_len, const uint8_t *new_pin, uintptr_t new_pin_len)` | [Juicebox](#keys-stored-in-juicebox) |
@@ -265,7 +274,7 @@ reports those. [Verify](#5-verify) gives the search as one command.
 | `reply_to_sender_id` as a JSON number | A JSON string | [User ids](#user-ids-and-key-versions-are-strings-of-digits) |
 | `error` as a string | `error` as a document: `kind`, `message`, `guesses_remaining` | [Errors](#errors-carry-their-kind) |
 
-The 0.7.4 header adds `chat_xdk_abi_version`, `chat_xdk_feature_switches_url`,
+The 0.7.x header adds `chat_xdk_abi_version`, `chat_xdk_feature_switches_url`,
 `chat_xdk_set_feature_switches` and the prepare calls for group changes and
 read receipts; the [requests](#the-requests) table lists the prepare calls.
 
@@ -336,7 +345,7 @@ fails](#an-empty-juicebox-config-fails)).
 
 `chat_xdk_generate_keypairs` returns a document that holds only
 `public_key`. Send it as returned as the body of
-`POST /2/users/{id}/public_keys`. 0.7.4 doesn't pick a signing-key version
+`POST /2/users/{id}/public_keys`. 0.7.x doesn't pick a signing-key version
 for new keys: set the identity with the `public_key_version` the request
 returns (see the next section). A signed call made without a version fails
 with `Invalid state: signing_key_version is not set: pass it explicitly or
@@ -732,7 +741,7 @@ signed message id of the message it edits as `target_message_id`, absent
 for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`.
-Don't keep `target_message_id`: in 0.7.4 it names a different value, and
+Don't keep `target_message_id`: in 0.7.x it names a different value, and
 reading it compiles and runs** (see [`target_message_id` holds a different
 value](#target_message_id-holds-a-different-value)).
 
@@ -857,7 +866,7 @@ signing key, so give the chat every participant's signing keys, your own
 included, before you decrypt. It's `null` until a key change verifies: a
 key change the SDK can't verify still adds its key to
 `conversation_keys.keys`, for decrypting, but never becomes the version you
-encrypt with. Where 0.5.x returned the batch's highest version, 0.7.4 can
+encrypt with. Where 0.5.x returned the batch's highest version, 0.7.x can
 return `null`: fetch the missing signing keys or the conversation's
 key-change events and decrypt again, rather than encrypting under the
 highest key in `keys`:
@@ -886,7 +895,7 @@ if (version == NULL) {
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.4 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.x that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** Decrypted events are JSON documents, so code that keeps
 reading `target_message_id` compiles and runs: it gets the wrong id, or
@@ -1264,7 +1273,7 @@ api_post("/2/chat/conversations/g1/members", add_request_json);
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.4, leave the description out, so the add signs at
+your groups runs 0.7.x, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1586,7 +1595,7 @@ api_put("/2/chat/conversations/g1/screen_capture", capture_request_json);
 
 ### Build
 
-Compile with the 0.7.4 header and `-DCHAT_XDK_JUICEBOX` if you call the
+Compile with the 0.7.x header and `-DCHAT_XDK_JUICEBOX` if you call the
 Juicebox functions, and `-Wall -Werror`: the compiler flags every call that
 still passes 0.5.x arguments and every 0.5.x function the header no longer
 declares. Documents are strings, which the compiler doesn't check: the
@@ -1673,7 +1682,7 @@ chat_xdk_free(bob);
 
 `signature_info.signature_version` is `"7"` for a v0 send and `"10"` for
 v1, as the `v1_send` switch you hand the chat decides. `xdk_version` is the
-version of the library that built the send, a 0.7 release, which the X API
+version of the library that built the send, a 0.7.x release, which the X API
 receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a

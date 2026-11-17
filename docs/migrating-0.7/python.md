@@ -1,24 +1,29 @@
-# Migrating Python code to chat-xdk 0.7.4
+# Migrating Python code to chat-xdk 0.7.x
 
 This page moves Python code written for chat-xdk 0.5.x (0.5.0, 0.5.1 or
-0.5.2) to 0.7.4. Work through it top to bottom: [Before you
+0.5.2) to 0.7.x. Work through it top to bottom: [Before you
 start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.4 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.x form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.4
+request, and [Verify](#5-verify) checks the result. [Why 0.7.x
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
+
+The page describes the newest 0.7.x release, which is the one to install. If
+your app already runs an earlier 0.7.x release, [what each 0.7.x release
+changed](README.md#what-each-07x-release-changed) lists what the later ones
+change for it.
 
 ## Checklist
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change a type checker (mypy, pyright) or the first call
 reports, `[runtime]` a change in behavior that nothing reports, and `[new]`
-a 0.7.4 call to adopt.
+a 0.7.x call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.4](#install-074)
+- [ ] `[rollout]` [Install the newest 0.7.x release](#install-07x)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Keep keys in Juicebox with the config the chat is created with](#keys-stored-in-juicebox)
@@ -63,9 +68,9 @@ a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `# 0.5.x`, and then as 0.7.4 code writes them, under `# 0.7.x`. A
-snippet with only a `# 0.7.x` half shows code 0.7.4 adds. CI runs the
-0.7.4 half of every snippet on this page against 0.7.4
+under `# 0.5.x`, and then as 0.7.x code writes them, under `# 0.7.x`. A
+snippet with only a `# 0.7.x` half shows code 0.7.x adds. CI runs the
+0.7.x half of every snippet on this page against the newest 0.7.x source
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)),
 so each one runs as written.
 
@@ -93,22 +98,24 @@ imports from `chat_xdk`.
 
 ## 0. Before you start
 
-### Install 0.7.4
+### Install 0.7.x
 
-Pin the package at 0.7.4 in your requirements file, then install it:
+Install the newest 0.7.x release, 0.7.5 or later. Require it in your
+requirements file as `chatxdk>=0.7.5,<0.8`, then install it:
 
 ```sh
-pip install chatxdk==0.7.4
+pip install "chatxdk>=0.7.5,<0.8"
 ```
 
+The range takes 0.7.5 and the 0.7.x releases after it, and no 0.8 release.
 The package imports as `chat_xdk`, as 0.5.x does, and needs Python 3.10 or
 newer. Every app that shares conversations with yours reads the formats
-0.7.4 sends only once it runs a 0.7 release too, so plan the rollout below
+0.7.x sends only once it runs a 0.7.x release too, so plan the rollout below
 before you deploy.
 
 ### Upgrade readers first
 
-0.7.4 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.x sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -124,13 +131,13 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.4 before:
+every app that reads your conversations to 0.7.x before:
 
 - any of your senders can send v1, that is, before the X API turns
   `v1_send` on for them;
 - you pass a description to [`prepare_group_members_change`](#adding-members).
 
-0.7.4 reads both formats, including v1 reply previews, edits and files.
+0.7.x reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `payload.signature_info.signature_version`, `"7"` for v0 and `"10"` for v1.
 
@@ -172,12 +179,12 @@ no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.4 form and the section that
+Every 0.5.x name that changes, with its 0.7.x form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.4 | Section |
+| 0.5.x | 0.7.x | Section |
 |---|---|---|
 | `chat.set_identity(user_id, signing_key_version)` | `chat.set_identity(SetIdentityParams(user_id, signing_key_version))` | [set_identity](#set_identity-takes-setidentityparams) |
 | `chat.import_keys(keys, version=...)` | `chat.import_keys(ImportKeysParams(keys, signing_key_version=...))` | [import_keys](#import_keys-takes-importkeysparams) |
@@ -264,7 +271,7 @@ the request's `public_key` object from it as you do today (its
 `public_key`, `signing_public_key`, `identity_public_key_signature`,
 `signing_public_key_signature` and `registration_method`; `public_key` in
 the snippet), and send it as the only field of the
-`POST /2/users/{id}/public_keys` body. 0.7.4 doesn't pick a signing-key
+`POST /2/users/{id}/public_keys` body. 0.7.x doesn't pick a signing-key
 version for new keys: call `set_identity` with the `public_key_version` the
 request returns (see the next section). A signed call made without a version
 raises `InvalidStateError: Invalid state: signing_key_version is not set:
@@ -738,7 +745,7 @@ Keys that hold sequence ids take the names of the params that send them. A
 of the message it edits as `target_message_id`, absent for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`.
-Don't keep `target_message_id`: in 0.7.4 it names a different value, and
+Don't keep `target_message_id`: in 0.7.x it names a different value, and
 reading it raises no error** (see [`target_message_id` holds a different
 value](#target_message_id-holds-a-different-value)).
 
@@ -888,7 +895,7 @@ your own included, before you decrypt. It's `None` until a key change
 verifies: a key change the SDK can't verify still adds its key to
 `result["conversation_keys"]["keys"]`, for decrypting, but never becomes the
 version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.4 can return `None`: fetch the missing signing keys or the
+0.7.x can return `None`: fetch the missing signing keys or the
 conversation's key-change events and decrypt again, rather than encrypting
 under the highest key in `keys`:
 
@@ -912,7 +919,7 @@ if version is None:
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.4 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.x that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** Code that keeps reading `target_message_id` raises no
 error: it gets the wrong id, or none. Rename every read, as [Decrypted
@@ -1282,7 +1289,7 @@ store_conversation_key(conversation_id, prepared["conversation_key_version"], pr
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.4, leave the description out, so the add signs at
+your groups runs 0.7.x, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1716,7 +1723,7 @@ assert payload.xdk_version == chat_xdk.__version__
 `signature_version` is `"7"` for a v0 send and `"10"` for v1, as the
 `v1_send` switch decides. `xdk_version` is the version of the package that
 built the send, `chat_xdk.__version__`, which the X API receives with each
-send: check that it's the 0.7 release you installed.
+send: check that it's the 0.7.x release you installed.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

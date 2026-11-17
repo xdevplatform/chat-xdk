@@ -1,24 +1,29 @@
-# Migrating Go code to chat-xdk 0.7.4
+# Migrating Go code to chat-xdk 0.7.x
 
 This page moves Go code written for
 `github.com/xdevplatform/chat-xdk/go/chatxdk` 0.5.x (0.5.0, 0.5.1 or 0.5.2)
-to 0.7.4. Work through it top to bottom: [Before you
+to 0.7.x. Work through it top to bottom: [Before you
 start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.4 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.x form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.4
+request, and [Verify](#5-verify) checks the result. [Why 0.7.x
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
+
+The page describes the newest 0.7.x release, which is the one to install. If
+your app already runs an earlier 0.7.x release, [what each 0.7.x release
+changed](README.md#what-each-07x-release-changed) lists what the later ones
+change for it.
 
 ## Checklist
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
-that nothing reports, and `[new]` a 0.7.4 call to adopt.
+that nothing reports, and `[new]` a 0.7.x call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.4](#install-074)
+- [ ] `[rollout]` [Install the newest 0.7.x release](#install-07x)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
 - [ ] `[compile]` [Create a Juicebox chat with `NewWithJuiceboxConfig`, and pass `Setup` and `Unlock` only the PIN](#keys-stored-in-juicebox)
@@ -62,9 +67,10 @@ that nothing reports, and `[new]` a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
-snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI compiles the
-0.7.4 half of every snippet on this page against 0.7.4 with `go vet`
+under `// 0.5.x`, and then as 0.7.x code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.x adds. CI compiles the
+0.7.x half of every snippet on this page against the newest 0.7.x source
+with `go vet`
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)).
 
 `chat` is a `*chatxdk.Chat` with your keys loaded, and the other names stand
@@ -96,22 +102,24 @@ for your code that stores a conversation key. `pin` is the PIN's bytes and
 
 ## 0. Before you start
 
-### Install 0.7.4
+### Install 0.7.x
 
-Require the module at v0.7.4:
+Require the newest v0.7.x release of the module, v0.7.5 or later:
 
 ```sh
-go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7.4
+go get github.com/xdevplatform/chat-xdk/go/chatxdk@v0.7
 ```
 
-It needs Go 1.21 or newer and cgo: the module links the prebuilt static
-library it ships for your platform. Every app that shares conversations with
-yours reads the formats 0.7.4 sends only once it runs a 0.7 release too, so
-plan the rollout below before you deploy.
+`@v0.7` takes the newest v0.7.x release and writes it to `go.mod`: check
+that the `require` line there names v0.7.5 or later. It needs Go 1.21 or
+newer and cgo: the module links the prebuilt static library it ships for
+your platform. Every app that shares conversations with yours reads the
+formats 0.7.x sends only once it runs a 0.7.x release too, so plan the
+rollout below before you deploy.
 
 ### Upgrade readers first
 
-0.7.4 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.x sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -127,13 +135,13 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.4 before:
+every app that reads your conversations to 0.7.x before:
 
 - any of your senders can send v1, that is, before the X API turns
   `v1_send` on for them;
 - you pass a description to [`PrepareGroupMembersChange`](#adding-members).
 
-0.7.4 reads both formats, including v1 reply previews, edits and files.
+0.7.x reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `payload.SignatureInfo.SignatureVersion`, `"7"` for v0 and `"10"` for v1.
 
@@ -168,12 +176,12 @@ ignored. There's no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.4 form and the section that
+Every 0.5.x name that changes, with its 0.7.x form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.4 | Section |
+| 0.5.x | 0.7.x | Section |
 |---|---|---|
 | `chatxdk.New()`, then `chat.Setup(pin, configJSON)` and `chat.Unlock(pin, configJSON)` | `chatxdk.NewWithJuiceboxConfig(configJSON)`, then `chat.Setup(pin)` and `chat.Unlock(pin)` | [Juicebox](#keys-stored-in-juicebox) |
 | `chatxdk.GuessesRemaining(err)` | `GuessesRemaining` of a `*chatxdk.Error`, read with `errors.As` | [Errors](#errors-carry-their-kind) |
@@ -250,7 +258,7 @@ config fails](#an-empty-juicebox-config-fails)).
 
 `GenerateKeypairs` returns a `*PublicKeyRegistrationPayload` that holds only
 `PublicKey`. Send it as the only field of the
-`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.4 doesn't pick a
+`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.x doesn't pick a
 signing-key version for new keys: call `SetIdentity` with the
 `public_key_version` the request returns (see the next section). A signed
 call made without a version returns the error `Invalid state:
@@ -733,7 +741,7 @@ for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`,
 in struct tags and in code that reads `Event.Raw`. Don't keep
-`target_message_id`: in 0.7.4 it names a different value, and decoding it
+`target_message_id`: in 0.7.x it names a different value, and decoding it
 returns no error** (see [`target_message_id` holds a different
 value](#target_message_id-holds-a-different-value)).
 
@@ -878,7 +886,7 @@ included, before you decrypt. It's `nil` until a key change verifies: a key
 change the SDK can't verify still adds its key to
 `result.ConversationKeys.Keys`, for decrypting, but never becomes the
 version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.4 can return `nil`: fetch the missing signing keys or the conversation's
+0.7.x can return `nil`: fetch the missing signing keys or the conversation's
 key-change events and decrypt again, rather than encrypting under the
 highest key in `Keys`:
 
@@ -905,7 +913,7 @@ version := *result.ConversationKeys.LatestVersion
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.4 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.x that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** The compiler catches the renamed `ReactionContent`
 field, but not a struct tag or a `map[string]any` that reads
@@ -1377,7 +1385,7 @@ storeConversationKey(conversationID, prepared.ConversationKeyVersion, prepared.C
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.4, leave the description out, so the add signs at
+your groups runs 0.7.x, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1940,7 +1948,7 @@ if !strings.HasPrefix(payload.XdkVersion, "0.7.") {
 
 `SignatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
 `v1_send` switch decides. `XdkVersion` is the version of the module that
-built the send, a 0.7 release, which the X API receives with each send.
+built the send, a 0.7.x release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,

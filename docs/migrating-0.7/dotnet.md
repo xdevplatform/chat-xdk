@@ -1,23 +1,28 @@
-# Migrating .NET code to chat-xdk 0.7.4
+# Migrating .NET code to chat-xdk 0.7.x
 
 This page moves C# and other .NET code written for `XDevPlatform.ChatXdk`
-0.5.x (0.5.0, 0.5.1 or 0.5.2) to 0.7.4. Work through it top to bottom:
+0.5.x (0.5.0, 0.5.1 or 0.5.2) to 0.7.x. Work through it top to bottom:
 [Before you start](#0-before-you-start) sets up the upgrade, the [symbol
-index](#1-symbol-index) maps every 0.5.x name to its 0.7.4 form,
+index](#1-symbol-index) maps every 0.5.x name to its 0.7.x form,
 [Compile-time changes](#2-compile-time-changes) and [Runtime
 changes](#3-runtime-and-behavior-changes) show each line to change, [Group
 and receipt signing](#4-group-and-receipt-signing) gives every signed
-request, and [Verify](#5-verify) checks the result. [Why 0.7.4
+request, and [Verify](#5-verify) checks the result. [Why 0.7.x
 changes](why.md) explains each change, and the [index](README.md) lists the
 other bindings' pages. [API.md](../API.md) documents every call.
+
+The page describes the newest 0.7.x release, which is the one to install. If
+your app already runs an earlier 0.7.x release, [what each 0.7.x release
+changed](README.md#what-each-07x-release-changed) lists what the later ones
+change for it.
 
 ## Checklist
 
 Each item is tagged with what it takes: `[rollout]` is a deployment step,
 `[compile]` a change the compiler reports, `[runtime]` a change in behavior
-that nothing reports, and `[new]` a 0.7.4 call to adopt.
+that nothing reports, and `[new]` a 0.7.x call to adopt.
 
-- [ ] `[rollout]` [Install 0.7.4](#install-074)
+- [ ] `[rollout]` [Install the newest 0.7.x release](#install-07x)
 - [ ] `[rollout]` [Remove a native library you built for 0.5.x](#the-package-bundles-the-linux-arm64-native-library)
 - [ ] `[rollout]` [Upgrade every app that reads your conversations first](#upgrade-readers-first)
 - [ ] `[rollout]` [Allow or block the feature-switch request](#the-feature-switch-request)
@@ -65,9 +70,10 @@ that nothing reports, and `[new]` a 0.7.4 call to adopt.
 ## About the snippets
 
 Each snippet shows the lines that change, first as 0.5.x code writes them,
-under `// 0.5.x`, and then as 0.7.4 code writes them, under `// 0.7.x`. A
-snippet with only a `// 0.7.x` half shows code 0.7.4 adds. CI compiles the
-0.7.4 half of every snippet on this page against 0.7.4 with `dotnet build`
+under `// 0.5.x`, and then as 0.7.x code writes them, under `// 0.7.x`. A
+snippet with only a `// 0.7.x` half shows code 0.7.x adds. CI compiles the
+0.7.x half of every snippet on this page against the newest 0.7.x source
+with `dotnet build`
 ([`scripts/check_doc_snippets.py`](../../scripts/check_doc_snippets.py)), as
 the body of an `async` method, with nullable reference types and implicit
 usings on.
@@ -101,18 +107,20 @@ namespaces.
 
 ## 0. Before you start
 
-### Install 0.7.4
+### Install 0.7.x
 
-Set the package reference to 0.7.4:
+Set the package reference to the newest 0.7.x release, 0.7.5 or later:
 
 ```sh
-dotnet add package XDevPlatform.ChatXdk --version 0.7.4
+dotnet add package XDevPlatform.ChatXdk --version 0.7.5
 ```
 
 or, in the project file, `<PackageReference Include="XDevPlatform.ChatXdk"
-Version="0.7.4" />`. It targets .NET 8 (`net8.0`). Every app that shares
-conversations with yours reads the formats 0.7.4 sends only once it runs
-a 0.7 release too, so plan the rollout below before you deploy.
+Version="0.7.5" />`. NuGet takes the version as written, so write the number
+of the newest 0.7.x release once a later one is out. It targets .NET 8
+(`net8.0`). Every app that shares conversations with yours reads the formats
+0.7.x sends only once it runs a 0.7.x release too, so plan the rollout below
+before you deploy.
 
 ### The package bundles the linux-arm64 native library
 
@@ -120,14 +128,14 @@ The package bundles the native library for 64-bit ARM Linux (`linux-arm64`)
 as well, under `runtimes/linux-arm64/native/`, so apps on ARM64 Linux need
 no copy of their own. There's no code to change. If you shipped a library
 you built to run 0.5.x there, remove it: a 0.5.x build doesn't export the
-entry points 0.7.4 calls (see [C ABI](c-abi.md)). The native library is
+entry points 0.7.x calls (see [C ABI](c-abi.md)). The native library is
 `chat_xdk_ffi` (`libchat_xdk_ffi.so`, `libchat_xdk_ffi.dylib`,
 `chat_xdk_ffi.dll`), built from the `chat-xdk-ffi` crate: name one you
 build yourself for another platform the same way.
 
 ### Upgrade readers first
 
-0.7.4 sends each message, reply, reaction and edit in one of two formats. v0
+0.7.x sends each message, reply, reaction and edit in one of two formats. v0
 is the format 0.5.x sends. v1 encrypts each message under its own key,
 derived from the conversation key, the sender and the message id, and signs
 it at signature version 10. A chat sends v1 while the X API's `v1_send`
@@ -143,13 +151,13 @@ holds that floor in memory, so after a restart decrypt a conversation's key
 changes again before you change its key.
 
 0.5.x rejects each of these as a signature verification failure, so upgrade
-every app that reads your conversations to 0.7.4 before:
+every app that reads your conversations to 0.7.x before:
 
 - any of your senders can send v1, that is, before the X API turns
   `v1_send` on for them;
 - you pass a description to [`PrepareGroupMembersChange`](#adding-members).
 
-0.7.4 reads both formats, including v1 reply previews, edits and files.
+0.7.x reads both formats, including v1 reply previews, edits and files.
 There's no code to change: to see which format a send used, read
 `payload.SignatureInfo.SignatureVersion`, `"7"` for v0 and `"10"` for v1.
 
@@ -184,12 +192,12 @@ ignored. There's no code to change.
 
 ## 1. Symbol index
 
-Every 0.5.x name that changes, with its 0.7.4 form and the section that
+Every 0.5.x name that changes, with its 0.7.x form and the section that
 shows the change. A name not listed here keeps its 0.5.x form. Search your
 code for each name in the first column; [Verify](#5-verify) gives the
 search as one command.
 
-| 0.5.x | 0.7.4 | Section |
+| 0.5.x | 0.7.x | Section |
 |---|---|---|
 | `new Chat()`, then `chat.Setup(pin, configJson)` and `chat.Unlock(pin, configJson)` with a `string` PIN | `new Chat(configJson)`, then `chat.Setup(pin)` and `chat.Unlock(pin)`, or `SetupAsync` and `UnlockAsync`, with a `byte[]` PIN | [Juicebox](#keys-stored-in-juicebox) |
 | `chat.ChangePin(string, string)` | `chat.ChangePin(byte[], byte[])` | [Juicebox](#keys-stored-in-juicebox) |
@@ -265,7 +273,7 @@ config fails](#an-empty-juicebox-config-fails)).
 
 `GenerateKeypairs` returns a `PublicKeyRegistrationPayload` that holds only
 `PublicKey`. Send it as the only field of the
-`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.4 doesn't pick a
+`POST /2/users/{id}/public_keys` body, `public_key`. 0.7.x doesn't pick a
 signing-key version for new keys: call `SetIdentity` with the
 `public_key_version` the request returns (see the next section). A signed
 call made without a version throws `Invalid state: signing_key_version is
@@ -730,7 +738,7 @@ carries the signed message id of the message it edits as
 `target_message_id`, absent for a v0 edit.
 
 **Rename every read of `target_message_id` to `target_message_sequence_id`.
-Don't keep `target_message_id`: in 0.7.4 it names a different value, and
+Don't keep `target_message_id`: in 0.7.x it names a different value, and
 reading it from a `JsonElement` compiles** (see [`target_message_id` holds
 a different value](#target_message_id-holds-a-different-value)).
 
@@ -894,7 +902,7 @@ included, before you decrypt. It's `null` until a key change verifies: a
 key change the SDK can't verify still adds its key to
 `result.ConversationKeys.Keys`, for decrypting, but never becomes the
 version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.4 can return `null`: fetch the missing signing keys or the
+0.7.x can return `null`: fetch the missing signing keys or the
 conversation's key-change events and decrypt again, rather than encrypting
 under the highest key in `Keys`:
 
@@ -920,7 +928,7 @@ if (version is null)
 ### `target_message_id` holds a different value
 
 **In 0.5.x a reaction's or edit's `target_message_id` held the target's
-sequence id. In 0.7.4 that value is `target_message_sequence_id`, and
+sequence id. In 0.7.x that value is `target_message_sequence_id`, and
 `target_message_id` holds the edited message's signed message id, present
 only on a v1 edit.** Decrypted events are `JsonElement`s, so code that
 keeps reading `target_message_id` compiles: it gets the wrong id, or throws
@@ -1344,7 +1352,7 @@ StoreConversationKey(conversationId, prepared.ConversationKeyVersion, prepared.C
 While the chat sends v0, passing a description makes the add sign at
 signature version 8, the first version whose member-add payload covers one,
 and 0.5.x readers can't verify a version-8 add. Until every app that reads
-your groups runs 0.7.4, leave the description out, so the add signs at
+your groups runs 0.7.x, leave the description out, so the add signs at
 version 7 as in 0.5.x; the new members can read the description once a
 description change sets it under the new key. While the chat sends v1, the
 add signs at version 10, with a description or without.
@@ -1817,7 +1825,7 @@ if (!sent.XdkVersion.StartsWith("0.7."))
 
 `SignatureVersion` is `"7"` for a v0 send and `"10"` for v1, as the
 `v1_send` switch decides. `XdkVersion` is the version of the package that
-built the send, a 0.7 release, which the X API receives with each send.
+built the send, a 0.7.x release, which the X API receives with each send.
 
 Then run the same flows against a test conversation on the X API: send a
 text, a file, a reply, an edit and a delete, mark the conversation read,
