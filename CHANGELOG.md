@@ -39,7 +39,10 @@
   but one: encrypting with it sends a message its recipients cannot read. It
   is now null for such a batch; read `latest_versions[conversation_id]`. A
   batch of one conversation, and `extract_conversation_keys`, report it as
-  before.
+  before. So does a batch where only one of several conversations has a
+  verified key version: `latest_version` is that conversation's, and does
+  not say so. For any batch that can span conversations, read
+  `latest_versions[conversation_id]`.
 - Errors for an event whose signature could not be verified say why. `…
   signature could not be verified: signature missing or no matching signing
   key` is now either `… the event carries no signature`, `… no signing key

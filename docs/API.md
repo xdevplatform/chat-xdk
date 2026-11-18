@@ -948,10 +948,17 @@ lifetime. A conversation without a verified key change has no entry.
 versions belong to one conversation. It is null until a key change verifies,
 and null for a batch that spans conversations with a verified version each:
 the highest of them would be another conversation's key version for all but
-one, so read `latest_versions[conversation_id]`. Batch one conversation at a
-time where you can: `conversation_keys.keys` is keyed by version alone, so
-two conversations whose keys share a version number collide in it. The key
-cache (`set_cache_keys`) is per conversation either way.
+one, so read `latest_versions[conversation_id]`.
+
+`latest_version` does not name its conversation. Rely on it only for a batch
+of one conversation. When a batch can hold events of more than one, read
+`latest_versions[conversation_id]` every time: if only one of the batch's
+conversations has a verified key change, `latest_version` is still set, to
+that conversation's version, and the others have no entry in
+`latest_versions`. Batch one conversation at a time where you can:
+`conversation_keys.keys` is keyed by version alone, so two conversations
+whose keys share a version number collide in it. The key cache
+(`set_cache_keys`) is per conversation either way.
 
 `unverified_key_changes` lists each key change in the batch whose key this
 identity decrypted but whose signature did not verify, in batch order. It is
