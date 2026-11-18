@@ -265,6 +265,8 @@ pub mod js {
         JsTypingEvent,
         JsUnifiedCardAttachmentInfo,
         JsUnknownEvent,
+        JsUnverifiedKeyChange,
+        JsUnverifiedKeyChangeReason,
         JsUrlAttachmentInfo,
     };
 }

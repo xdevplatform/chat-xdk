@@ -1584,9 +1584,20 @@ pub struct ConversationKeyResult {
     #[serde(skip)]
     pub keys: std::collections::HashMap<String, crate::crypto::keys::XChatConversationKey>,
     /// The version to encrypt with. From `decrypt_events`, the newest version
-    /// whose key change verified (`None` until one verifies); from
-    /// `extract_conversation_keys`, the batch's highest version.
+    /// whose key change verified, when the batch's verified versions belong
+    /// to one conversation: `None` until a key change verifies, and `None`
+    /// for a batch whose conversations hold verified versions of more than
+    /// one, where a single version would name some other conversation's key
+    /// (read `latest_versions`). From `extract_conversation_keys`, the
+    /// highest version in the batch, whatever conversations it spans.
     pub latest_version: Option<String>,
+    /// The version to encrypt with for each conversation of the batch, by
+    /// the conversation id its events carry. From `decrypt_events`, the
+    /// newest version whose key change verified; a conversation without one
+    /// has no entry. From `extract_conversation_keys`, each conversation's
+    /// highest version in the batch.
+    #[serde(default)]
+    pub latest_versions: std::collections::HashMap<String, String>,
 }
 
 impl ConversationKeyResult {
@@ -1624,6 +1635,49 @@ pub struct DecryptedEvent {
     pub original_b64: Option<String>,
 }
 
+/// Why a key change's signature did not verify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub enum UnverifiedKeyChangeReason {
+    /// None of the signing keys the call verified with is the sender's at
+    /// the key version the signature names: pass that user's public keys as
+    /// signing keys and decrypt again.
+    MissingSigningKey,
+    /// The signature does not verify against the sender's signing key.
+    InvalidSignature,
+    /// The key change carries no signature, or one this SDK cannot check:
+    /// an unsupported signature version, or one below the first whose
+    /// payload a recipient can rebuild.
+    Unverifiable,
+}
+
+/// A key change in a `decrypt_events` batch whose key this identity
+/// decrypted but whose signature did not verify.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct UnverifiedKeyChange {
+    /// Index of the key change in the batch.
+    pub index: usize,
+    /// Why its signature did not verify.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub reason: UnverifiedKeyChangeReason,
+    /// Whether its key was left out of `conversation_keys.keys`, so the
+    /// batch's messages under that key version did not decrypt. A key that
+    /// was kept decrypts messages but never becomes the version to encrypt
+    /// with.
+    pub key_dropped: bool,
+    /// The conversation the key change belongs to.
+    pub conversation_id: Option<String>,
+    /// The conversation key version the key change carries.
+    pub conversation_key_version: String,
+    /// The user who signed the key change: the member who made it.
+    pub sender_id: Option<String>,
+    /// The version of that user's signing key the signature names.
+    pub public_key_version: Option<String>,
+}
+
 /// Result from `decrypt_events` batch API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
@@ -1639,6 +1693,12 @@ pub struct DecryptEventsResult {
     /// failed, or one decrypt drops, such as a member removal's title or
     /// description re-encrypted under the new key.
     pub errors: std::collections::HashMap<usize, String>,
+    /// The batch's key changes whose signature did not verify, in batch
+    /// order, each with why and whether its key was dropped. Empty when
+    /// every key change this identity decrypted verified.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub unverified_key_changes: Vec<UnverifiedKeyChange>,
 }
 
 /// A public key input entry for `prepare_conversation_key_change`,
@@ -2311,5 +2371,76 @@ mod tests {
                 "publicKeyVersion": "1",
             }])
         );
+    }
+
+    fn unverified_key_change() -> UnverifiedKeyChange {
+        UnverifiedKeyChange {
+            index: 3,
+            reason: UnverifiedKeyChangeReason::MissingSigningKey,
+            key_dropped: true,
+            conversation_id: Some("g1".to_string()),
+            conversation_key_version: "5".to_string(),
+            sender_id: Some("2".to_string()),
+            public_key_version: None,
+        }
+    }
+
+    #[test]
+    fn test_unverified_key_change_serde() {
+        let json = serde_json::to_value(unverified_key_change()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "index": 3,
+                "reason": "MissingSigningKey",
+                "key_dropped": true,
+                "conversation_id": "g1",
+                "conversation_key_version": "5",
+                "sender_id": "2",
+                "public_key_version": null,
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<UnverifiedKeyChange>(json).unwrap(),
+            unverified_key_change()
+        );
+        for (reason, name) in [
+            (
+                UnverifiedKeyChangeReason::InvalidSignature,
+                "InvalidSignature",
+            ),
+            (UnverifiedKeyChangeReason::Unverifiable, "Unverifiable"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), name);
+        }
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_unverified_key_change_is_camel_case() {
+        let json =
+            serde_json::to_value(JsUnverifiedKeyChange::from(unverified_key_change())).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "index": 3,
+                "reason": "missingSigningKey",
+                "keyDropped": true,
+                "conversationId": "g1",
+                "conversationKeyVersion": "5",
+                "senderId": "2",
+                "publicKeyVersion": null,
+            })
+        );
+        for (reason, name) in [
+            (
+                UnverifiedKeyChangeReason::InvalidSignature,
+                "invalidSignature",
+            ),
+            (UnverifiedKeyChangeReason::Unverifiable, "unverifiable"),
+        ] {
+            let json = serde_json::to_value(JsUnverifiedKeyChangeReason::from(reason)).unwrap();
+            assert_eq!(json, name);
+        }
     }
 }

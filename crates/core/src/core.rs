@@ -581,15 +581,16 @@ impl ChatCore {
         Ok(signing.private.clone())
     }
 
-    /// Enforce `reject_unverified` policy on a signature result.
+    /// Enforce `reject_unverified` policy on a signature check.
     ///
-    /// When `reject_unverified` is enabled, both `Err(reason)` (signature
-    /// present but cryptographically invalid) and `Ok(false)` (signature
-    /// missing or no matching key) are rejected for event types that carry
-    /// a signature.
+    /// When `reject_unverified` is enabled, an event of a type that carries
+    /// a signature is rejected unless its signature verified. The error says
+    /// what kept it from verifying: no signature, no signing key for its
+    /// sender, a payload that cannot be rebuilt, or an invalid signature.
     fn reject_if_unverified(
         &self,
-        sig_result: &Result<bool, String>,
+        check: &SignatureCheck,
+        event: &MessageEvent,
         event_label: &str,
     ) -> Result<(), SdkError> {
         if !self
@@ -598,57 +599,65 @@ impl ChatCore {
         {
             return Ok(());
         }
-        match sig_result {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(SdkError::Crypto(CryptoError::VerificationFailed(format!(
-                "{} signature could not be verified: \
-                 signature missing or no matching signing key",
-                event_label
-            )))),
-            Err(reason) => Err(SdkError::Crypto(CryptoError::VerificationFailed(format!(
-                "{} signature verification failed: {}",
-                event_label, reason
-            )))),
-        }
+        let reason = match check {
+            SignatureCheck::Verified => return Ok(()),
+            SignatureCheck::Unsigned => format!(
+                "{event_label} signature could not be verified: the event carries no signature"
+            ),
+            SignatureCheck::MissingSigningKey => format!(
+                "{event_label} signature could not be verified: {}; pass that user's public \
+                 keys as signing keys",
+                missing_signing_key(event.sender_id.as_deref(), signature_key_version(event))
+            ),
+            SignatureCheck::NoPayload => format!(
+                "{event_label} signature could not be verified: its signed payload cannot be \
+                 rebuilt from the event"
+            ),
+            SignatureCheck::UnacceptedVersion(reason) | SignatureCheck::Mismatch(reason) => {
+                format!("{event_label} signature verification failed: {reason}")
+            }
+        };
+        Err(SdkError::Crypto(CryptoError::VerificationFailed(reason)))
     }
 
-    /// Verify a message event signature against a set of signing keys.
+    /// Check a message event signature against a set of signing keys.
     ///
     /// Selects the key whose `public_key_version` matches the version embedded
-    /// in the event's `MessageEventSignature`. Returns `Ok(false)` when no
-    /// matching key is available (not verifiable, but not invalid).
+    /// in the event's `MessageEventSignature`; with none among `signing_keys`
+    /// the check is [`SignatureCheck::MissingSigningKey`]: not verifiable,
+    /// but not invalid.
     ///
     /// `plaintext_ckey_b64` is needed for CKCE v6+ verification — pass the
     /// base64-no-padding of the decrypted conversation key, or None for other
     /// event types.
-    fn verify_event_signature(
+    fn check_event_signature(
         &self,
         parsed: &crate::thrift::event::MessageEvent,
         detail: &crate::thrift::event::MessageEventDetail,
         signing_keys: &[SigningKeyEntry],
         plaintext_ckey_b64: Option<&str>,
-    ) -> Result<bool, String> {
-        let sig_data = match &parsed.message_event_signature {
-            Some(sig) => sig,
-            None => return Ok(false),
+    ) -> SignatureCheck {
+        let Some(sig_data) = &parsed.message_event_signature else {
+            return SignatureCheck::Unsigned;
         };
-        let signature_b64 = match &sig_data.signature {
-            Some(s) => s,
-            None => return Ok(false),
+        let Some(signature_b64) = &sig_data.signature else {
+            return SignatureCheck::Unsigned;
         };
 
         let Some(sig_version) = signature_version(parsed) else {
-            return Err("signature_version is missing or not an integer".to_string());
+            return SignatureCheck::UnacceptedVersion(
+                "signature_version is missing or not an integer".to_string(),
+            );
         };
         if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
-            return Err(format!(
+            return SignatureCheck::UnacceptedVersion(format!(
                 "signature_version {} is no longer accepted (minimum: {})",
                 sig_version,
                 crate::signatures::MIN_SIGNATURE_VERSION
             ));
         }
         if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
-            return Err(format!(
+            return SignatureCheck::UnacceptedVersion(format!(
                 "signature_version {} is not supported (maximum: {})",
                 sig_version,
                 crate::signatures::MAX_SIGNATURE_VERSION
@@ -656,29 +665,28 @@ impl ChatCore {
         }
 
         let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
-        let signing_key_b64 = match signing_keys
+        let Some(signing_key_b64) = signing_keys
             .iter()
             .find(|e| e.public_key_version == key_version)
             .map(|e| e.public_key.as_str())
-        {
-            Some(k) => k,
-            None => return Ok(false),
+        else {
+            return SignatureCheck::MissingSigningKey;
         };
 
-        let payload = match build_event_signature_payload(parsed, detail, plaintext_ckey_b64) {
-            Some(p) => p,
-            None => return Ok(false),
+        let Some(payload) = build_event_signature_payload(parsed, detail, plaintext_ckey_b64)
+        else {
+            return SignatureCheck::NoPayload;
         };
 
         let sig_bytes = base64_decode_or_empty(signature_b64);
         match self.verify(signing_key_b64, &sig_bytes, &payload) {
-            Ok(true) => Ok(true),
-            Ok(false) => Err(format!(
+            Ok(true) => SignatureCheck::Verified,
+            Ok(false) => SignatureCheck::Mismatch(format!(
                 "ECDSA mismatch: key_version={}, payload_len={}",
                 key_version,
                 payload.len()
             )),
-            Err(e) => Err(format!("verify error: {}", e)),
+            Err(e) => SignatureCheck::Mismatch(format!("verify error: {}", e)),
         }
     }
 
@@ -746,6 +754,53 @@ pub(crate) fn signature_version(event: &MessageEvent) -> Option<i32> {
         .as_deref()?
         .parse::<i32>()
         .ok()
+}
+
+/// The version of its sender's signing key that an event's signature names.
+pub(crate) fn signature_key_version(event: &MessageEvent) -> Option<&str> {
+    event
+        .message_event_signature
+        .as_ref()?
+        .public_key_version
+        .as_deref()
+}
+
+/// What checking an event's signature found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SignatureCheck {
+    /// The signature verified.
+    Verified,
+    /// The event carries no signature.
+    Unsigned,
+    /// The signature's version is not one this SDK accepts: the reason.
+    UnacceptedVersion(String),
+    /// None of the signing keys given is the sender's at the key version
+    /// the signature names.
+    MissingSigningKey,
+    /// The signed payload cannot be rebuilt from the event.
+    NoPayload,
+    /// The signature does not verify against the sender's signing key: the
+    /// reason.
+    Mismatch(String),
+}
+
+impl SignatureCheck {
+    pub(crate) fn is_verified(&self) -> bool {
+        matches!(self, Self::Verified)
+    }
+}
+
+/// How an error names the signing key a signature was left unverified for
+/// want of: its sender, and the version of the sender's key it names.
+pub(crate) fn missing_signing_key(
+    sender_id: Option<&str>,
+    public_key_version: Option<&str>,
+) -> String {
+    format!(
+        "no signing key for sender {} at public_key_version {} among the signing keys given",
+        sender_id.unwrap_or("<none>"),
+        public_key_version.unwrap_or("<none>")
+    )
 }
 
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {

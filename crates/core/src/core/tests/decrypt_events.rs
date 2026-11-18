@@ -314,14 +314,21 @@ fn ckey_sig_v6_enforcement_gates_adoption_by_sequence_number() {
     let reg = core.generate_keypairs().unwrap();
     let signing_keys = [signing_key_entry_for(&reg, "910003")];
 
-    // The shipped decrypt path holds enforcement off, so a bad signature
-    // is still adopted (and surfaced as an error), but it is not reported
-    // as the latest version.
+    // The decrypt path enforces from the cut-over sequence, which 100 is
+    // below, so a bad signature is still adopted (and surfaced as an error
+    // and an unverified key change), but it is not reported as the latest
+    // version.
     let bad = build(&core, "100", true);
     let result = core.decrypt_events_with(&[&bad], &signing_keys);
     assert!(result.conversation_keys.keys.contains_key("1001"));
     assert!(result.errors.contains_key(&0));
     assert_eq!(result.conversation_keys.latest_version, None);
+    assert_eq!(result.unverified_key_changes.len(), 1);
+    assert_eq!(
+        result.unverified_key_changes[0].reason,
+        UnverifiedKeyChangeReason::InvalidSignature
+    );
+    assert!(!result.unverified_key_changes[0].key_dropped);
 
     // Enforce from sequence 0: a valid signature is kept.
     let good = build(&core, "100", false);

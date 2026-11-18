@@ -11,6 +11,7 @@ impl ChatCore {
     /// identity key, and returns a `ConversationKeyResult` with:
     /// - `keys`: Map of key version → conversation key
     /// - `latest_version`: The highest key version
+    /// - `latest_versions`: Each conversation's highest key version
     ///
     /// Events that are not `KeyChange` events, or whose keys can't be decrypted
     /// by this identity key, are silently skipped.
@@ -26,17 +27,21 @@ impl ChatCore {
     /// nor a replayed older one sets what callers encrypt with; per-message
     /// signatures are verified in [`Self::decrypt_event`].
     ///
-    /// `latest_version` here is the highest version within this batch only.
+    /// `latest_version` here is the highest version within this batch only,
+    /// across every conversation the batch spans; `latest_versions` holds
+    /// the highest per conversation.
     pub fn extract_conversation_keys(&self, events: &[&str]) -> ConversationKeyResult {
         if self.keypair_manager.get_identity_keypair().is_err() {
             return ConversationKeyResult {
                 keys: HashMap::new(),
                 latest_version: None,
+                latest_versions: HashMap::new(),
             };
         }
 
         let mut result = HashMap::new();
         let mut latest_version: Option<String> = None;
+        let mut latest_versions: HashMap<String, String> = HashMap::new();
 
         for event_b64 in events {
             let Ok(event_bytes) = base64_decode(event_b64) else {
@@ -56,16 +61,14 @@ impl ChatCore {
                 continue;
             };
 
-            // Track the latest version (highest numeric value)
-            let is_newer = match (&latest_version, version.parse::<u64>()) {
-                (None, Ok(_)) => true,
-                (Some(current), Ok(new_ver)) => {
-                    current.parse::<u64>().map_or(true, |c| new_ver > c)
-                }
-                _ => latest_version.is_none(),
-            };
-            if is_newer {
+            if is_newer_key_version(latest_version.as_deref(), &version) {
                 latest_version = Some(version.clone());
+            }
+            if let Some(conversation_id) = parsed.conversation_id.as_deref() {
+                let current = latest_versions.get(conversation_id).map(String::as_str);
+                if is_newer_key_version(current, &version) {
+                    latest_versions.insert(conversation_id.to_string(), version.clone());
+                }
             }
             result.insert(version.clone(), ckey);
         }
@@ -73,7 +76,84 @@ impl ChatCore {
         ConversationKeyResult {
             keys: result,
             latest_version,
+            latest_versions,
         }
+    }
+
+    /// The key changes of a batch whose key this identity decrypted but
+    /// whose signature does not verify, in batch order, each with why.
+    /// `adopted` holds the keys [`Self::extract_conversation_keys`] took
+    /// from the batch, and every entry's `key_dropped` is left `false` for
+    /// the caller to set once signature enforcement has run.
+    ///
+    /// Each key change is checked against the key adopted for its version,
+    /// as [`Self::enforce_ckey_signatures`] checks it, so an entry explains
+    /// what enforcement does to that key. A key change signed below
+    /// [`crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION`] signs a
+    /// payload no recipient can rebuild, so it is unverifiable whichever
+    /// signing keys are given.
+    pub(super) fn unverified_key_changes(
+        &self,
+        events: &[&str],
+        signing_keys: &[SigningKeyEntry],
+        adopted: &HashMap<String, XChatConversationKey>,
+    ) -> Vec<UnverifiedKeyChange> {
+        let mut unverified = Vec::new();
+        for (index, event_b64) in events.iter().enumerate() {
+            let Ok(parsed) = Self::parse_event_b64(event_b64) else {
+                continue;
+            };
+            let Some(detail) = &parsed.detail else {
+                continue;
+            };
+            let MessageEventDetail::ConversationKeyChangeEvent(kce) = detail else {
+                continue;
+            };
+            let version = kce.conversation_key_version.clone().unwrap_or_default();
+            let Some(key) = adopted.get(&version) else {
+                continue;
+            };
+
+            let unverifiable_version = signature_version(&parsed)
+                .is_some_and(|v| v < crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION);
+            let reason = if unverifiable_version {
+                UnverifiedKeyChangeReason::Unverifiable
+            } else {
+                // Base64 of a live conversation key; wiped on drop like the
+                // sign-path payloads.
+                let ckey_b64 = zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(key.encoded()));
+                let sender_keys: Vec<SigningKeyEntry> = match parsed.sender_id.as_deref() {
+                    Some(sid) => signing_keys
+                        .iter()
+                        .filter(|k| k.user_id == sid)
+                        .cloned()
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let check =
+                    self.check_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64));
+                match check {
+                    SignatureCheck::Verified => continue,
+                    SignatureCheck::MissingSigningKey => {
+                        UnverifiedKeyChangeReason::MissingSigningKey
+                    }
+                    SignatureCheck::Mismatch(_) => UnverifiedKeyChangeReason::InvalidSignature,
+                    SignatureCheck::Unsigned
+                    | SignatureCheck::UnacceptedVersion(_)
+                    | SignatureCheck::NoPayload => UnverifiedKeyChangeReason::Unverifiable,
+                }
+            };
+            unverified.push(UnverifiedKeyChange {
+                index,
+                reason,
+                key_dropped: false,
+                conversation_id: parsed.conversation_id.clone(),
+                conversation_key_version: version,
+                sender_id: parsed.sender_id.clone(),
+                public_key_version: signature_key_version(&parsed).map(str::to_string),
+            });
+        }
+        unverified
     }
 
     /// Drop adopted conversation keys whose key change fails signature
@@ -145,10 +225,9 @@ impl ChatCore {
                     .collect(),
                 None => Vec::new(),
             };
-            let verified = matches!(
-                self.verify_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64)),
-                Ok(true)
-            );
+            let verified = self
+                .check_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64))
+                .is_verified();
             if verified {
                 self.raise_key_change_signature_floor_for(&parsed);
             } else {
@@ -157,9 +236,9 @@ impl ChatCore {
         }
     }
 
-    /// Set the reported latest conversation-key version to the newest one
-    /// whose key change verified, monotonically across this instance's
-    /// lifetime.
+    /// Set the reported latest conversation-key versions to the newest one
+    /// whose key change verified, per conversation and monotonically across
+    /// this instance's lifetime.
     ///
     /// A malicious relay can replay an old, validly signed key change to make a
     /// caller encrypt under a stale key, or inject a key change it cannot sign.
@@ -169,6 +248,12 @@ impl ChatCore {
     /// carrying a reproducible plaintext-key payload can be verified, so a
     /// batch whose conversations have no verified key change reports no
     /// latest version.
+    ///
+    /// `latest_versions` takes each of the batch's conversations that has a
+    /// verified version, and `latest_version` that version when there is one
+    /// such conversation. A batch with more leaves `latest_version` unset
+    /// rather than report the highest: it would be another conversation's
+    /// key version for all but one of them.
     pub(super) fn apply_ckey_freshness(
         &self,
         events: &[&str],
@@ -223,10 +308,10 @@ impl ChatCore {
                     .collect(),
                 None => Vec::new(),
             };
-            if matches!(
-                self.verify_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64)),
-                Ok(true)
-            ) {
+            if self
+                .check_event_signature(&parsed, detail, &sender_keys, Some(&ckey_b64))
+                .is_verified()
+            {
                 self.raise_key_change_signature_floor_for(&parsed);
                 let entry = verified_max.entry(conv_id.to_string()).or_insert(0);
                 *entry = (*entry).max(version_num);
@@ -289,11 +374,21 @@ impl ChatCore {
             .conversation_key_high_water
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        result.latest_version = batch_conversations
+        result.latest_versions = batch_conversations
             .iter()
-            .filter_map(|c| high_water.get(c).copied())
-            .max()
-            .map(|version_num| version_num.to_string());
+            .filter_map(|c| {
+                high_water
+                    .get(c)
+                    .map(|version_num| (c.clone(), version_num.to_string()))
+            })
+            .collect();
+        // One version can name the key to encrypt with only when it belongs
+        // to one conversation: across several, the highest would name
+        // another conversation's key for all but one of them.
+        result.latest_version = match result.latest_versions.len() {
+            1 => result.latest_versions.values().next().cloned(),
+            _ => None,
+        };
     }
 
     /// Decrypt the conversation key carried in a `ConversationKeyChange` event
@@ -343,19 +438,29 @@ impl ChatCore {
     ///
     /// `params.events` are the raw base64 events; `params.signing_keys` the
     /// known signing keys of the participants, or the keys stored via
-    /// [`Self::set_signing_keys`] when unset or empty.
+    /// [`Self::set_signing_keys`] when unset or empty. They must include the
+    /// keys of every member who signed a key change in the batch, whether or
+    /// not that member sent a message in it: a key change sequenced at or
+    /// after the enforcement cut-over whose signature does not verify has
+    /// its key dropped, and every message under that key then fails.
     ///
     /// # Returns
     /// A `DecryptEventsResult` containing:
     /// * `events` - The events that decrypted, of every event type
     /// * `conversation_keys` - Extracted conversation keys (for caching). Its
-    ///   `latest_version` is the newest version whose key change verified, for
-    ///   the batch's conversations and held monotonic for this instance's
-    ///   lifetime; `None` until a key change verifies. A key from a key change
-    ///   that did not verify still decrypts but never becomes the latest.
+    ///   `latest_versions` holds, for each of the batch's conversations, the
+    ///   newest version whose key change verified, held monotonic for this
+    ///   instance's lifetime; `latest_version` is that version when one
+    ///   conversation has one, and `None` until a key change verifies or
+    ///   when several do. A key from a key change that did not verify never
+    ///   becomes the latest; it still decrypts unless it was dropped.
     /// * `errors` - Map of event index → error message for the events left
     ///   out of `events`: those that failed, and those decrypt drops, as
     ///   [`Self::decrypt_event`] describes
+    /// * `unverified_key_changes` - The key changes whose signature did not
+    ///   verify, each with why (no signing key for its sender, an invalid
+    ///   signature, or a signature the SDK cannot check), the sender and
+    ///   signing-key version to fetch, and whether its key was dropped
     pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
         self.decrypt_events_with(&events, params.signing_keys.as_deref().unwrap_or_default())
@@ -384,15 +489,23 @@ impl ChatCore {
             .cloned()
             .collect();
 
-        // First pass: extract conversation keys, then drop any whose key
-        // change fails signature enforcement (no-op while held at the max).
+        // First pass: extract conversation keys, note the key changes whose
+        // signature does not verify, then drop the keys of those that fail
+        // signature enforcement.
         let mut conv_keys_result = self.extract_conversation_keys(events);
+        let mut unverified_key_changes =
+            self.unverified_key_changes(events, &verified_signing_keys, &conv_keys_result.keys);
         self.enforce_ckey_signatures(
             events,
             &verified_signing_keys,
             &mut conv_keys_result,
             CKEY_SIG_V6_ENFORCE_AFTER_SEQ,
         );
+        for change in &mut unverified_key_changes {
+            change.key_dropped = !conv_keys_result
+                .keys
+                .contains_key(&change.conversation_key_version);
+        }
         // Only a verified key change may set the reported latest version, and
         // a replayed older one cannot lower it.
         self.apply_ckey_freshness(events, &verified_signing_keys, &mut conv_keys_result);
@@ -432,7 +545,15 @@ impl ChatCore {
                     });
                 }
                 Err(e) => {
-                    errors.insert(idx, e.to_string());
+                    let error = self
+                        .dropped_key_error(
+                            &parsed,
+                            &e,
+                            &conv_keys_result.keys,
+                            &unverified_key_changes,
+                        )
+                        .unwrap_or(e);
+                    errors.insert(idx, error.to_string());
                 }
             }
         }
@@ -441,7 +562,62 @@ impl ChatCore {
             events: decrypted,
             conversation_keys: conv_keys_result,
             errors,
+            unverified_key_changes,
         }
+    }
+
+    /// The error of a message that found no conversation key because the
+    /// batch's key change for its key version did not verify and had its
+    /// key dropped: it names that key change and why it did not verify,
+    /// where `error` only reports that no key was found. `None` for any
+    /// other failure.
+    fn dropped_key_error(
+        &self,
+        parsed: &MessageEvent,
+        error: &SdkError,
+        keys: &HashMap<String, XChatConversationKey>,
+        unverified_key_changes: &[UnverifiedKeyChange],
+    ) -> Option<SdkError> {
+        if error.kind() != crate::error::ErrorKind::Decryption {
+            return None;
+        }
+        let Some(MessageEventDetail::MessageCreateEvent(mce)) = &parsed.detail else {
+            return None;
+        };
+        let version = mce.conversation_key_version.as_deref()?;
+        let cached = parsed
+            .conversation_id
+            .as_deref()
+            .and_then(|cid| self.cached_key_for(cid, version));
+        if keys.contains_key(version) || cached.is_some() {
+            return None;
+        }
+        let change = unverified_key_changes.iter().find(|change| {
+            change.key_dropped
+                && change.conversation_key_version == version
+                && change.conversation_id == parsed.conversation_id
+        })?;
+        let reason = match change.reason {
+            UnverifiedKeyChangeReason::MissingSigningKey => format!(
+                "{}; pass that user's public keys as signing keys and decrypt again",
+                missing_signing_key(
+                    change.sender_id.as_deref(),
+                    change.public_key_version.as_deref()
+                )
+            ),
+            UnverifiedKeyChangeReason::InvalidSignature => {
+                "its signature does not verify against its sender's signing key".to_string()
+            }
+            UnverifiedKeyChangeReason::Unverifiable => {
+                "it carries no signature this SDK can check".to_string()
+            }
+        };
+        Some(SdkError::Crypto(CryptoError::DecryptionFailed(format!(
+            "Message encrypted with key version '{}' but no matching key found: the key \
+             change for that version, event {} of the batch, did not verify, so its key was \
+             dropped: {}",
+            version, change.index, reason
+        ))))
     }
 
     /// Decode and Thrift-parse a raw base64 event, so each event is parsed
@@ -592,14 +768,14 @@ impl ChatCore {
                         self.decrypt_key_change_ckey(key_change)
                             .map(|k| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(k.encoded())))
                     });
-                let sig_result = self.verify_event_signature(
+                let check = self.check_event_signature(
                     parsed,
                     detail,
                     signing_keys,
                     ckey_b64.as_deref().map(String::as_str),
                 );
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "KeyChange")?;
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "KeyChange")?;
                 if verified {
                     self.raise_key_change_signature_floor_for(parsed);
                 }
@@ -615,9 +791,9 @@ impl ChatCore {
             }
             MessageEventDetail::MessageTypingEvent(_) => Event::Typing(TypingEvent { meta }),
             MessageEventDetail::MarkConversationReadEvent(read_event) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "ReadReceipt")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "ReadReceipt")?;
                 Event::ReadReceipt(ReadReceiptEvent {
                     meta,
                     verified,
@@ -626,9 +802,9 @@ impl ChatCore {
                 })
             }
             MessageEventDetail::MarkConversationUnreadEvent(unread_event) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "MarkedUnread")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "MarkedUnread")?;
                 Event::MarkedUnread(MarkedUnreadEvent {
                     meta,
                     verified,
@@ -636,9 +812,9 @@ impl ChatCore {
                 })
             }
             MessageEventDetail::MessageDeleteEvent(del_event) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "MessageDelete")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "MessageDelete")?;
                 let delete_for_all = del_event
                     .delete_message_action
                     .as_ref()
@@ -652,9 +828,9 @@ impl ChatCore {
                 })
             }
             MessageEventDetail::ConversationDeleteEvent(conv_del) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "ConversationDelete")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "ConversationDelete")?;
                 let clear_all = conv_del
                     .clear_conversation_options
                     .as_ref()
@@ -681,9 +857,9 @@ impl ChatCore {
                 })
             }
             MessageEventDetail::GroupChangeEvent(group_change) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "GroupChange")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "GroupChange")?;
                 reject_key_rotation_reencryption(group_change)?;
                 let change = self.group_change(
                     parsed.conversation_id.as_deref(),
@@ -697,9 +873,9 @@ impl ChatCore {
                 })
             }
             MessageEventDetail::ConversationMetadataChangeEvent(settings) => {
-                let sig_result = self.verify_event_signature(parsed, detail, signing_keys, None);
-                let verified = matches!(sig_result, Ok(true));
-                self.reject_if_unverified(&sig_result, "SettingsChange")?;
+                let check = self.check_event_signature(parsed, detail, signing_keys, None);
+                let verified = check.is_verified();
+                self.reject_if_unverified(&check, parsed, "SettingsChange")?;
                 let change =
                     convert_settings_change(settings.conversation_metadata_change.as_ref());
                 Event::SettingsChange(SettingsChangeEvent {
@@ -727,15 +903,14 @@ impl ChatCore {
                 // results in plaintext being returned (when reject_unverified).
                 // Unencrypted messages carry no signature, so they are treated
                 // as unverifiable and rejected under reject_unverified too.
-                let (verified, sig_result) = if is_unencrypted {
-                    (false, Ok(false))
+                let check = if is_unencrypted {
+                    SignatureCheck::Unsigned
                 } else {
-                    let r = self.verify_event_signature(parsed, detail, signing_keys, None);
-                    let v = matches!(r, Ok(true));
-                    (v, r)
+                    self.check_event_signature(parsed, detail, signing_keys, None)
                 };
+                let verified = check.is_verified();
 
-                self.reject_if_unverified(&sig_result, "Message")?;
+                self.reject_if_unverified(&check, parsed, "Message")?;
 
                 let plaintext = if is_unencrypted {
                     contents.clone()
@@ -906,6 +1081,19 @@ impl ChatCore {
                 raw: value.to_string(),
             },
         }
+    }
+}
+
+/// Whether key version `candidate` replaces `current` as the highest of a
+/// batch: a numeric version replaces a lower or a non-numeric one, and a
+/// non-numeric version is kept only while no other has been seen.
+fn is_newer_key_version(current: Option<&str>, candidate: &str) -> bool {
+    match (current, candidate.parse::<u64>()) {
+        (None, _) => true,
+        (Some(current), Ok(candidate)) => current
+            .parse::<u64>()
+            .map_or(true, |current| candidate > current),
+        (Some(_), Err(_)) => false,
     }
 }
 
