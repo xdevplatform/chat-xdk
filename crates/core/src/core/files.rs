@@ -94,7 +94,8 @@ impl ChatCore {
     ///
     /// `params.event_b64` is the event of the message that carries the file
     /// and `params.conversation_keys` its conversation's key map, as passed
-    /// to [`Self::decrypt_event`]. `params.media_hash_key` names the file: a
+    /// to [`Self::decrypt_event`]; an empty map is the conversation's keys
+    /// in the key cache. `params.media_hash_key` names the file: a
     /// media attachment, a link card's banner or favicon, or media the
     /// message quotes from another message in its reply preview. The SDK
     /// finds that attachment in the event and derives its key from the key
@@ -118,9 +119,11 @@ impl ChatCore {
     /// complete encrypted file. Signatures are not checked here; use the
     /// `verified` flag from [`Self::decrypt_event`].
     pub fn decrypt_file(&self, params: &DecryptFileParams) -> Result<Vec<u8>, SdkError> {
+        let conversation_keys =
+            self.incoming_file_conversation_keys(&params.event_b64, &params.conversation_keys);
         let key = media::media_key(
             &params.event_b64,
-            &params.conversation_keys,
+            &conversation_keys,
             &params.media_hash_key,
         )?;
         Ok(crate::crypto::encryption::decrypt_media(
@@ -134,12 +137,35 @@ impl ChatCore {
     /// encrypted file, which is fed to the decryptor; its errors say which
     /// file failed and what to pass.
     pub fn file_decryptor(&self, params: &FileDecryptorParams) -> Result<FileDecryptor, SdkError> {
+        let conversation_keys =
+            self.incoming_file_conversation_keys(&params.event_b64, &params.conversation_keys);
         let key = media::media_key(
             &params.event_b64,
-            &params.conversation_keys,
+            &conversation_keys,
             &params.media_hash_key,
         )?;
         Ok(key.decryptor(&params.media_hash_key)?)
+    }
+
+    /// The key map a file of the message in `event_b64` decrypts with:
+    /// `conversation_keys`, or, when that is empty, the cached keys of the
+    /// message's conversation.
+    fn incoming_file_conversation_keys<'a>(
+        &self,
+        event_b64: &str,
+        conversation_keys: &'a HashMap<String, XChatConversationKey>,
+    ) -> std::borrow::Cow<'a, HashMap<String, XChatConversationKey>> {
+        if !conversation_keys.is_empty() {
+            return std::borrow::Cow::Borrowed(conversation_keys);
+        }
+        // An event that does not parse has no conversation to read keys of;
+        // the lookup that follows reports it.
+        let cached = Self::parse_event_b64(event_b64)
+            .ok()
+            .and_then(|event| event.conversation_id)
+            .map(|conversation_id| self.cached_keys_of(&conversation_id))
+            .unwrap_or_default();
+        std::borrow::Cow::Owned(cached)
     }
 
     /// Encrypt a file under a key the caller already holds, rather than

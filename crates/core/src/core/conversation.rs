@@ -194,7 +194,9 @@ impl ChatCore {
     /// participants; pass the existing id for a group key rotation.
     ///
     /// The returned `conversation_key` is the raw key to store locally for
-    /// encrypting messages.
+    /// encrypting messages. While the key cache is on
+    /// ([`Self::set_cache_keys`]) the call caches it as the conversation's
+    /// newest key, as every prepare call that makes a conversation key does.
     pub fn prepare_conversation_key_change(
         &self,
         params: &ConversationKeyChangeParams,
@@ -239,6 +241,7 @@ impl ChatCore {
             &participant_keys,
             self.send_version(),
         )?;
+        self.cache_prepared_key(&conversation_id, conversation_key_version, &ckey);
         Ok(PreparedConversationChange {
             conversation_id,
             conversation_key: Some(ckey),
@@ -449,6 +452,7 @@ impl ChatCore {
             None,
         )?;
 
+        self.cache_prepared_key(&params.conversation_id, conversation_key_version, &ckey);
         Ok(PreparedConversationChange {
             conversation_id: params.conversation_id.clone(),
             conversation_key: Some(ckey),
@@ -567,6 +571,7 @@ impl ChatCore {
             None,
         )?;
 
+        self.cache_prepared_key(&params.conversation_id, conversation_key_version, &ckey);
         Ok(PreparedConversationChange {
             conversation_id: params.conversation_id.clone(),
             conversation_key: Some(ckey),

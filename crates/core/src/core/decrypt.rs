@@ -561,9 +561,9 @@ impl ChatCore {
     }
 
     /// Record the newest key version whose key change verified, per
-    /// conversation and monotonically across this instance's lifetime, and
-    /// return the latest versions a batch reports: `latest_version` and
-    /// `latest_versions`.
+    /// conversation and monotonically across this instance's lifetime, cache
+    /// the key of each key change that verified, and return the latest
+    /// versions a batch reports: `latest_version` and `latest_versions`.
     ///
     /// A malicious relay can replay an old, validly signed key change to make a
     /// caller encrypt under a stale key, or inject a key change it cannot sign.
@@ -587,7 +587,6 @@ impl ChatCore {
         keys: &BatchKeys,
     ) -> (Option<String>, HashMap<String, String>) {
         let mut batch_conversations: Vec<String> = Vec::new();
-        let mut verified_max: HashMap<String, u64> = HashMap::new();
 
         for event_b64 in events {
             let Ok(event_bytes) = base64_decode(event_b64) else {
@@ -612,9 +611,9 @@ impl ChatCore {
                 continue;
             };
             let version = kce.conversation_key_version.clone().unwrap_or_default();
-            let Ok(version_num) = version.parse::<u64>() else {
+            if version.parse::<u64>().is_err() {
                 continue;
-            };
+            }
 
             match signature_version(&parsed) {
                 Some(v) if v >= crate::signatures::CKEY_PLAINTEXT_SIGNATURE_VERSION => {}
@@ -640,60 +639,9 @@ impl ChatCore {
                 .is_verified()
             {
                 self.raise_key_change_signature_floor_for(&parsed);
-                let entry = verified_max.entry(conv_id.to_string()).or_insert(0);
-                *entry = (*entry).max(version_num);
-            }
-        }
-
-        {
-            let mut high_water = self
-                .conversation_key_high_water
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            for (conv_id, version_num) in &verified_max {
-                let entry = high_water.entry(conv_id.clone()).or_insert(0);
-                if version_num > entry {
-                    *entry = *version_num;
-                }
-            }
-        }
-
-        if self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-            // Cache only keys whose key change verified above, at the
-            // conversation's high-water version — never a merely adopted key,
-            // and never over a newer cached one.
-            let high_water = self
-                .conversation_key_high_water
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            let mut cache = self
-                .conversation_key_cache
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            // Re-check under the write lock: a concurrent set_cache_keys(false)
-            // clears the cache, and inserting after that clear would leave a
-            // populated cache while the feature is off.
-            if self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-                for (conv_id, version_num) in &verified_max {
-                    if high_water.get(conv_id) != Some(version_num) {
-                        continue;
-                    }
-                    let Some(key) = keys.get(Some(conv_id), &version_num.to_string()) else {
-                        continue;
-                    };
-                    match cache.get(conv_id) {
-                        Some(existing) if existing.version >= *version_num => {}
-                        _ => {
-                            cache.insert(
-                                conv_id.clone(),
-                                CachedConversationKey {
-                                    version: *version_num,
-                                    key: key.clone(),
-                                },
-                            );
-                        }
-                    }
-                }
+                // Only a key whose key change verified here is recorded and
+                // cached, never a merely adopted one.
+                self.record_verified_key(conv_id, &version, adopted);
             }
         }
 
@@ -1018,6 +966,12 @@ impl ChatCore {
     /// with an [`SdkError::InvalidInput`] that says so, and
     /// [`Self::decrypt_events`] leaves them out of `events` and records them
     /// in `errors`. The removal itself and its key change decrypt as usual.
+    ///
+    /// A key change that verifies is recorded as [`Self::decrypt_events`]
+    /// records it: its version is the conversation's newest verified one
+    /// unless a newer is known, and while the key cache is on its key is
+    /// cached. The key is the one the event holds for this identity, or the
+    /// one `params.conversation_keys` holds for the key change's version.
     pub fn decrypt_event(&self, params: &DecryptEventParams) -> Result<Event, SdkError> {
         self.decrypt_event_with(
             &params.event_b64,
@@ -1102,13 +1056,13 @@ impl ChatCore {
                 // verifies without extra caller code. The base64 of the live
                 // key is wiped on drop like the sign-path payloads.
                 let ckey_version = key_change.conversation_key_version.as_deref().unwrap_or("");
-                let ckey_b64 = conversation_keys
+                let ckey = conversation_keys
                     .get(ckey_version)
-                    .map(|k| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(k.encoded())))
-                    .or_else(|| {
-                        self.decrypt_key_change_ckey(key_change)
-                            .map(|k| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(k.encoded())))
-                    });
+                    .cloned()
+                    .or_else(|| self.decrypt_key_change_ckey(key_change));
+                let ckey_b64 = ckey
+                    .as_ref()
+                    .map(|k| zeroize::Zeroizing::new(STANDARD_NO_PAD.encode(k.encoded())));
                 let check = match self.check_sender_signature(
                     parsed,
                     detail,
@@ -1132,6 +1086,12 @@ impl ChatCore {
                 self.reject_if_unverified(&check, parsed, "KeyChange")?;
                 if verified {
                     self.raise_key_change_signature_floor_for(parsed);
+                    // As the batch path does for a key change that verifies:
+                    // its version becomes the conversation's newest verified
+                    // one unless a newer is known, and its key is cached.
+                    if let Some(key) = &ckey {
+                        self.record_verified_key_change(parsed, ckey_version, key);
+                    }
                 }
                 Event::KeyChange(KeyChangeEvent {
                     meta,

@@ -8,15 +8,15 @@ use crate::core::test_support::{frame, Party, SIGNING_KEY_VERSION};
 
 /// A sequence id past the cut-over, where a key change that does not verify
 /// has its key dropped.
-const ENFORCED_SEQUENCE: &str = "2100000000000000000";
+pub(super) const ENFORCED_SEQUENCE: &str = "2100000000000000000";
 /// A sequence id before the cut-over, where every decryptable key is kept.
 const UNENFORCED_SEQUENCE: &str = "100";
-const GROUP: &str = "g900";
+pub(super) const GROUP: &str = "g900";
 const OTHER_GROUP: &str = "g901";
 
 /// The key change `signer` makes in `conversation_id`, to a new key at
 /// `version` for `members`, as delivered at `sequence_id`, and that key.
-fn key_change(
+pub(super) fn key_change(
     signer: &Party,
     members: &[&Party],
     conversation_id: &str,
@@ -29,7 +29,7 @@ fn key_change(
 
 /// The entry a key change holds for `member`: the new key encrypted to the
 /// member's identity key.
-fn recipient(member: &Party) -> PublicKeyInput {
+pub(super) fn recipient(member: &Party) -> PublicKeyInput {
     PublicKeyInput::new(
         member.user_id.as_str(),
         member.entry.identity_public_key.as_str(),
@@ -81,7 +81,7 @@ fn key_change_for(
 
 /// The message `author` sends in `conversation_id` under `key` at
 /// `version`, as delivered.
-fn sent_message(
+pub(super) fn sent_message(
     author: &Party,
     conversation_id: &str,
     key: &XChatConversationKey,
