@@ -284,6 +284,8 @@ impl Chat {
     ///     A dict with:
     ///     - ``keys``: Dict mapping key version string to raw 32-byte conversation key (``bytes``)
     ///     - ``latest_version``: The highest key version; signatures are not checked
+    ///     - ``latest_versions``: Dict mapping each conversation id to its
+    ///       highest key version; signatures are not checked
     pub(crate) fn extract_conversation_keys(&self, events: Vec<String>) -> PyResult<Py<PyAny>> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);
@@ -303,6 +305,7 @@ impl Chat {
                 Some(v) => outer.set_item("latest_version", v)?,
                 None => outer.set_item("latest_version", py.None())?,
             }
+            outer.set_item("latest_versions", result.latest_versions)?;
 
             Ok(outer.into())
         })
@@ -317,20 +320,30 @@ impl Chat {
     ///
     /// Args:
     ///     params: A ``DecryptEventsParams``: the events, and the signing keys of
-    ///         all participants. The SDK matches keys by user_id and version
+    ///         all participants, the members who signed the batch's key
+    ///         changes included. The SDK matches keys by user_id and version
     ///         and verifies each key's identity binding.
     ///
     /// Returns:
     ///     A dict with:
     ///     - ``events``: List of ``{"event": dict, "original_b64": str}``, one
     ///       per event that decrypted, of every event type
-    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``;
-    ///       ``latest_version`` is the newest version whose key change
-    ///       verified, ``None`` until one verifies
+    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str,
+    ///       "latest_versions": dict}``; ``latest_versions`` maps each of the
+    ///       batch's conversations to the newest version whose key change
+    ///       verified, and ``latest_version`` is that version when one
+    ///       conversation has one: ``None`` until one verifies, or when
+    ///       several conversations do
     ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error
     ///       message, for each event left out of ``events``: one that failed,
     ///       or one decrypt drops, such as a member removal's title or
     ///       description re-encrypted under the new key
+    ///     - ``unverified_key_changes``: List of the key changes whose
+    ///       signature did not verify, each a dict with ``index``,
+    ///       ``reason`` (``"MissingSigningKey"``, ``"InvalidSignature"`` or
+    ///       ``"Unverifiable"``), ``key_dropped``, ``conversation_id``,
+    ///       ``conversation_key_version``, ``sender_id`` and
+    ///       ``public_key_version``
     pub(crate) fn decrypt_events(
         &self,
         py: Python<'_>,
@@ -368,6 +381,7 @@ impl Chat {
             Some(v) => conv_keys_dict.set_item("latest_version", v)?,
             None => conv_keys_dict.set_item("latest_version", py.None())?,
         }
+        conv_keys_dict.set_item("latest_versions", result.conversation_keys.latest_versions)?;
         outer.set_item("conversation_keys", conv_keys_dict)?;
 
         // Convert errors; keys are the stringified event indices.
@@ -376,6 +390,13 @@ impl Chat {
             errors_dict.set_item(idx.to_string(), err)?;
         }
         outer.set_item("errors", errors_dict)?;
+
+        let unverified_json =
+            serde_json::to_string(&result.unverified_key_changes).map_err(internal_err)?;
+        outer.set_item(
+            "unverified_key_changes",
+            json_module.call_method1("loads", (unverified_json,))?,
+        )?;
 
         Ok(outer.into())
     }

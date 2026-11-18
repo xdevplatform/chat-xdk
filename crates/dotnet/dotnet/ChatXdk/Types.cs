@@ -315,11 +315,24 @@ namespace ChatXdk
         public Dictionary<string, byte[]> Keys { get; init; } = new();
 
         /// <summary>
-        /// The version to encrypt with: from <see cref="Chat.DecryptEvents"/>, the newest version
-        /// whose key change verified (<see langword="null"/> until one verifies); from
-        /// <see cref="Chat.ExtractConversationKeys"/>, the batch's highest version.
+        /// The version to encrypt with. From <see cref="Chat.DecryptEvents"/>, the newest version
+        /// whose key change verified, when the batch's verified versions belong to one
+        /// conversation: <see langword="null"/> until a key change verifies, and
+        /// <see langword="null"/> for a batch whose conversations hold verified versions of more
+        /// than one, where a single version would name some other conversation's key (read
+        /// <see cref="LatestVersions"/>). From <see cref="Chat.ExtractConversationKeys"/>, the
+        /// highest version in the batch, whatever conversations it spans.
         /// </summary>
         public string? LatestVersion { get; init; }
+
+        /// <summary>
+        /// The version to encrypt with for each conversation of the batch, by the conversation id
+        /// its events carry. From <see cref="Chat.DecryptEvents"/>, the newest version whose key
+        /// change verified; a conversation without one has no entry. From
+        /// <see cref="Chat.ExtractConversationKeys"/>, each conversation's highest version in the
+        /// batch.
+        /// </summary>
+        public Dictionary<string, string> LatestVersions { get; init; } = new();
     }
 
     /// <summary>Width and height from <see cref="ChatXdkUtilities.DetectImageDimensions"/>.</summary>
@@ -342,6 +355,55 @@ namespace ChatXdk
         public string? OriginalB64 { get; init; }
     }
 
+    /// <summary>Why a key change's signature did not verify.</summary>
+    public enum UnverifiedKeyChangeReason
+    {
+        /// <summary>
+        /// None of the signing keys the call verified with is the sender's at the key version the
+        /// signature names: pass that user's public keys as signing keys and decrypt again.
+        /// </summary>
+        MissingSigningKey,
+        /// <summary>The signature does not verify against the sender's signing key.</summary>
+        InvalidSignature,
+        /// <summary>
+        /// The key change carries no signature, or one this SDK cannot check: an unsupported
+        /// signature version, or one below the first whose payload a recipient can rebuild.
+        /// </summary>
+        Unverifiable,
+    }
+
+    /// <summary>
+    /// A key change in a <see cref="Chat.DecryptEvents"/> batch whose key this identity
+    /// decrypted but whose signature did not verify.
+    /// </summary>
+    public sealed class UnverifiedKeyChange
+    {
+        /// <summary>Index of the key change in the batch.</summary>
+        public int Index { get; init; }
+
+        /// <summary>Why its signature did not verify.</summary>
+        public UnverifiedKeyChangeReason Reason { get; init; }
+
+        /// <summary>
+        /// Whether its key was left out of <see cref="ConversationKeyBundle.Keys"/>, so the
+        /// batch's messages under that key version did not decrypt. A key that was kept decrypts
+        /// messages but never becomes the version to encrypt with.
+        /// </summary>
+        public bool KeyDropped { get; init; }
+
+        /// <summary>The conversation the key change belongs to.</summary>
+        public string? ConversationId { get; init; }
+
+        /// <summary>The conversation key version the key change carries.</summary>
+        public string ConversationKeyVersion { get; init; } = "";
+
+        /// <summary>The user who signed the key change: the member who made it.</summary>
+        public string? SenderId { get; init; }
+
+        /// <summary>The version of that user's signing key the signature names.</summary>
+        public string? PublicKeyVersion { get; init; }
+    }
+
     /// <summary>Result of <see cref="Chat.DecryptEvents"/>.</summary>
     public sealed class DecryptEventsResult
     {
@@ -357,6 +419,14 @@ namespace ChatXdk
         /// removal's title or description re-encrypted under the new key.
         /// </summary>
         public Dictionary<string, string> Errors { get; init; } = new();
+
+        /// <summary>
+        /// The batch's key changes whose signature did not verify, in batch order, each with why
+        /// and whether its key was dropped. Empty when every key change this identity decrypted
+        /// verified.
+        /// </summary>
+        public IReadOnlyList<UnverifiedKeyChange> UnverifiedKeyChanges { get; init; } =
+            Array.Empty<UnverifiedKeyChange>();
     }
 
     /// <summary>

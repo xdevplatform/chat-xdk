@@ -97,13 +97,25 @@ type PublicKeyInput struct {
 }
 
 // ConversationKeyBundle holds decrypted conversation key material keyed by version.
-// Keys maps version string -> raw 32-byte conversation key. LatestVersion is
-// the version to encrypt with: from DecryptEvents, the newest version whose
-// key change verified (nil until one verifies); from ExtractConversationKeys,
-// the batch's highest version.
+// Keys maps version string -> raw 32-byte conversation key.
+//
+// LatestVersion is the version to encrypt with. From DecryptEvents it is the
+// newest version whose key change verified, when the batch's verified
+// versions belong to one conversation: nil until a key change verifies, and
+// nil for a batch whose conversations hold verified versions of more than
+// one, where a single version would name some other conversation's key (read
+// LatestVersions). From ExtractConversationKeys it is the highest version in
+// the batch, whatever conversations it spans.
+//
+// LatestVersions is the version to encrypt with for each conversation of the
+// batch, by the conversation id its events carry. From DecryptEvents it holds
+// the newest version whose key change verified; a conversation without one
+// has no entry. From ExtractConversationKeys it holds each conversation's
+// highest version in the batch.
 type ConversationKeyBundle struct {
-	Keys          map[string][]byte `json:"keys"`
-	LatestVersion *string           `json:"latest_version"`
+	Keys           map[string][]byte `json:"keys"`
+	LatestVersion  *string           `json:"latest_version"`
+	LatestVersions map[string]string `json:"latest_versions"`
 }
 
 // DecryptedEvent is one event DecryptEvents decrypted, of any event type.
@@ -114,14 +126,59 @@ type DecryptedEvent struct {
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
+// UnverifiedKeyChangeReason is why a key change's signature did not verify.
+type UnverifiedKeyChangeReason string
+
+const (
+	// UnverifiedKeyChangeMissingSigningKey: none of the signing keys the call
+	// verified with is the sender's at the key version the signature names.
+	// Pass that user's public keys as signing keys and decrypt again.
+	UnverifiedKeyChangeMissingSigningKey UnverifiedKeyChangeReason = "MissingSigningKey"
+	// UnverifiedKeyChangeInvalidSignature: the signature does not verify
+	// against the sender's signing key.
+	UnverifiedKeyChangeInvalidSignature UnverifiedKeyChangeReason = "InvalidSignature"
+	// UnverifiedKeyChangeUnverifiable: the key change carries no signature,
+	// or one this SDK cannot check: an unsupported signature version, or one
+	// below the first whose payload a recipient can rebuild.
+	UnverifiedKeyChangeUnverifiable UnverifiedKeyChangeReason = "Unverifiable"
+)
+
+// UnverifiedKeyChange is a key change in a DecryptEvents batch whose key this
+// identity decrypted but whose signature did not verify.
+type UnverifiedKeyChange struct {
+	// Index is the index of the key change in the batch.
+	Index int `json:"index"`
+	// Reason is why its signature did not verify.
+	Reason UnverifiedKeyChangeReason `json:"reason"`
+	// KeyDropped is whether its key was left out of ConversationKeys.Keys, so
+	// the batch's messages under that key version did not decrypt. A key that
+	// was kept decrypts messages but never becomes the version to encrypt
+	// with.
+	KeyDropped bool `json:"key_dropped"`
+	// ConversationID is the conversation the key change belongs to.
+	ConversationID *string `json:"conversation_id"`
+	// ConversationKeyVersion is the conversation key version the key change
+	// carries.
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	// SenderID is the user who signed the key change: the member who made it.
+	SenderID *string `json:"sender_id"`
+	// PublicKeyVersion is the version of that user's signing key the
+	// signature names.
+	PublicKeyVersion *string `json:"public_key_version"`
+}
+
 // DecryptEventsResult is the batch decrypt API. Errors maps the index of each
 // event left out of Events, as a string, to its error: one that failed, or one
 // decrypt drops, such as a member removal's title or description re-encrypted
-// under the new key.
+// under the new key. UnverifiedKeyChanges lists the batch's key changes whose
+// signature did not verify, in batch order, each with why and whether its key
+// was dropped; it is empty when every key change this identity decrypted
+// verified.
 type DecryptEventsResult struct {
-	Events           []DecryptedEvent      `json:"events"`
-	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
-	Errors           map[string]string     `json:"errors"`
+	Events               []DecryptedEvent      `json:"events"`
+	ConversationKeys     ConversationKeyBundle `json:"conversation_keys"`
+	Errors               map[string]string     `json:"errors"`
+	UnverifiedKeyChanges []UnverifiedKeyChange `json:"unverified_key_changes"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,

@@ -142,11 +142,23 @@ export interface ConversationKeyResult {
   /** Map of key version → raw conversation key bytes. */
   keys: ConversationKeyMap;
   /**
-   * The version to encrypt with: from decryptEvents, the newest version whose
-   * key change verified (null until one verifies); from
-   * extractConversationKeys, the batch's highest version.
+   * The version to encrypt with. From decryptEvents, the newest version whose
+   * key change verified, when the batch's verified versions belong to one
+   * conversation: null until a key change verifies, and null for a batch
+   * whose conversations hold verified versions of more than one, where a
+   * single version would name some other conversation's key (read
+   * `latestVersions`). From extractConversationKeys, the highest version in
+   * the batch, whatever conversations it spans.
    */
   latestVersion: string | null;
+  /**
+   * The version to encrypt with for each conversation of the batch, by the
+   * conversation id its events carry (`event.conversationId`). From
+   * decryptEvents, the newest version whose key change verified; a
+   * conversation without one has no entry. From extractConversationKeys,
+   * each conversation's highest version in the batch.
+   */
+  latestVersions: { [conversationId: string]: string };
 }
 
 /**
@@ -157,6 +169,45 @@ export interface DecryptedEvent {
   event: Event;
   /** Original base64 event string (for reference). */
   originalB64?: string;
+}
+
+/**
+ * Why a key change's signature did not verify.
+ *
+ * - `"missingSigningKey"`: none of the signing keys the call verified with is
+ *   the sender's at the key version the signature names. Pass that user's
+ *   public keys as signing keys and decrypt again.
+ * - `"invalidSignature"`: the signature does not verify against the sender's
+ *   signing key.
+ * - `"unverifiable"`: the key change carries no signature, or one this SDK
+ *   cannot check: an unsupported signature version, or one below the first
+ *   whose payload a recipient can rebuild.
+ */
+export type UnverifiedKeyChangeReason = "missingSigningKey" | "invalidSignature" | "unverifiable";
+
+/**
+ * A key change in a decryptEvents batch whose key this identity decrypted
+ * but whose signature did not verify.
+ */
+export interface UnverifiedKeyChange {
+  /** Index of the key change in the batch. */
+  index: number;
+  /** Why its signature did not verify. */
+  reason: UnverifiedKeyChangeReason;
+  /**
+   * Whether its key was left out of `conversationKeys.keys`, so the batch's
+   * messages under that key version did not decrypt. A key that was kept
+   * decrypts messages but never becomes the version to encrypt with.
+   */
+  keyDropped: boolean;
+  /** The conversation the key change belongs to. */
+  conversationId: string | null;
+  /** The conversation key version the key change carries. */
+  conversationKeyVersion: string;
+  /** The user who signed the key change: the member who made it. */
+  senderId: string | null;
+  /** The version of that user's signing key the signature names. */
+  publicKeyVersion: string | null;
 }
 
 /**
@@ -173,6 +224,12 @@ export interface DecryptEventsResult {
    * removal's title or description re-encrypted under the new key.
    */
   errors: { [index: string]: string };
+  /**
+   * The batch's key changes whose signature did not verify, in batch order,
+   * each with why and whether its key was dropped. Empty when every key
+   * change this identity decrypted verified.
+   */
+  unverifiedKeyChanges: UnverifiedKeyChange[];
 }
 
 /**
@@ -865,7 +922,12 @@ export interface DecryptEventsParams {
    * conversation keys the messages among them are decrypted with.
    */
   events: string[];
-  /** Signing keys for all participants; the keys stored via setSigningKeys are used when omitted or empty. */
+  /**
+   * Signing keys for all participants, the members who signed the batch's key
+   * changes included; the keys stored via setSigningKeys are used when
+   * omitted or empty. A key change whose signature does not verify is listed
+   * in the result's `unverifiedKeyChanges`.
+   */
   signingKeys?: SigningKeyEntry[] | null;
 }
 
@@ -1370,6 +1432,15 @@ interface ChatCrypto {
    * `verified: false`. A member removal's title and description,
    * re-encrypted under the new key, aren't changes: they land in `errors`
    * under either policy.
+   *
+   * The signing keys must include those of every member who signed a key
+   * change in the batch, whether or not that member sent a message in it.
+   * Under either policy, a recent key change whose signature does not verify
+   * has its key dropped, and every message under that key then lands in
+   * `errors`. `unverifiedKeyChanges` lists each such key change with why it
+   * did not verify and, when its signer's key was missing, the `senderId`
+   * and `publicKeyVersion` to fetch: add that user's public keys and decrypt
+   * again.
    */
   decryptEvents(params: DecryptEventsParams): DecryptEventsResult;
 

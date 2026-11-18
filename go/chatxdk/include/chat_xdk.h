@@ -443,7 +443,10 @@ struct FfiResult chat_xdk_encrypt_edit(const struct ChatHandle *handle, const ch
 
 /**
  * `events_json`: JSON array of base64-encoded event strings.
- * Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null}`.
+ * Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null,
+ * "latest_versions":{conversation_id: version,...}}`: `latest_version` is the
+ * highest key version in the batch and `latest_versions` each
+ * conversation's; signatures are not checked.
  */
 struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *handle,
                                                     const char *events_json);
@@ -455,10 +458,20 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * optional `signing_keys` (`[{"user_id","public_key_version","public_key",
  * "identity_public_key","identity_public_key_signature"},...]`); absent or
  * empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
+ * They must include the keys of every member who signed a key change in
+ * the batch.
  *
  * The result's `errors` maps the index of each event left out of `events`,
  * as a string, to its error: one that failed, or one decrypt drops, such as
  * a member removal's title or description re-encrypted under the new key.
+ * Its `conversation_keys` holds `keys`, `latest_version` and
+ * `latest_versions` (`{conversation_id: version}`, the newest verified key
+ * version of each conversation; `latest_version` is null when more than one
+ * conversation has one). Its `unverified_key_changes` lists each key change
+ * whose signature did not verify: `[{"index","reason","key_dropped",
+ * "conversation_id","conversation_key_version","sender_id",
+ * "public_key_version"},...]`, where `reason` is `MissingSigningKey`,
+ * `InvalidSignature` or `Unverifiable`.
  */
 struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle, const char *params_json);
 

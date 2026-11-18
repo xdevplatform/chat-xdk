@@ -23,6 +23,10 @@ pub(crate) fn json_conversation_key_bundle(
             None => serde_json::Value::Null,
         },
     );
+    o.insert(
+        "latest_versions".into(),
+        serde_json::to_value(&ckr.latest_versions)?,
+    );
     Ok(serde_json::Value::Object(o))
 }
 
@@ -52,11 +56,18 @@ pub(crate) fn json_decrypt_events_result(
         json_conversation_key_bundle(&r.conversation_keys)?,
     );
     root.insert("errors".into(), serde_json::Value::Object(errors));
+    root.insert(
+        "unverified_key_changes".into(),
+        serde_json::to_value(&r.unverified_key_changes)?,
+    );
     serde_json::to_string(&serde_json::Value::Object(root))
 }
 
 /// `events_json`: JSON array of base64-encoded event strings.
-/// Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null}`.
+/// Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null,
+/// "latest_versions":{conversation_id: version,...}}`: `latest_version` is the
+/// highest key version in the batch and `latest_versions` each
+/// conversation's; signatures are not checked.
 #[no_mangle]
 pub extern "C" fn chat_xdk_extract_conversation_keys(
     handle: *const ChatHandle,
@@ -93,10 +104,20 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// optional `signing_keys` (`[{"user_id","public_key_version","public_key",
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
+/// They must include the keys of every member who signed a key change in
+/// the batch.
 ///
 /// The result's `errors` maps the index of each event left out of `events`,
 /// as a string, to its error: one that failed, or one decrypt drops, such as
 /// a member removal's title or description re-encrypted under the new key.
+/// Its `conversation_keys` holds `keys`, `latest_version` and
+/// `latest_versions` (`{conversation_id: version}`, the newest verified key
+/// version of each conversation; `latest_version` is null when more than one
+/// conversation has one). Its `unverified_key_changes` lists each key change
+/// whose signature did not verify: `[{"index","reason","key_dropped",
+/// "conversation_id","conversation_key_version","sender_id",
+/// "public_key_version"},...]`, where `reason` is `MissingSigningKey`,
+/// `InvalidSignature` or `Unverifiable`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,

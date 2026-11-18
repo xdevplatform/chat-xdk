@@ -275,6 +275,15 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // under the default reject-unverified policy. A member removal's title and
 // description, re-encrypted under the new key, aren't changes: they land in
 // Errors under either policy.
+//
+// The signing keys must include those of every member who signed a key
+// change in the batch, whether or not that member sent a message in it.
+// Under either policy, a recent key change whose signature does not verify
+// has its key dropped, and every message under that key then lands in
+// Errors. The result's UnverifiedKeyChanges lists each such key change with
+// why it did not verify and, when its signer's key was missing, the SenderID
+// and PublicKeyVersion to fetch: add that user's public keys and decrypt
+// again.
 func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, error) {
 	defer runtime.KeepAlive(c)
 	params.Events = orEmpty(params.Events)

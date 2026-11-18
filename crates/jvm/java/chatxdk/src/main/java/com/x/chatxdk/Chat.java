@@ -546,6 +546,14 @@ public final class Chat implements AutoCloseable {
      * failures are recorded in {@link DecryptEventsResult#errors} — this method never throws per-event.
      * A member removal's title and description, re-encrypted under the new key, aren't changes:
      * they are recorded there too.
+     *
+     * <p>The signing keys must include those of every member who signed a key change in the batch,
+     * whether or not that member sent a message in it: a recent key change whose signature does not
+     * verify has its key dropped, and every message under that key then fails.
+     * {@link DecryptEventsResult#unverifiedKeyChanges} lists each such key change with why it did
+     * not verify and, when its signer's key was missing, the {@link UnverifiedKeyChange#senderId}
+     * and {@link UnverifiedKeyChange#publicKeyVersion} to fetch: add that user's public keys and
+     * decrypt again.
      */
     public DecryptEventsResult decryptEvents(DecryptEventsParams parameters) throws Exception {
         throwIfDisposed();
@@ -579,6 +587,14 @@ public final class Chat implements AutoCloseable {
                 errNode.fields().forEachRemaining(e -> errors.put(e.getKey(), e.getValue().asText("")));
             }
             out.errors = errors;
+            List<UnverifiedKeyChange> unverifiedKeyChanges = new ArrayList<>();
+            JsonNode unverified = root.get("unverified_key_changes");
+            if (unverified != null && unverified.isArray()) {
+                for (JsonNode el : unverified) {
+                    unverifiedKeyChanges.add(ChatJson.MAPPER.treeToValue(el, UnverifiedKeyChange.class));
+                }
+            }
+            out.unverifiedKeyChanges = unverifiedKeyChanges;
             return out;
         } finally {
             Reference.reachabilityFence(this);
@@ -1199,6 +1215,12 @@ public final class Chat implements AutoCloseable {
         if (root.hasNonNull("latest_version")) {
             b.latestVersion = root.get("latest_version").asText();
         }
+        Map<String, String> latestVersions = new LinkedHashMap<>();
+        JsonNode latestVersionsEl = root.get("latest_versions");
+        if (latestVersionsEl != null && latestVersionsEl.isObject()) {
+            latestVersionsEl.fields().forEachRemaining(e -> latestVersions.put(e.getKey(), e.getValue().asText()));
+        }
+        b.latestVersions = latestVersions;
         return b;
     }
 

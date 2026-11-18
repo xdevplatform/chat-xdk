@@ -330,11 +330,23 @@ public final class Types {
         public Map<String, byte[]> keys = Collections.emptyMap();
 
         /**
-         * The version to encrypt with: from {@link Chat#decryptEvents}, the newest version whose
-         * key change verified ({@code null} until one verifies); from
-         * {@link Chat#extractConversationKeys}, the batch's highest version.
+         * The version to encrypt with. From {@link Chat#decryptEvents}, the newest version whose
+         * key change verified, when the batch's verified versions belong to one conversation:
+         * {@code null} until a key change verifies, and {@code null} for a batch whose
+         * conversations hold verified versions of more than one, where a single version would
+         * name some other conversation's key (read {@link #latestVersions}). From
+         * {@link Chat#extractConversationKeys}, the highest version in the batch, whatever
+         * conversations it spans.
          */
         public String latestVersion;
+
+        /**
+         * The version to encrypt with for each conversation of the batch, by the conversation id
+         * its events carry. From {@link Chat#decryptEvents}, the newest version whose key change
+         * verified; a conversation without one has no entry. From
+         * {@link Chat#extractConversationKeys}, each conversation's highest version in the batch.
+         */
+        public Map<String, String> latestVersions = Collections.emptyMap();
     }
 
     /** Width and height from {@link ChatXdkUtilities#detectImageDimensions}. */
@@ -359,6 +371,60 @@ public final class Types {
         public String originalB64;
     }
 
+    /** Why a key change's signature did not verify. */
+    public enum UnverifiedKeyChangeReason {
+        /**
+         * None of the signing keys the call verified with is the sender's at the key version the
+         * signature names: pass that user's public keys as signing keys and decrypt again.
+         */
+        MissingSigningKey,
+        /** The signature does not verify against the sender's signing key. */
+        InvalidSignature,
+        /**
+         * The key change carries no signature, or one this SDK cannot check: an unsupported
+         * signature version, or one below the first whose payload a recipient can rebuild.
+         */
+        Unverifiable
+    }
+
+    /**
+     * A key change in a {@link Chat#decryptEvents} batch whose key this identity decrypted but
+     * whose signature did not verify.
+     */
+    public static final class UnverifiedKeyChange {
+        /** Index of the key change in the batch. */
+        @JsonProperty("index")
+        public int index;
+
+        /** Why its signature did not verify. */
+        @JsonProperty("reason")
+        public UnverifiedKeyChangeReason reason;
+
+        /**
+         * Whether its key was left out of {@link ConversationKeyBundle#keys}, so the batch's
+         * messages under that key version did not decrypt. A key that was kept decrypts messages
+         * but never becomes the version to encrypt with.
+         */
+        @JsonProperty("key_dropped")
+        public boolean keyDropped;
+
+        /** The conversation the key change belongs to. */
+        @JsonProperty("conversation_id")
+        public String conversationId;
+
+        /** The conversation key version the key change carries. */
+        @JsonProperty("conversation_key_version")
+        public String conversationKeyVersion = "";
+
+        /** The user who signed the key change: the member who made it. */
+        @JsonProperty("sender_id")
+        public String senderId;
+
+        /** The version of that user's signing key the signature names. */
+        @JsonProperty("public_key_version")
+        public String publicKeyVersion;
+    }
+
     /** Result of {@link Chat#decryptEvents}. */
     public static final class DecryptEventsResult {
         /** The events that decrypted, in batch order, of every event type. */
@@ -373,6 +439,13 @@ public final class Types {
          * title or description re-encrypted under the new key.
          */
         public Map<String, String> errors = Collections.emptyMap();
+
+        /**
+         * The batch's key changes whose signature did not verify, in batch order, each with why
+         * and whether its key was dropped. Empty when every key change this identity decrypted
+         * verified.
+         */
+        public List<UnverifiedKeyChange> unverifiedKeyChanges = Collections.emptyList();
     }
 
     /**

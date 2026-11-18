@@ -446,6 +446,72 @@ fn a_group_removal_drops_the_title_and_description_reencryptions() {
     chat_xdk_free(chat);
 }
 
+#[test]
+fn decrypt_events_names_unverified_key_changes_and_each_conversations_version() {
+    let v: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/sdk_vectors.json")).unwrap();
+    let text = |key: &str| v[key].as_str().unwrap().to_string();
+    let mut chat = std::ptr::null_mut();
+    data(chat_xdk_new(std::ptr::null(), &mut chat));
+    let keys = BASE64.decode(text("private_keys_concat_b64")).unwrap();
+    let import = c(&serde_json::json!({
+        "signing_key_version": text("event_recipient_key_version"),
+    })
+    .to_string());
+    data(chat_xdk_import_keys(
+        chat,
+        keys.as_ptr(),
+        keys.len(),
+        import.as_ptr(),
+    ));
+    let flow = v["event_group_removal_flow_b64"].as_array().unwrap();
+    let decrypt = |signing_keys: serde_json::Value| -> serde_json::Value {
+        let params =
+            c(&serde_json::json!({ "events": flow, "signing_keys": signing_keys }).to_string());
+        serde_json::from_str(&data(chat_xdk_decrypt_events(chat, params.as_ptr())).unwrap())
+            .unwrap()
+    };
+    let group = text("event_group_id");
+    let version = text("event_group_removal_conversation_key_version");
+
+    // Without its signer's keys the flow's key change, its fourth event, does
+    // not verify. It is sequenced before the cut-over, so its key is kept.
+    let unverified = decrypt(serde_json::json!([]));
+    assert_eq!(
+        unverified["unverified_key_changes"],
+        serde_json::json!([{
+            "index": 3,
+            "reason": "MissingSigningKey",
+            "key_dropped": false,
+            "conversation_id": group,
+            "conversation_key_version": version,
+            "sender_id": text("event_sender_id"),
+            "public_key_version": text("event_signing_key_version"),
+        }])
+    );
+    let conversation_keys = &unverified["conversation_keys"];
+    assert!(conversation_keys["keys"].get(&version).is_some());
+    assert_eq!(conversation_keys["latest_version"], serde_json::Value::Null);
+    assert_eq!(conversation_keys["latest_versions"], serde_json::json!({}));
+
+    let verified = decrypt(serde_json::json!([{
+        "user_id": text("event_sender_id"),
+        "public_key_version": text("event_signing_key_version"),
+        "public_key": text("signing_public_b64"),
+        "identity_public_key": text("identity_public_b64"),
+        "identity_public_key_signature": text("identity_public_key_signature_b64"),
+    }]));
+    assert_eq!(verified["unverified_key_changes"], serde_json::json!([]));
+    assert_eq!(verified["conversation_keys"]["latest_version"], version);
+    let mut latest_versions = serde_json::Map::new();
+    latest_versions.insert(group, version.into());
+    assert_eq!(
+        verified["conversation_keys"]["latest_versions"],
+        serde_json::Value::Object(latest_versions)
+    );
+    chat_xdk_free(chat);
+}
+
 #[cfg(feature = "juicebox")]
 #[test]
 fn an_empty_juicebox_config_fails_with_the_no_config_error() {

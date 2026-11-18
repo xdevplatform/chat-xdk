@@ -124,11 +124,21 @@ class PublicKeyInput(TypedDict):
     public_key_version: str
 
 class ConversationKeyResult(TypedDict):
-    """Conversation keys by version, and the version to encrypt with: the
-    newest key change whose signature verified, or ``None``."""
+    """Conversation keys by version, and the version to encrypt with.
+
+    From ``decrypt_events``, ``latest_versions`` maps each conversation of
+    the batch, by the conversation id its events carry, to the newest version
+    whose key change verified, and ``latest_version`` is that version when
+    one conversation has one: ``None`` until a key change verifies, and
+    ``None`` when several conversations have one, where a single version
+    would name some other conversation's key. From
+    ``extract_conversation_keys``, signatures are not checked:
+    ``latest_version`` is the batch's highest version, whatever conversations
+    it spans, and ``latest_versions`` holds each conversation's highest."""
 
     keys: dict[str, bytes]
     latest_version: Optional[str]
+    latest_versions: dict[str, str]
 
 class DecryptedEvent(TypedDict, total=False):
     """One event of a ``decrypt_events`` batch: the decrypted ``event`` and,
@@ -137,15 +147,41 @@ class DecryptedEvent(TypedDict, total=False):
     event: dict[str, Any]
     original_b64: str
 
+class UnverifiedKeyChange(TypedDict):
+    """A key change in a ``decrypt_events`` batch whose key this identity
+    decrypted but whose signature did not verify.
+
+    ``reason`` is ``"MissingSigningKey"`` when none of the signing keys the
+    call verified with is the sender's at the key version the signature names
+    (pass the public keys of ``sender_id`` as signing keys and decrypt
+    again), ``"InvalidSignature"`` when the signature does not verify against
+    the sender's signing key, and ``"Unverifiable"`` when the key change
+    carries no signature or one this SDK cannot check. ``key_dropped`` says
+    whether its key was left out of ``conversation_keys["keys"]``, so the
+    batch's messages under that key version did not decrypt; a key that was
+    kept decrypts messages but never becomes the version to encrypt with.
+    """
+
+    index: int
+    reason: Literal["MissingSigningKey", "InvalidSignature", "Unverifiable"]
+    key_dropped: bool
+    conversation_id: Optional[str]
+    conversation_key_version: str
+    sender_id: Optional[str]
+    public_key_version: Optional[str]
+
 class DecryptEventsResult(TypedDict):
     """What ``decrypt_events`` returns. ``errors`` maps the index of each
     event left out of ``events``, as a string, to its error: one that
     failed, or one decrypt drops, such as a member removal's title or
-    description re-encrypted under the new key."""
+    description re-encrypted under the new key. ``unverified_key_changes``
+    lists the batch's key changes whose signature did not verify, in batch
+    order."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult
     errors: dict[str, str]
+    unverified_key_changes: list[UnverifiedKeyChange]
 
 class MessageEventSignature(TypedDict):
     """The signature of an action, as requests carry it."""
