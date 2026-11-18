@@ -1014,19 +1014,33 @@ and `decrypt_event` fall back when its key map is empty. Its guardrails:
   when sequenced before late June 2026 (`sequence_id` below
   `2070276095283454002`) or signed below signature version 6, so stored
   history stays readable; any other key change that does not verify has its
-  key dropped. `decrypt_events` lists either kind in
+  key dropped. `decrypt_events` reports either kind in
   `unverified_key_changes`, with why it did not verify: its signer's signing
-  key was not among the keys given, its signature is invalid, or it carries
-  no signature the SDK can check.
+  key was not among the keys given, that key was given and rejected, its
+  signature is invalid, or it carries no signature the SDK can check.
 - The cached version follows the per-conversation monotonic high-water mark:
   a replayed older key change, even validly signed, never displaces a newer
   cached key, so encryption cannot be downgraded to a stale key.
+- Keys are kept apart by conversation. A key change is verified against the
+  key its own conversation holds at its version, and a message is decrypted
+  with its own conversation's key, so two conversations whose keys share a
+  version number do not affect each other. A conversation is identified by
+  the id its events carry, which every signature covers: a group's `g…` id,
+  and a one-to-one's two user ids ordered numerically and colon-separated.
+  The SDK reads a one-to-one id written in the other order, or with a hyphen,
+  as the same conversation. In a batch result, `keys_by_conversation` and
+  `latest_versions` are keyed by that id; `keys` and `latest_version` leave
+  it out, so `keys` omits a version that two conversations of the batch both
+  use, and `latest_version` is null for a batch of more than one
+  conversation.
 - Cached keys are held in zeroize-on-drop containers, redacted from `Debug`
   output, and cleared when the cache is disabled.
 - The signing-key store (`set_signing_keys`) is populated only by that
   explicit call — verification never trusts a key carried inside an event —
   and the per-sender filtering plus identity-binding checks run against the
-  stored entries exactly as they do for caller-passed keys.
+  stored entries exactly as they do for caller-passed keys. A signing key
+  whose identity binding does not verify is left out of verification;
+  `decrypt_events` reports it in `rejected_signing_keys`.
 
 ### Known Limitations
 

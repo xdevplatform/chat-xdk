@@ -943,10 +943,12 @@ included, before you decrypt. It's `None` until a key change verifies: a key
 change the SDK can't verify never becomes the version you encrypt with, and
 one sequenced since late June 2026 also has its key left out of
 `conversation_keys.keys`, so the messages under it don't decrypt;
-`result.unverified_key_changes` lists each such key change and the signing
-key it needs. A batch that spans conversations reports each one's version in
-`conversation_keys.latest_versions`, and `latest_version` is `None` when
-more than one has a verified version. Where 0.5.x returned the batch's
+`result.unverified_key_changes` holds each such key change, by its index in
+the batch, with the signing key it needs. A batch whose events belong to more
+than one conversation reports each one's version in
+`conversation_keys.latest_versions` and each one's keys in
+`conversation_keys.keys_by_conversation`, and its `latest_version` is `None`.
+Where 0.5.x returned the batch's
 highest version, 0.7.x can return `None`: fetch the missing signing keys or
 the conversation's key-change events and decrypt again, rather than
 encrypting under the highest key in `keys`:

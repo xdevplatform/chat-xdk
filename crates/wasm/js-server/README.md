@@ -92,14 +92,15 @@ group's key changes are signed by whoever created the group, changed its
 members or rotated its key, and a recent key change that does not verify has
 its key dropped: every message under it then lands in `errors`.
 
-`decryptEvents` lists each key change whose signature did not verify in
-`unverifiedKeyChanges`, with the `senderId` and `publicKeyVersion` of the
-signing key it needs. Fetch that member's public keys from
-`GET /2/users/{id}/public_keys` and decrypt again:
+`decryptEvents` reports each key change whose signature did not verify in
+`unverifiedKeyChanges`, keyed by the key change's index in the batch as
+`errors` is, with the `senderId` and `publicKeyVersion` of the signing key it
+needs. Fetch that member's public keys from `GET /2/users/{id}/public_keys`
+and decrypt again:
 
 ```typescript
 let result = chat.decryptEvents({ events });
-const missing = result.unverifiedKeyChanges
+const missing = Object.values(result.unverifiedKeyChanges)
   .filter((change) => change.reason === "missingSigningKey")
   .map((change) => change.senderId);
 if (missing.length > 0) {
@@ -109,10 +110,16 @@ if (missing.length > 0) {
 }
 ```
 
-The version to encrypt a conversation's messages with is
-`result.conversationKeys.latestVersions[conversationId]`.
-`conversationKeys.latestVersion` is the same value for a batch of one
-conversation, and `null` for a batch that spans several. See
+Two more maps report what else the batch could not use:
+`undecryptableKeyChanges`, the key changes whose key this chat could not
+decrypt (by event index), and `rejectedSigningKeys`, the signing keys left out
+because their identity binding does not verify (by signing key index).
+
+The keys and the version to encrypt with are reported per conversation, by
+the conversation id events carry: `result.conversationKeys.keysByConversation`
+and `result.conversationKeys.latestVersions`. `conversationKeys.keys` and
+`conversationKeys.latestVersion` hold the same for a batch of one
+conversation; `latestVersion` is `null` for a batch of more than one. See
 [`docs/API.md`](../../../docs/API.md#signing-keys-for-key-changes).
 
 ## API

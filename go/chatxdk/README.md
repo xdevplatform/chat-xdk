@@ -71,13 +71,20 @@ func main() {
     }
 
     // A key change verifies with the signing keys of the member who made it.
-    // One that did not verify is listed here; when its key was dropped, the
-    // messages under it are in batch.Errors. For
+    // One that did not verify is here, by its index in the batch; when its
+    // key was dropped, the messages under it are in batch.Errors. For
     // UnverifiedKeyChangeMissingSigningKey, add the public keys of
     // change.SenderID (GET /2/users/{id}/public_keys) and decrypt again.
-    for _, change := range batch.UnverifiedKeyChanges {
-        fmt.Println(change.Index, change.Reason, change.KeyDropped)
+    for index, change := range batch.UnverifiedKeyChanges {
+        fmt.Println(index, change.Reason, change.KeyDropped)
     }
+    // Key changes whose key this chat could not decrypt, and signing keys
+    // left out because their identity binding does not verify, are reported
+    // the same way: batch.UndecryptableKeyChanges, batch.RejectedSigningKeys.
+
+    // The version to encrypt with: for a batch of one conversation,
+    // batch.ConversationKeys.LatestVersion; for any batch,
+    // batch.ConversationKeys.LatestVersions[conversationID].
 
     // Single webhook: the empty key map and unset signing keys resolve from
     // the session stores
