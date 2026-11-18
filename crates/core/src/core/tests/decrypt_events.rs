@@ -325,28 +325,28 @@ fn ckey_sig_v6_enforcement_gates_adoption_by_sequence_number() {
     assert_eq!(result.conversation_keys.latest_version, None);
     assert_eq!(result.unverified_key_changes.len(), 1);
     assert_eq!(
-        result.unverified_key_changes[0].reason,
+        result.unverified_key_changes[&0].reason,
         UnverifiedKeyChangeReason::InvalidSignature
     );
-    assert!(!result.unverified_key_changes[0].key_dropped);
+    assert!(!result.unverified_key_changes[&0].key_dropped);
 
     // Enforce from sequence 0: a valid signature is kept.
     let good = build(&core, "100", false);
-    let mut kr = core.extract_conversation_keys(&[&good]);
-    core.enforce_ckey_signatures(&[&good], &signing_keys, &mut kr, 0);
-    assert!(kr.keys.contains_key("1001"));
+    let mut keys = core.extract_batch_keys(&[&good]).keys;
+    core.enforce_ckey_signatures(&[&good], &signing_keys, &mut keys, 0);
+    assert!(keys.get(Some("conv-1"), "1001").is_some());
 
     // Enforce from sequence 0: a bad signature is dropped, not adopted.
     let bad = build(&core, "100", true);
-    let mut kr = core.extract_conversation_keys(&[&bad]);
-    core.enforce_ckey_signatures(&[&bad], &signing_keys, &mut kr, 0);
-    assert!(!kr.keys.contains_key("1001"));
+    let mut keys = core.extract_batch_keys(&[&bad]).keys;
+    core.enforce_ckey_signatures(&[&bad], &signing_keys, &mut keys, 0);
+    assert!(keys.get(Some("conv-1"), "1001").is_none());
 
     // Threshold above the event sequence: the bad signature is kept.
     let bad = build(&core, "100", true);
-    let mut kr = core.extract_conversation_keys(&[&bad]);
-    core.enforce_ckey_signatures(&[&bad], &signing_keys, &mut kr, 200);
-    assert!(kr.keys.contains_key("1001"));
+    let mut keys = core.extract_batch_keys(&[&bad]).keys;
+    core.enforce_ckey_signatures(&[&bad], &signing_keys, &mut keys, 200);
+    assert!(keys.get(Some("conv-1"), "1001").is_some());
 }
 
 #[test]

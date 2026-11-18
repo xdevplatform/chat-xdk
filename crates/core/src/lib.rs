@@ -254,6 +254,7 @@ pub mod js {
         JsQuickReply,
         JsRateLimitTier,
         JsReadReceiptEvent,
+        JsRejectedSigningKey,
         JsReplyPreviewValidation,
         // Send/receive types
         JsScreenCaptureChange,
@@ -263,6 +264,8 @@ pub mod js {
         JsSignatureInfo,
         JsSigningKeyEntry,
         JsTypingEvent,
+        JsUndecryptableKeyChange,
+        JsUndecryptableKeyChangeReason,
         JsUnifiedCardAttachmentInfo,
         JsUnknownEvent,
         JsUnverifiedKeyChange,

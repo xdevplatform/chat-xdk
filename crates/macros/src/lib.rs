@@ -33,6 +33,8 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident};
 ///
 /// - `#[js_camel(wrap)]` on a field: The field's type also has a `Js*` wrapper.
 ///   The generated code will use the wrapped type and call `.into()` for conversion.
+///   The type may sit inside `Option`, `Vec` or `Box`, or be the value type of
+///   a `HashMap`, whose key type is kept.
 ///
 /// # Example
 ///
@@ -76,6 +78,7 @@ enum WrapperKind {
     Box,
     Vec,
     Option,
+    Map,
 }
 
 fn generate_struct(
@@ -376,7 +379,8 @@ fn has_wrap_attr(attrs: &[syn::Attribute]) -> bool {
 }
 
 /// Transform a type to its Js* equivalent, returning the JS type and wrapper chain
-/// e.g., `EventMeta` -> `JsEventMeta`, `Option<Vec<Message>>` -> `Option<Vec<JsMessage>>`
+/// e.g., `EventMeta` -> `JsEventMeta`, `Option<Vec<Message>>` -> `Option<Vec<JsMessage>>`,
+/// `HashMap<usize, Message>` -> `HashMap<usize, JsMessage>`
 fn transform_type_to_js(ty: &syn::Type) -> (proc_macro2::TokenStream, Vec<WrapperKind>) {
     transform_type_to_js_recursive(ty, Vec::new())
 }
@@ -388,6 +392,31 @@ fn transform_type_to_js_recursive(
     match ty {
         syn::Type::Path(type_path) => {
             let segments = &type_path.path.segments;
+
+            // A `HashMap`, however its path is written, keeps its key type
+            // and wraps its values.
+            let map_args = segments
+                .last()
+                .filter(|last| last.ident == "HashMap")
+                .and_then(|last| match &last.arguments {
+                    syn::PathArguments::AngleBracketed(args) => Some(args),
+                    _ => None,
+                });
+            if let Some(args) = map_args {
+                let mut types = args.args.iter().filter_map(|arg| match arg {
+                    syn::GenericArgument::Type(ty) => Some(ty),
+                    _ => None,
+                });
+                if let (Some(key_ty), Some(value_ty)) = (types.next(), types.next()) {
+                    chain.push(WrapperKind::Map);
+                    let (value_js, chain) = transform_type_to_js_recursive(value_ty, chain);
+                    return (
+                        quote! { std::collections::HashMap<#key_ty, #value_js> },
+                        chain,
+                    );
+                }
+            }
+
             if segments.len() == 1 {
                 let seg = &segments[0];
                 let ident = &seg.ident;
@@ -436,6 +465,7 @@ fn build_conversion_expr(chain: &[WrapperKind]) -> proc_macro2::TokenStream {
             WrapperKind::Box => quote! { Box::new((*x).into()) },
             WrapperKind::Vec => quote! { x.into_iter().map(|x| #expr).collect() },
             WrapperKind::Option => quote! { x.map(|x| #expr) },
+            WrapperKind::Map => quote! { x.into_iter().map(|(k, x)| (k, #expr)).collect() },
         };
     }
 

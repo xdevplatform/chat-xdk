@@ -355,7 +355,7 @@ impl ChatCore {
             .conversation_key_cache
             .read()
             .unwrap_or_else(|e| e.into_inner());
-        let cached = cache.get(conversation_id)?;
+        let cached = cache.get(canonical_event_conversation_id(conversation_id).as_ref())?;
         (cached.version.to_string() == version).then(|| cached.key.clone())
     }
 
@@ -586,7 +586,8 @@ impl ChatCore {
     /// When `reject_unverified` is enabled, an event of a type that carries
     /// a signature is rejected unless its signature verified. The error says
     /// what kept it from verifying: no signature, no signing key for its
-    /// sender, a payload that cannot be rebuilt, or an invalid signature.
+    /// sender, a signing key that was rejected, a payload that cannot be
+    /// rebuilt, or an invalid signature.
     fn reject_if_unverified(
         &self,
         check: &SignatureCheck,
@@ -608,6 +609,14 @@ impl ChatCore {
                 "{event_label} signature could not be verified: {}; pass that user's public \
                  keys as signing keys",
                 missing_signing_key(event.sender_id.as_deref(), signature_key_version(event))
+            ),
+            SignatureCheck::RejectedSigningKey => format!(
+                "{event_label} signature could not be verified: {}",
+                rejected_signing_key(event.sender_id.as_deref(), signature_key_version(event))
+            ),
+            SignatureCheck::NoConversationKey => format!(
+                "{event_label} signature could not be verified: it signs the conversation \
+                 key, which this chat could not decrypt from the event"
             ),
             SignatureCheck::NoPayload => format!(
                 "{event_label} signature could not be verified: its signed payload cannot be \
@@ -777,6 +786,12 @@ pub(crate) enum SignatureCheck {
     /// None of the signing keys given is the sender's at the key version
     /// the signature names.
     MissingSigningKey,
+    /// The sender's signing key at the key version the signature names was
+    /// given, and left out because its identity binding does not verify.
+    RejectedSigningKey,
+    /// The signature covers the conversation key a key change carries, and
+    /// this identity could not decrypt that key from the event.
+    NoConversationKey,
     /// The signed payload cannot be rebuilt from the event.
     NoPayload,
     /// The signature does not verify against the sender's signing key: the
@@ -801,6 +816,30 @@ pub(crate) fn missing_signing_key(
         sender_id.unwrap_or("<none>"),
         public_key_version.unwrap_or("<none>")
     )
+}
+
+/// How an error names the signing key a signature was left unverified for
+/// want of, when that key was given and rejected: its sender, and the
+/// version of the sender's key the signature names.
+pub(crate) fn rejected_signing_key(
+    sender_id: Option<&str>,
+    public_key_version: Option<&str>,
+) -> String {
+    format!(
+        "the signing key given for sender {} at public_key_version {} was rejected: its \
+         identity binding does not verify",
+        sender_id.unwrap_or("<none>"),
+        public_key_version.unwrap_or("<none>")
+    )
+}
+
+/// The id a conversation's keys and key versions are filed under: the id an
+/// event carries, with a one-to-one's two user ids ordered numerically and
+/// colon-separated whichever way the event writes them. Events carry that
+/// form already; normalizing keeps one conversation under one id if an event
+/// ever writes the pair another way.
+pub(crate) fn canonical_event_conversation_id(conversation_id: &str) -> std::borrow::Cow<'_, str> {
+    crate::pipeline::canonical_conversation_id(conversation_id, "")
 }
 
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {
