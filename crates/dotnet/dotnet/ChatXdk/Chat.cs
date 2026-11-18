@@ -182,16 +182,24 @@ namespace ChatXdk
             return buf; // buf[len] is already 0
         }
 
-        /// <summary>
-        /// Parse <c>{"keys":{...},"latest_version":...,"latest_versions":{...}}</c> from
-        /// extract/decrypt_events JSON.
-        /// </summary>
-        private static ConversationKeyBundle ParseConversationKeyBundle(JsonElement root)
+        /// <summary>Parse a key map, <c>{ "version": "base64", ... }</c>.</summary>
+        private static Dictionary<string, byte[]> ParseKeyMap(JsonElement keysEl)
         {
-            var keysEl = root.GetProperty("keys");
             var keys = new Dictionary<string, byte[]>();
             foreach (var prop in keysEl.EnumerateObject())
                 keys[prop.Name] = Convert.FromBase64String(prop.Value.GetString()!);
+            return keys;
+        }
+
+        /// <summary>
+        /// Parse <c>{"keys":{...},"keys_by_conversation":{...},"latest_version":...,
+        /// "latest_versions":{...}}</c> from extract/decrypt_events JSON.
+        /// </summary>
+        private static ConversationKeyBundle ParseConversationKeyBundle(JsonElement root)
+        {
+            var keysByConversation = new Dictionary<string, Dictionary<string, byte[]>>();
+            foreach (var prop in root.GetProperty("keys_by_conversation").EnumerateObject())
+                keysByConversation[prop.Name] = ParseKeyMap(prop.Value);
 
             string? latest = null;
             if (root.TryGetProperty("latest_version", out var lv) && lv.ValueKind == JsonValueKind.String)
@@ -201,7 +209,13 @@ namespace ChatXdk
             foreach (var prop in root.GetProperty("latest_versions").EnumerateObject())
                 latestVersions[prop.Name] = prop.Value.GetString()!;
 
-            return new ConversationKeyBundle { Keys = keys, LatestVersion = latest, LatestVersions = latestVersions };
+            return new ConversationKeyBundle
+            {
+                Keys = ParseKeyMap(root.GetProperty("keys")),
+                KeysByConversation = keysByConversation,
+                LatestVersion = latest,
+                LatestVersions = latestVersions,
+            };
         }
 
         // State
@@ -515,7 +529,10 @@ namespace ChatXdk
         /// Pass only <c>KeyChange</c> events — other event types are ignored.
         /// </param>
         /// <returns>
-        /// Decrypted keys and <see cref="ConversationKeyBundle.LatestVersion"/>.
+        /// Decrypted keys and <see cref="ConversationKeyBundle.LatestVersion"/>; signatures are
+        /// not checked. <see cref="ConversationKeyBundle.LatestVersion"/> is the batch's highest
+        /// key version when every event belongs to one conversation, and null when they belong
+        /// to more than one: read <see cref="ConversationKeyBundle.LatestVersions"/>.
         /// Pass <see cref="ConversationKeyBundle.Keys"/> (or the whole bundle) to <see cref="DecryptEvent"/>.
         /// </returns>
         public ConversationKeyBundle ExtractConversationKeys(IEnumerable<string> events)
@@ -584,11 +601,19 @@ namespace ChatXdk
         /// The signing keys must include those of every member who signed a key change in the
         /// batch, whether or not that member sent a message in it: a recent key change whose
         /// signature does not verify has its key dropped, and every message under that key then
-        /// fails. <see cref="DecryptEventsResult.UnverifiedKeyChanges"/> lists each such key
+        /// fails. <see cref="DecryptEventsResult.UnverifiedKeyChanges"/> holds each such key
         /// change with why it did not verify and, when its signer's key was missing, the
         /// <see cref="UnverifiedKeyChange.SenderId"/> and
         /// <see cref="UnverifiedKeyChange.PublicKeyVersion"/> to fetch: add that user's public
         /// keys and decrypt again.
+        /// <see cref="DecryptEventsResult.UndecryptableKeyChanges"/> holds each key change whose
+        /// key this chat could not decrypt, and
+        /// <see cref="DecryptEventsResult.RejectedSigningKeys"/> each signing key left out
+        /// because its identity binding does not verify.
+        /// For a batch whose events belong to more than one conversation, read
+        /// <see cref="ConversationKeyBundle.KeysByConversation"/> and
+        /// <see cref="ConversationKeyBundle.LatestVersions"/> by conversation id:
+        /// <see cref="ConversationKeyBundle.LatestVersion"/> is null for such a batch.
         /// </summary>
         public DecryptEventsResult DecryptEvents(DecryptEventsParams parameters)
         {
@@ -628,19 +653,43 @@ namespace ChatXdk
             foreach (var prop in root.GetProperty("errors").EnumerateObject())
                 errors[prop.Name] = prop.Value.GetString() ?? "";
 
-            var unverifiedKeyChanges = new List<UnverifiedKeyChange>();
-            foreach (var el in root.GetProperty("unverified_key_changes").EnumerateArray())
+            var unverifiedKeyChanges = new Dictionary<string, UnverifiedKeyChange>();
+            foreach (var prop in root.GetProperty("unverified_key_changes").EnumerateObject())
             {
-                unverifiedKeyChanges.Add(new UnverifiedKeyChange
+                var el = prop.Value;
+                unverifiedKeyChanges[prop.Name] = new UnverifiedKeyChange
                 {
-                    Index = el.GetProperty("index").GetInt32(),
                     Reason = Enum.Parse<UnverifiedKeyChangeReason>(el.GetProperty("reason").GetString()!),
                     KeyDropped = el.GetProperty("key_dropped").GetBoolean(),
                     ConversationId = el.GetProperty("conversation_id").GetString(),
                     ConversationKeyVersion = el.GetProperty("conversation_key_version").GetString()!,
                     SenderId = el.GetProperty("sender_id").GetString(),
                     PublicKeyVersion = el.GetProperty("public_key_version").GetString(),
-                });
+                };
+            }
+
+            var undecryptableKeyChanges = new Dictionary<string, UndecryptableKeyChange>();
+            foreach (var prop in root.GetProperty("undecryptable_key_changes").EnumerateObject())
+            {
+                var el = prop.Value;
+                undecryptableKeyChanges[prop.Name] = new UndecryptableKeyChange
+                {
+                    Reason = Enum.Parse<UndecryptableKeyChangeReason>(el.GetProperty("reason").GetString()!),
+                    ConversationId = el.GetProperty("conversation_id").GetString(),
+                    ConversationKeyVersion = el.GetProperty("conversation_key_version").GetString()!,
+                    SenderId = el.GetProperty("sender_id").GetString(),
+                };
+            }
+
+            var rejectedSigningKeys = new Dictionary<string, RejectedSigningKey>();
+            foreach (var prop in root.GetProperty("rejected_signing_keys").EnumerateObject())
+            {
+                var el = prop.Value;
+                rejectedSigningKeys[prop.Name] = new RejectedSigningKey
+                {
+                    UserId = el.GetProperty("user_id").GetString()!,
+                    PublicKeyVersion = el.GetProperty("public_key_version").GetString()!,
+                };
             }
 
             return new DecryptEventsResult
@@ -649,6 +698,8 @@ namespace ChatXdk
                 ConversationKeys = bundle,
                 Errors = errors,
                 UnverifiedKeyChanges = unverifiedKeyChanges,
+                UndecryptableKeyChanges = undecryptableKeyChanges,
+                RejectedSigningKeys = rejectedSigningKeys,
             };
         }
 

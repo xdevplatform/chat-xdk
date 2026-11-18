@@ -323,28 +323,43 @@ public final class Types {
 
     /**
      * Conversation keys from {@link Chat#extractConversationKeys} or nested inside
-     * {@link DecryptEventsResult}.
+     * {@link DecryptEventsResult}: the conversation keys a batch's key changes carry, and the
+     * key version to encrypt with.
+     *
+     * <p>{@link #keysByConversation} and {@link #latestVersions} are keyed by conversation id, in
+     * the form events carry: a group's {@code g…} id, and a one-to-one's two user ids ordered
+     * numerically and colon-separated. {@link #keys} and {@link #latestVersion} hold the same
+     * without the conversation id, for a batch whose events all belong to one conversation.
      */
     public static final class ConversationKeyBundle {
-        /** Version string &#8594; raw 32-byte conversation key. */
+        /**
+         * Version string &#8594; raw 32-byte conversation key, over every conversation of the
+         * batch. A version that key changes of more than one conversation carry is left out,
+         * because a lookup by version alone cannot say which conversation's key it wants: read
+         * {@link #keysByConversation}.
+         */
         public Map<String, byte[]> keys = Collections.emptyMap();
 
         /**
-         * The version to encrypt with. From {@link Chat#decryptEvents}, the newest version whose
-         * key change verified, when the batch's verified versions belong to one conversation:
-         * {@code null} until a key change verifies, and {@code null} for a batch whose
-         * conversations hold verified versions of more than one, where a single version would
-         * name some other conversation's key (read {@link #latestVersions}). From
-         * {@link Chat#extractConversationKeys}, the highest version in the batch, whatever
-         * conversations it spans.
+         * Conversation id &#8594; version string &#8594; raw 32-byte conversation key: each key
+         * under the conversation of the key change that carries it, so two conversations' keys
+         * at one version stay apart.
+         */
+        public Map<String, Map<String, byte[]>> keysByConversation = Collections.emptyMap();
+
+        /**
+         * The version to encrypt with, when every event of the batch belongs to one conversation:
+         * that conversation's entry in {@link #latestVersions}, {@code null} when it has none.
+         * {@code null} for a batch whose events belong to more than one conversation, where one
+         * version cannot name each conversation's key: read {@link #latestVersions}.
          */
         public String latestVersion;
 
         /**
-         * The version to encrypt with for each conversation of the batch, by the conversation id
-         * its events carry. From {@link Chat#decryptEvents}, the newest version whose key change
-         * verified; a conversation without one has no entry. From
-         * {@link Chat#extractConversationKeys}, each conversation's highest version in the batch.
+         * Conversation id &#8594; the version to encrypt with there. From
+         * {@link Chat#decryptEvents}, the newest version whose key change verified; a
+         * conversation without one has no entry. From {@link Chat#extractConversationKeys},
+         * which checks no signature, each conversation's highest version in the batch.
          */
         public Map<String, String> latestVersions = Collections.emptyMap();
     }
@@ -378,6 +393,13 @@ public final class Types {
          * signature names: pass that user's public keys as signing keys and decrypt again.
          */
         MissingSigningKey,
+        /**
+         * The sender's signing key at that key version was among the signing keys, but its
+         * identity binding does not verify, so the call left it out: it is in
+         * {@link DecryptEventsResult#rejectedSigningKeys}. Fetching the same entry again changes
+         * nothing.
+         */
+        RejectedSigningKey,
         /** The signature does not verify against the sender's signing key. */
         InvalidSignature,
         /**
@@ -392,18 +414,14 @@ public final class Types {
      * whose signature did not verify.
      */
     public static final class UnverifiedKeyChange {
-        /** Index of the key change in the batch. */
-        @JsonProperty("index")
-        public int index;
-
         /** Why its signature did not verify. */
         @JsonProperty("reason")
         public UnverifiedKeyChangeReason reason;
 
         /**
-         * Whether its key was left out of {@link ConversationKeyBundle#keys}, so the batch's
-         * messages under that key version did not decrypt. A key that was kept decrypts messages
-         * but never becomes the version to encrypt with.
+         * Whether its key was left out of {@link DecryptEventsResult#conversationKeys}, so the
+         * messages of its conversation under that key version did not decrypt. A key that was
+         * kept decrypts messages but never becomes the version to encrypt with.
          */
         @JsonProperty("key_dropped")
         public boolean keyDropped;
@@ -425,7 +443,73 @@ public final class Types {
         public String publicKeyVersion;
     }
 
-    /** Result of {@link Chat#decryptEvents}. */
+    /** Why this identity could not decrypt the conversation key a key change carries. */
+    public enum UndecryptableKeyChangeReason {
+        /** No identity key is loaded: load or unlock the keys, then decrypt again. */
+        Locked,
+        /**
+         * The key change holds no key for this chat's user, the user {@link Chat#setIdentity}
+         * names; without a session identity, it holds no key at all. The user was not a member
+         * when the key change was made.
+         */
+        NotARecipient,
+        /**
+         * The key change holds keys for this chat's user, or for some user when no session
+         * identity names one, but none at this chat's key version: it was made for another
+         * registration of the user's keys. Check the key version given to
+         * {@link Chat#setIdentity} or {@link Chat#importKeys}.
+         */
+        OtherKeyVersion,
+        /**
+         * A key the key change holds for this chat's key version does not decrypt under the
+         * loaded identity key: the loaded private key is not the one registered at that version.
+         */
+        DecryptionFailed
+    }
+
+    /**
+     * A key change in a {@link Chat#decryptEvents} batch whose conversation key this identity
+     * could not decrypt.
+     */
+    public static final class UndecryptableKeyChange {
+        /** Why its key could not be decrypted. */
+        @JsonProperty("reason")
+        public UndecryptableKeyChangeReason reason;
+
+        /** The conversation the key change belongs to. */
+        @JsonProperty("conversation_id")
+        public String conversationId;
+
+        /** The conversation key version the key change carries. */
+        @JsonProperty("conversation_key_version")
+        public String conversationKeyVersion = "";
+
+        /** The user who made the key change. */
+        @JsonProperty("sender_id")
+        public String senderId;
+    }
+
+    /**
+     * A signing key a {@link Chat#decryptEvents} call left out of verification because its
+     * identity binding does not verify: {@link SigningKeyEntry#identityPublicKeySignature} is
+     * not the signing key's signature over {@link SigningKeyEntry#identityPublicKey}.
+     */
+    public static final class RejectedSigningKey {
+        /** The entry's {@link SigningKeyEntry#userId}. */
+        @JsonProperty("user_id")
+        public String userId = "";
+
+        /** The entry's {@link SigningKeyEntry#publicKeyVersion}. */
+        @JsonProperty("public_key_version")
+        public String publicKeyVersion = "";
+    }
+
+    /**
+     * Result of {@link Chat#decryptEvents}. {@link #errors}, {@link #unverifiedKeyChanges} and
+     * {@link #undecryptableKeyChanges} are keyed by an event's index in the batch, as a string,
+     * and {@link #rejectedSigningKeys} by a signing key's index, as a string. Each is empty when
+     * it has nothing to report.
+     */
     public static final class DecryptEventsResult {
         /** The events that decrypted, in batch order, of every event type. */
         public List<DecryptedEvent> events = Collections.emptyList();
@@ -441,11 +525,26 @@ public final class Types {
         public Map<String, String> errors = Collections.emptyMap();
 
         /**
-         * The batch's key changes whose signature did not verify, in batch order, each with why
-         * and whether its key was dropped. Empty when every key change this identity decrypted
-         * verified.
+         * String indices into the input batch, with their key changes, for the key changes whose
+         * signature did not verify: why, and whether its key was dropped.
          */
-        public List<UnverifiedKeyChange> unverifiedKeyChanges = Collections.emptyList();
+        public Map<String, UnverifiedKeyChange> unverifiedKeyChanges = Collections.emptyMap();
+
+        /**
+         * String indices into the input batch, with their key changes, for the key changes whose
+         * conversation key this identity could not decrypt: why. Such a key change gives the
+         * batch no key, so the messages of its conversation under its key version did not
+         * decrypt.
+         */
+        public Map<String, UndecryptableKeyChange> undecryptableKeyChanges = Collections.emptyMap();
+
+        /**
+         * String indices into the signing keys the call verified with
+         * ({@link DecryptEventsParams#signingKeys}, or the stored ones when it was given none),
+         * with their signing keys, for the ones it left out because their identity binding does
+         * not verify. An event signed with such a key does not verify.
+         */
+        public Map<String, RejectedSigningKey> rejectedSigningKeys = Collections.emptyMap();
     }
 
     /**

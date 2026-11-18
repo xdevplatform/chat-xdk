@@ -1,26 +1,31 @@
 package chatxdk
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"reflect"
-	"strconv"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// DecryptEvents and the members who sign a batch's key changes: a key change
-// needs its signer's keys to verify, the result says which key changes did
-// not verify and why, and the version to encrypt with is reported per
-// conversation.
+// DecryptEvents and the key changes of a batch: a key change needs its
+// signer's keys to verify, the result says which key changes did not verify
+// or could not be decrypted and why, and keys and the version to encrypt with
+// are reported per conversation.
 
 const (
 	// signerEnforcedSequence is a sequence id past the cut-over, where a key
 	// change that does not verify has its key dropped.
 	signerEnforcedSequence = "2100000000000000000"
-	signerGroup            = "g900"
-	signerOtherGroup       = "g901"
-	signerKeyVersion       = "1"
+	// signerUnenforcedSequence is a sequence id before the cut-over, where
+	// the key is kept.
+	signerUnenforcedSequence = "100"
+	signerGroup              = "g900"
+	signerOtherGroup         = "g901"
+	signerThirdGroup         = "g902"
+	signerKeyVersion         = "1"
 )
 
 // thriftStringField is a Thrift string field: its id, then the value's length
@@ -97,9 +102,29 @@ func newSignerParty(t *testing.T, userID string) *signerParty {
 
 // signedKeyChange is a key change as delivered, with its key.
 type signedKeyChange struct {
-	eventB64 string
-	key      []byte
-	version  string
+	action         ActionSignature
+	signerID       string
+	conversationID string
+	eventB64       string
+	key            []byte
+	version        string
+}
+
+// atVersion is the key change as delivered before the cut-over with its key
+// version rewritten to version. The signature no longer verifies, and the key
+// is kept.
+func (c signedKeyChange) atVersion(t *testing.T, version string) signedKeyChange {
+	t.Helper()
+	detail := mustDecodeB64(t, c.action.EncodedMessageEventDetail)
+	if len(version) != len(c.version) || !bytes.Contains(detail, []byte(c.version)) {
+		t.Fatalf("cannot rewrite key version %q to %q", c.version, version)
+	}
+	action := c.action
+	action.EncodedMessageEventDetail = base64.StdEncoding.EncodeToString(
+		bytes.Replace(detail, []byte(c.version), []byte(version), 1))
+	c.eventB64 = deliveredAction(t, action, c.signerID, c.conversationID, signerUnenforcedSequence)
+	c.version = version
+	return c
 }
 
 // newSignedKeyChange is the key change signer makes in conversationID for
@@ -119,10 +144,14 @@ func newSignedKeyChange(t *testing.T, signer *signerParty, members []*signerPart
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange failed: %v", err)
 	}
+	action := prepared.ActionSignatures[0]
 	return signedKeyChange{
-		eventB64: deliveredAction(t, prepared.ActionSignatures[0], signer.userID, conversationID, signerEnforcedSequence),
-		key:      prepared.ConversationKey,
-		version:  prepared.ConversationKeyVersion,
+		action:         action,
+		signerID:       signer.userID,
+		conversationID: conversationID,
+		eventB64:       deliveredAction(t, action, signer.userID, conversationID, signerEnforcedSequence),
+		key:            prepared.ConversationKey,
+		version:        prepared.ConversationKeyVersion,
 	}
 }
 
@@ -175,11 +204,67 @@ func (p signerPage) decrypt(t *testing.T, events []string, signers ...*signerPar
 	for i, signer := range signers {
 		signingKeys[i] = signer.signingKey
 	}
-	result, err := p.bot.chat.DecryptEvents(DecryptEventsParams{Events: events, SigningKeys: signingKeys})
+	return decryptWith(t, p.bot.chat, events, signingKeys)
+}
+
+func decryptWith(t *testing.T, chat *Chat, events []string, signingKeys []SigningKeyEntry) *DecryptEventsResult {
+	t.Helper()
+	result, err := chat.DecryptEvents(DecryptEventsParams{Events: events, SigningKeys: signingKeys})
 	if err != nil {
 		t.Fatalf("DecryptEvents failed: %v", err)
 	}
 	return result
+}
+
+// unverified is UnverifiedKeyChanges when the page's key change did not
+// verify for reason and lost its key.
+func (p signerPage) unverified(reason UnverifiedKeyChangeReason) map[string]UnverifiedKeyChange {
+	conversationID, senderID, publicKeyVersion := signerGroup, "5001", signerKeyVersion
+	return map[string]UnverifiedKeyChange{"0": {
+		Reason:                 reason,
+		KeyDropped:             true,
+		ConversationID:         &conversationID,
+		ConversationKeyVersion: p.change.version,
+		SenderID:               &senderID,
+		PublicKeyVersion:       &publicKeyVersion,
+	}}
+}
+
+// otherKeyChange is a key change the page's admin makes for itself and the
+// bot in the other group, at another key version than the page's.
+func (p signerPage) otherKeyChange(t *testing.T) signedKeyChange {
+	t.Helper()
+	members := []*signerParty{p.admin, p.bot}
+	other := newSignedKeyChange(t, p.admin, members, signerOtherGroup)
+	for other.version == p.change.version {
+		other = newSignedKeyChange(t, p.admin, members, signerOtherGroup)
+	}
+	return other
+}
+
+// messageTexts is the text of each message among a result's events.
+func messageTexts(result *DecryptEventsResult) []string {
+	var texts []string
+	for _, decrypted := range result.Events {
+		if message := decrypted.Event.AsMessage(); message != nil {
+			texts = append(texts, message.Text())
+		}
+	}
+	return texts
+}
+
+func assertEqual(t *testing.T, what string, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s mismatch:\ngot  %+v\nwant %+v", what, got, want)
+	}
+}
+
+func assertContains(t *testing.T, what, got, want string) {
+	t.Helper()
+	if !strings.Contains(got, want) {
+		t.Errorf("unexpected %s: %q", what, got)
+	}
 }
 
 func TestDecryptEventsReportsKeyChangeWithoutItsSignersKeys(t *testing.T) {
@@ -192,34 +277,21 @@ func TestDecryptEventsReportsKeyChangeWithoutItsSignersKeys(t *testing.T) {
 	if len(result.Events) != 0 {
 		t.Errorf("expected no decrypted events, got %d", len(result.Events))
 	}
-	if len(result.ConversationKeys.Keys) != 0 {
-		t.Errorf("expected the key to be dropped, got %d keys", len(result.ConversationKeys.Keys))
+	keys := result.ConversationKeys
+	assertEqual(t, "keys", keys.Keys, map[string][]byte{})
+	assertEqual(t, "keys by conversation", keys.KeysByConversation, map[string]map[string][]byte{})
+	if keys.LatestVersion != nil {
+		t.Errorf("expected no latest version, got %q", *keys.LatestVersion)
 	}
-	if result.ConversationKeys.LatestVersion != nil {
-		t.Errorf("expected no latest version, got %q", *result.ConversationKeys.LatestVersion)
-	}
-	if len(result.ConversationKeys.LatestVersions) != 0 {
-		t.Errorf("expected no latest versions, got %v", result.ConversationKeys.LatestVersions)
-	}
-	conversationID, senderID, publicKeyVersion := signerGroup, "5001", signerKeyVersion
-	want := []UnverifiedKeyChange{{
-		Index:                  0,
-		Reason:                 UnverifiedKeyChangeMissingSigningKey,
-		KeyDropped:             true,
-		ConversationID:         &conversationID,
-		ConversationKeyVersion: page.change.version,
-		SenderID:               &senderID,
-		PublicKeyVersion:       &publicKeyVersion,
-	}}
-	if !reflect.DeepEqual(result.UnverifiedKeyChanges, want) {
-		t.Errorf("unverified key changes mismatch:\ngot  %+v\nwant %+v", result.UnverifiedKeyChanges, want)
-	}
-	if !strings.Contains(result.Errors["0"], "no signing key for sender 5001 at public_key_version 1") {
-		t.Errorf("unexpected key change error: %q", result.Errors["0"])
-	}
-	if !strings.Contains(result.Errors["1"], "no matching key found: the key change for that version, event 0 of the batch, did not verify") {
-		t.Errorf("unexpected message error: %q", result.Errors["1"])
-	}
+	assertEqual(t, "latest versions", keys.LatestVersions, map[string]string{})
+	assertEqual(t, "unverified key changes", result.UnverifiedKeyChanges,
+		page.unverified(UnverifiedKeyChangeMissingSigningKey))
+	assertEqual(t, "undecryptable key changes", result.UndecryptableKeyChanges, map[string]UndecryptableKeyChange{})
+	assertEqual(t, "rejected signing keys", result.RejectedSigningKeys, map[string]RejectedSigningKey{})
+	assertContains(t, "key change error", result.Errors["0"],
+		"no signing key for sender 5001 at public_key_version 1")
+	assertContains(t, "message error", result.Errors["1"],
+		"no matching key found: the key change for that version, event 0 of the batch, did not verify")
 }
 
 func TestDecryptEventsReportsKeyChangeCheckedWithAnotherKey(t *testing.T) {
@@ -233,16 +305,30 @@ func TestDecryptEventsReportsKeyChangeCheckedWithAnotherKey(t *testing.T) {
 	if len(result.Events) != 0 {
 		t.Errorf("expected no decrypted events, got %d", len(result.Events))
 	}
-	if len(result.UnverifiedKeyChanges) != 1 {
-		t.Fatalf("expected 1 unverified key change, got %+v", result.UnverifiedKeyChanges)
+	assertEqual(t, "unverified key changes", result.UnverifiedKeyChanges,
+		page.unverified(UnverifiedKeyChangeInvalidSignature))
+	assertContains(t, "key change error", result.Errors["0"], "ECDSA mismatch")
+}
+
+func TestDecryptEventsReportsSigningKeyWithAnInvalidBinding(t *testing.T) {
+	page := newSignerPage(t)
+
+	// The admin's signing key with a binding signature that is not its
+	// signature over the identity key.
+	unbound := page.admin.signingKey
+	unbound.IdentityPublicKeySignature = page.member.signingKey.IdentityPublicKeySignature
+	result := decryptWith(t, page.bot.chat, page.events, []SigningKeyEntry{page.member.signingKey, unbound})
+
+	if len(result.Events) != 0 {
+		t.Errorf("expected no decrypted events, got %d", len(result.Events))
 	}
-	unverified := result.UnverifiedKeyChanges[0]
-	if unverified.Reason != UnverifiedKeyChangeInvalidSignature || !unverified.KeyDropped {
-		t.Errorf("unexpected unverified key change: %+v", unverified)
-	}
-	if !strings.Contains(result.Errors["0"], "ECDSA mismatch") {
-		t.Errorf("unexpected key change error: %q", result.Errors["0"])
-	}
+	assertEqual(t, "rejected signing keys", result.RejectedSigningKeys, map[string]RejectedSigningKey{
+		"1": {UserID: "5001", PublicKeyVersion: signerKeyVersion},
+	})
+	assertEqual(t, "unverified key changes", result.UnverifiedKeyChanges,
+		page.unverified(UnverifiedKeyChangeRejectedSigningKey))
+	assertContains(t, "key change error", result.Errors["0"],
+		"the signing key given for sender 5001 at public_key_version 1 was rejected: its identity binding does not verify")
 }
 
 func TestDecryptEventsVerifiesKeyChangeWithItsSignersKeys(t *testing.T) {
@@ -253,78 +339,139 @@ func TestDecryptEventsVerifiesKeyChangeWithItsSignersKeys(t *testing.T) {
 	if len(result.Errors) != 0 {
 		t.Fatalf("expected no errors, got %v", result.Errors)
 	}
-	if len(result.UnverifiedKeyChanges) != 0 {
-		t.Errorf("expected no unverified key changes, got %+v", result.UnverifiedKeyChanges)
-	}
+	assertEqual(t, "unverified key changes", result.UnverifiedKeyChanges, map[string]UnverifiedKeyChange{})
+	assertEqual(t, "undecryptable key changes", result.UndecryptableKeyChanges, map[string]UndecryptableKeyChange{})
+	assertEqual(t, "rejected signing keys", result.RejectedSigningKeys, map[string]RejectedSigningKey{})
 	if len(result.Events) != 2 || result.Events[0].Event.Type != "KeyChange" {
 		t.Fatalf("expected a key change and a message, got %+v", result.Events)
 	}
-	message := result.Events[1].Event.AsMessage()
-	if message == nil || message.Text() != "hello group" {
-		t.Errorf("unexpected message: %+v", message)
+	assertEqual(t, "messages", messageTexts(result), []string{"hello group"})
+	keys := result.ConversationKeys
+	if keys.LatestVersion == nil || *keys.LatestVersion != page.change.version {
+		t.Errorf("unexpected latest version: %v", keys.LatestVersion)
 	}
-	latest := result.ConversationKeys.LatestVersion
-	if latest == nil || *latest != page.change.version {
-		t.Errorf("unexpected latest version: %v", latest)
-	}
-	want := map[string]string{signerGroup: page.change.version}
-	if !reflect.DeepEqual(result.ConversationKeys.LatestVersions, want) {
-		t.Errorf("latest versions mismatch:\ngot  %v\nwant %v", result.ConversationKeys.LatestVersions, want)
-	}
+	assertEqual(t, "latest versions", keys.LatestVersions, map[string]string{signerGroup: page.change.version})
+	assertEqual(t, "keys", keys.Keys, map[string][]byte{page.change.version: page.change.key})
+	assertEqual(t, "keys by conversation", keys.KeysByConversation, map[string]map[string][]byte{
+		signerGroup: {page.change.version: page.change.key},
+	})
 }
 
-func TestDecryptEventsReportsLatestVersionsPerConversation(t *testing.T) {
+func TestDecryptEventsReportsKeyChangeItCannotDecrypt(t *testing.T) {
 	page := newSignerPage(t)
-	members := []*signerParty{page.admin, page.bot}
-	other := newSignedKeyChange(t, page.admin, members, signerOtherGroup)
-	for other.version == page.change.version {
-		other = newSignedKeyChange(t, page.admin, members, signerOtherGroup)
+
+	// A key change made for the admin and the member only: a chat whose
+	// identity is the bot's finds no key for its user in it.
+	outsider := newSignerParty(t, page.bot.userID)
+	if err := outsider.chat.SetIdentity(SetIdentityParams{UserID: page.bot.userID, SigningKeyVersion: signerKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
 	}
+	change := newSignedKeyChange(t, page.admin, []*signerParty{page.admin, page.member}, signerGroup)
+	events := []string{change.eventB64, signerMessage(t, page.member, signerGroup, change, "not for the bot")}
+	result := decryptWith(t, outsider.chat, events, []SigningKeyEntry{page.member.signingKey, page.admin.signingKey})
+
+	if len(result.Events) != 0 {
+		t.Errorf("expected no decrypted events, got %d", len(result.Events))
+	}
+	assertEqual(t, "unverified key changes", result.UnverifiedKeyChanges, map[string]UnverifiedKeyChange{})
+	conversationID, senderID := signerGroup, "5001"
+	assertEqual(t, "undecryptable key changes", result.UndecryptableKeyChanges, map[string]UndecryptableKeyChange{
+		"0": {
+			Reason:                 UndecryptableKeyChangeNotARecipient,
+			ConversationID:         &conversationID,
+			ConversationKeyVersion: change.version,
+			SenderID:               &senderID,
+		},
+	})
+	assertContains(t, "message error", result.Errors["1"],
+		"event 0 of the batch, holds no key this chat can decrypt: it holds no key for this chat's user")
+}
+
+func TestDecryptEventsReportsKeysAndLatestVersionsPerConversation(t *testing.T) {
+	page := newSignerPage(t)
+	other := page.otherKeyChange(t)
 	events := []string{page.change.eventB64, other.eventB64}
 	versions := map[string]string{signerGroup: page.change.version, signerOtherGroup: other.version}
-
-	// Each conversation has its own version to encrypt with, and no single
-	// one stands for both.
-	result := page.decrypt(t, events, page.admin)
-	if len(result.Errors) != 0 {
-		t.Fatalf("expected no errors, got %v", result.Errors)
-	}
-	if !reflect.DeepEqual(result.ConversationKeys.LatestVersions, versions) {
-		t.Errorf("latest versions mismatch:\ngot  %v\nwant %v", result.ConversationKeys.LatestVersions, versions)
-	}
-	if result.ConversationKeys.LatestVersion != nil {
-		t.Errorf("expected no single latest version, got %q", *result.ConversationKeys.LatestVersion)
+	keysByConversation := map[string]map[string][]byte{
+		signerGroup:      {page.change.version: page.change.key},
+		signerOtherGroup: {other.version: other.key},
 	}
 
-	result = page.decrypt(t, []string{other.eventB64}, page.admin)
-	latest := result.ConversationKeys.LatestVersion
-	if latest == nil || *latest != other.version {
-		t.Errorf("unexpected latest version: %v", latest)
+	// Each conversation has its own keys and its own version to encrypt
+	// with, and no single version stands for both.
+	keys := page.decrypt(t, events, page.admin).ConversationKeys
+	assertEqual(t, "latest versions", keys.LatestVersions, versions)
+	if keys.LatestVersion != nil {
+		t.Errorf("expected no single latest version, got %q", *keys.LatestVersion)
 	}
-	want := map[string]string{signerOtherGroup: other.version}
-	if !reflect.DeepEqual(result.ConversationKeys.LatestVersions, want) {
-		t.Errorf("latest versions mismatch:\ngot  %v\nwant %v", result.ConversationKeys.LatestVersions, want)
-	}
+	assertEqual(t, "keys by conversation", keys.KeysByConversation, keysByConversation)
+	assertEqual(t, "keys", keys.Keys, map[string][]byte{
+		page.change.version: page.change.key,
+		other.version:       other.key,
+	})
 
-	// ExtractConversationKeys checks no signature: its LatestVersion is the
-	// batch's highest, and LatestVersions each conversation's.
+	keys = page.decrypt(t, []string{other.eventB64}, page.admin).ConversationKeys
+	if keys.LatestVersion == nil || *keys.LatestVersion != other.version {
+		t.Errorf("unexpected latest version: %v", keys.LatestVersion)
+	}
+	assertEqual(t, "latest versions", keys.LatestVersions, map[string]string{signerOtherGroup: other.version})
+
+	// A batch of two conversations has no single version even when only one
+	// of them has a verified key change.
+	stray := signerMessage(t, page.admin, signerThirdGroup, other, "hello third group")
+	keys = page.decrypt(t, []string{page.change.eventB64, stray}, page.admin).ConversationKeys
+	if keys.LatestVersion != nil {
+		t.Errorf("expected no single latest version, got %q", *keys.LatestVersion)
+	}
+	assertEqual(t, "latest versions", keys.LatestVersions, map[string]string{signerGroup: page.change.version})
+
+	// ExtractConversationKeys checks no signature, and reports the same way.
 	extracted, err := page.bot.chat.ExtractConversationKeys(events)
 	if err != nil {
 		t.Fatalf("ExtractConversationKeys failed: %v", err)
 	}
-	if !reflect.DeepEqual(extracted.LatestVersions, versions) {
-		t.Errorf("latest versions mismatch:\ngot  %v\nwant %v", extracted.LatestVersions, versions)
+	assertEqual(t, "latest versions", extracted.LatestVersions, versions)
+	if extracted.LatestVersion != nil {
+		t.Errorf("expected no single latest version, got %q", *extracted.LatestVersion)
 	}
-	first, err := strconv.ParseInt(page.change.version, 10, 64)
+	assertEqual(t, "keys by conversation", extracted.KeysByConversation, keysByConversation)
+	extracted, err = page.bot.chat.ExtractConversationKeys([]string{other.eventB64})
 	if err != nil {
-		t.Fatalf("conversation key version %q: %v", page.change.version, err)
+		t.Fatalf("ExtractConversationKeys failed: %v", err)
 	}
-	second, err := strconv.ParseInt(other.version, 10, 64)
-	if err != nil {
-		t.Fatalf("conversation key version %q: %v", other.version, err)
+	if extracted.LatestVersion == nil || *extracted.LatestVersion != other.version {
+		t.Errorf("unexpected latest version: %v", extracted.LatestVersion)
 	}
-	highest := strconv.FormatInt(max(first, second), 10)
-	if extracted.LatestVersion == nil || *extracted.LatestVersion != highest {
-		t.Errorf("unexpected latest version: %v, want %q", extracted.LatestVersion, highest)
+}
+
+func TestDecryptEventsKeepsKeysOfTwoConversationsAtOneVersionApart(t *testing.T) {
+	page := newSignerPage(t)
+	other := page.otherKeyChange(t)
+	sameVersion := other.atVersion(t, page.change.version)
+	events := []string{
+		page.change.eventB64,
+		sameVersion.eventB64,
+		signerMessage(t, page.admin, signerGroup, page.change, "hello group"),
+		signerMessage(t, page.admin, signerOtherGroup, sameVersion, "hello other group"),
+	}
+
+	// Each message decrypts under its own conversation's key, and a lookup
+	// by version alone finds neither.
+	result := page.decrypt(t, events, page.admin)
+	assertEqual(t, "messages", messageTexts(result), []string{"hello group", "hello other group"})
+	var failed []string
+	for index := range result.Errors {
+		failed = append(failed, index)
+	}
+	sort.Strings(failed)
+	assertEqual(t, "failed events", failed, []string{"1"})
+	assertEqual(t, "keys by conversation", result.ConversationKeys.KeysByConversation, map[string]map[string][]byte{
+		signerGroup:      {page.change.version: page.change.key},
+		signerOtherGroup: {page.change.version: other.key},
+	})
+	assertEqual(t, "keys", result.ConversationKeys.Keys, map[string][]byte{})
+	unverified := result.UnverifiedKeyChanges["1"]
+	if unverified.Reason != UnverifiedKeyChangeInvalidSignature || unverified.KeyDropped {
+		t.Errorf("unexpected unverified key change: %+v", unverified)
 	}
 }

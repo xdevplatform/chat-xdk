@@ -447,7 +447,7 @@ fn a_group_removal_drops_the_title_and_description_reencryptions() {
 }
 
 #[test]
-fn decrypt_events_names_unverified_key_changes_and_each_conversations_version() {
+fn decrypt_events_keys_its_diagnostics_by_index_and_its_keys_by_conversation() {
     let v: serde_json::Value =
         serde_json::from_str(include_str!("../../../tests/fixtures/sdk_vectors.json")).unwrap();
     let text = |key: &str| v[key].as_str().unwrap().to_string();
@@ -473,42 +473,89 @@ fn decrypt_events_names_unverified_key_changes_and_each_conversations_version() 
     };
     let group = text("event_group_id");
     let version = text("event_group_removal_conversation_key_version");
+    let signing_key = |identity_public_key_signature: String| {
+        serde_json::json!([{
+            "user_id": text("event_sender_id"),
+            "public_key_version": text("event_signing_key_version"),
+            "public_key": text("signing_public_b64"),
+            "identity_public_key": text("identity_public_b64"),
+            "identity_public_key_signature": identity_public_key_signature,
+        }])
+    };
+    let unverified_key_change = |reason: &str| {
+        serde_json::json!({
+            "3": {
+                "reason": reason,
+                "key_dropped": false,
+                "conversation_id": group,
+                "conversation_key_version": version,
+                "sender_id": text("event_sender_id"),
+                "public_key_version": text("event_signing_key_version"),
+            },
+        })
+    };
 
     // Without its signer's keys the flow's key change, its fourth event, does
     // not verify. It is sequenced before the cut-over, so its key is kept.
     let unverified = decrypt(serde_json::json!([]));
     assert_eq!(
         unverified["unverified_key_changes"],
-        serde_json::json!([{
-            "index": 3,
-            "reason": "MissingSigningKey",
-            "key_dropped": false,
-            "conversation_id": group,
-            "conversation_key_version": version,
-            "sender_id": text("event_sender_id"),
-            "public_key_version": text("event_signing_key_version"),
-        }])
+        unverified_key_change("MissingSigningKey")
     );
+    assert_eq!(
+        unverified["undecryptable_key_changes"],
+        serde_json::json!({})
+    );
+    assert_eq!(unverified["rejected_signing_keys"], serde_json::json!({}));
     let conversation_keys = &unverified["conversation_keys"];
     assert!(conversation_keys["keys"].get(&version).is_some());
+    assert_eq!(
+        conversation_keys["keys_by_conversation"][&group],
+        conversation_keys["keys"]
+    );
     assert_eq!(conversation_keys["latest_version"], serde_json::Value::Null);
     assert_eq!(conversation_keys["latest_versions"], serde_json::json!({}));
 
-    let verified = decrypt(serde_json::json!([{
-        "user_id": text("event_sender_id"),
-        "public_key_version": text("event_signing_key_version"),
-        "public_key": text("signing_public_b64"),
-        "identity_public_key": text("identity_public_b64"),
-        "identity_public_key_signature": text("identity_public_key_signature_b64"),
-    }]));
-    assert_eq!(verified["unverified_key_changes"], serde_json::json!([]));
+    // A signing key whose binding signature is not its signature over the
+    // identity key is left out, and the key change says so.
+    let rejected = decrypt(signing_key(BASE64.encode([7u8; 64])));
+    assert_eq!(
+        rejected["rejected_signing_keys"],
+        serde_json::json!({
+            "0": {
+                "user_id": text("event_sender_id"),
+                "public_key_version": text("event_signing_key_version"),
+            },
+        })
+    );
+    assert_eq!(
+        rejected["unverified_key_changes"],
+        unverified_key_change("RejectedSigningKey")
+    );
+
+    let verified = decrypt(signing_key(text("identity_public_key_signature_b64")));
+    assert_eq!(verified["unverified_key_changes"], serde_json::json!({}));
+    assert_eq!(verified["rejected_signing_keys"], serde_json::json!({}));
     assert_eq!(verified["conversation_keys"]["latest_version"], version);
     let mut latest_versions = serde_json::Map::new();
-    latest_versions.insert(group, version.into());
+    latest_versions.insert(group.clone(), version.clone().into());
     assert_eq!(
         verified["conversation_keys"]["latest_versions"],
         serde_json::Value::Object(latest_versions)
     );
+
+    // extract_conversation_keys returns the same shape for the keys.
+    let events = c(&serde_json::Value::Array(flow.clone()).to_string());
+    let extracted: serde_json::Value = serde_json::from_str(
+        &data(chat_xdk_extract_conversation_keys(chat, events.as_ptr())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        extracted["keys_by_conversation"],
+        verified["conversation_keys"]["keys_by_conversation"]
+    );
+    assert_eq!(extracted["keys"], verified["conversation_keys"]["keys"]);
+    assert_eq!(extracted["latest_version"], version);
     chat_xdk_free(chat);
 }
 

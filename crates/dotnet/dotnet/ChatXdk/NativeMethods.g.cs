@@ -428,10 +428,16 @@ namespace ChatXdk
 
         /// <summary>
         ///  `events_json`: JSON array of base64-encoded event strings.
-        ///  Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null,
-        ///  "latest_versions":{conversation_id: version,...}}`: `latest_version` is the
-        ///  highest key version in the batch and `latest_versions` each
-        ///  conversation's; signatures are not checked.
+        ///  Returns JSON `{"keys":{version: key_b64,...},
+        ///  "keys_by_conversation":{conversation_id: {version: key_b64,...},...},
+        ///  "latest_version": string|null,
+        ///  "latest_versions":{conversation_id: version,...}}`. Signatures are not
+        ///  checked. `keys_by_conversation` holds each key under its conversation;
+        ///  `keys` holds them by version alone, less a version that key changes of
+        ///  more than one conversation carry. `latest_versions` holds each
+        ///  conversation's highest key version; `latest_version` is the batch's
+        ///  highest when every event belongs to one conversation, and null when they
+        ///  belong to more than one.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_extract_conversation_keys", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_extract_conversation_keys(ChatHandle* handle, byte* events_json);
@@ -449,14 +455,26 @@ namespace ChatXdk
         ///  The result's `errors` maps the index of each event left out of `events`,
         ///  as a string, to its error: one that failed, or one decrypt drops, such as
         ///  a member removal's title or description re-encrypted under the new key.
-        ///  Its `conversation_keys` holds `keys`, `latest_version` and
-        ///  `latest_versions` (`{conversation_id: version}`, the newest verified key
-        ///  version of each conversation; `latest_version` is null when more than one
-        ///  conversation has one). Its `unverified_key_changes` lists each key change
-        ///  whose signature did not verify: `[{"index","reason","key_dropped",
-        ///  "conversation_id","conversation_key_version","sender_id",
-        ///  "public_key_version"},...]`, where `reason` is `MissingSigningKey`,
-        ///  `InvalidSignature` or `Unverifiable`.
+        ///  Its `conversation_keys` holds `keys`, `keys_by_conversation`,
+        ///  `latest_version` and `latest_versions`, as
+        ///  `chat_xdk_extract_conversation_keys` returns them, except that
+        ///  `latest_versions` holds the newest verified key version of each
+        ///  conversation, and `latest_version` that version when every event belongs
+        ///  to one conversation (null for a batch of more than one).
+        ///
+        ///  Three more objects are keyed by index, as a string, like `errors`, and
+        ///  are `{}` when they have nothing to report. `unverified_key_changes` maps
+        ///  the index of each key change whose signature did not verify to
+        ///  `{"reason","key_dropped","conversation_id","conversation_key_version",
+        ///  "sender_id","public_key_version"}`, where `reason` is `MissingSigningKey`,
+        ///  `RejectedSigningKey`, `InvalidSignature` or `Unverifiable`.
+        ///  `undecryptable_key_changes` maps the index of each key change whose
+        ///  conversation key this identity could not decrypt to
+        ///  `{"reason","conversation_id","conversation_key_version","sender_id"}`,
+        ///  where `reason` is `Locked`, `NotARecipient`, `OtherKeyVersion` or
+        ///  `DecryptionFailed`. `rejected_signing_keys` maps the index, among the
+        ///  signing keys the call verified with, of each one left out because its
+        ///  identity binding does not verify to `{"user_id","public_key_version"}`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_decrypt_events", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_decrypt_events(ChatHandle* handle, byte* params_json);

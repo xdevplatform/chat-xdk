@@ -282,33 +282,20 @@ impl Chat {
     ///
     /// Returns:
     ///     A dict with:
-    ///     - ``keys``: Dict mapping key version string to raw 32-byte conversation key (``bytes``)
-    ///     - ``latest_version``: The highest key version; signatures are not checked
+    ///     - ``keys``: Dict mapping key version string to raw 32-byte
+    ///       conversation key (``bytes``); a version that key changes of more
+    ///       than one conversation carry is left out
+    ///     - ``keys_by_conversation``: Dict mapping each conversation id to
+    ///       that conversation's ``keys``
+    ///     - ``latest_version``: The highest key version when every event
+    ///       belongs to one conversation, ``None`` when they belong to more
+    ///       than one; signatures are not checked
     ///     - ``latest_versions``: Dict mapping each conversation id to its
     ///       highest key version; signatures are not checked
     pub(crate) fn extract_conversation_keys(&self, events: Vec<String>) -> PyResult<Py<PyAny>> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);
-
-        Python::attach(|py| {
-            let outer = pyo3::types::PyDict::new(py);
-
-            // Build keys dict
-            let keys_dict = pyo3::types::PyDict::new(py);
-            for (version, key) in result.keys {
-                keys_dict.set_item(version, key.encoded().to_vec().into_pyobject(py)?)?;
-            }
-            outer.set_item("keys", keys_dict)?;
-
-            // Set latest_version
-            match result.latest_version {
-                Some(v) => outer.set_item("latest_version", v)?,
-                None => outer.set_item("latest_version", py.None())?,
-            }
-            outer.set_item("latest_versions", result.latest_versions)?;
-
-            Ok(outer.into())
-        })
+        Python::attach(|py| Ok(conversation_keys_dict(py, result)?.into()))
     }
 
     /// Decrypt multiple events in batch.
@@ -328,22 +315,36 @@ impl Chat {
     ///     A dict with:
     ///     - ``events``: List of ``{"event": dict, "original_b64": str}``, one
     ///       per event that decrypted, of every event type
-    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str,
-    ///       "latest_versions": dict}``; ``latest_versions`` maps each of the
+    ///     - ``conversation_keys``: ``{"keys": dict, "keys_by_conversation":
+    ///       dict, "latest_version": str, "latest_versions": dict}``;
+    ///       ``keys_by_conversation`` maps each conversation id to that
+    ///       conversation's ``keys``, ``latest_versions`` maps each of the
     ///       batch's conversations to the newest version whose key change
-    ///       verified, and ``latest_version`` is that version when one
-    ///       conversation has one: ``None`` until one verifies, or when
-    ///       several conversations do
+    ///       verified, and ``latest_version`` is that version when every
+    ///       event of the batch belongs to one conversation: ``None`` until
+    ///       one verifies, and ``None`` for a batch of more than one
+    ///       conversation
     ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error
     ///       message, for each event left out of ``events``: one that failed,
     ///       or one decrypt drops, such as a member removal's title or
     ///       description re-encrypted under the new key
-    ///     - ``unverified_key_changes``: List of the key changes whose
-    ///       signature did not verify, each a dict with ``index``,
-    ///       ``reason`` (``"MissingSigningKey"``, ``"InvalidSignature"`` or
+    ///     - ``unverified_key_changes``: Dict mapping event index (string) to
+    ///       the key change there, for each key change whose signature did
+    ///       not verify: a dict with ``reason`` (``"MissingSigningKey"``,
+    ///       ``"RejectedSigningKey"``, ``"InvalidSignature"`` or
     ///       ``"Unverifiable"``), ``key_dropped``, ``conversation_id``,
     ///       ``conversation_key_version``, ``sender_id`` and
     ///       ``public_key_version``
+    ///     - ``undecryptable_key_changes``: Dict mapping event index (string)
+    ///       to the key change there, for each key change whose conversation
+    ///       key this identity could not decrypt: a dict with ``reason``
+    ///       (``"Locked"``, ``"NotARecipient"``, ``"OtherKeyVersion"`` or
+    ///       ``"DecryptionFailed"``), ``conversation_id``,
+    ///       ``conversation_key_version`` and ``sender_id``
+    ///     - ``rejected_signing_keys``: Dict mapping signing key index
+    ///       (string) to the signing key there, for each one left out
+    ///       because its identity binding does not verify: a dict with
+    ///       ``user_id`` and ``public_key_version``
     pub(crate) fn decrypt_events(
         &self,
         py: Python<'_>,
@@ -370,19 +371,10 @@ impl Chat {
         }
         outer.set_item("events", events)?;
 
-        // Convert conversation keys
-        let conv_keys_dict = pyo3::types::PyDict::new(py);
-        let keys_dict = pyo3::types::PyDict::new(py);
-        for (version, key) in result.conversation_keys.keys {
-            keys_dict.set_item(version, key.encoded().to_vec().into_pyobject(py)?)?;
-        }
-        conv_keys_dict.set_item("keys", keys_dict)?;
-        match result.conversation_keys.latest_version {
-            Some(v) => conv_keys_dict.set_item("latest_version", v)?,
-            None => conv_keys_dict.set_item("latest_version", py.None())?,
-        }
-        conv_keys_dict.set_item("latest_versions", result.conversation_keys.latest_versions)?;
-        outer.set_item("conversation_keys", conv_keys_dict)?;
+        outer.set_item(
+            "conversation_keys",
+            conversation_keys_dict(py, result.conversation_keys)?,
+        )?;
 
         // Convert errors; keys are the stringified event indices.
         let errors_dict = pyo3::types::PyDict::new(py);
@@ -391,12 +383,24 @@ impl Chat {
         }
         outer.set_item("errors", errors_dict)?;
 
-        let unverified_json =
-            serde_json::to_string(&result.unverified_key_changes).map_err(internal_err)?;
-        outer.set_item(
-            "unverified_key_changes",
-            json_module.call_method1("loads", (unverified_json,))?,
-        )?;
+        // Each is a dict keyed by the stringified index, as `errors` is.
+        for (name, json) in [
+            (
+                "unverified_key_changes",
+                serde_json::to_string(&result.unverified_key_changes),
+            ),
+            (
+                "undecryptable_key_changes",
+                serde_json::to_string(&result.undecryptable_key_changes),
+            ),
+            (
+                "rejected_signing_keys",
+                serde_json::to_string(&result.rejected_signing_keys),
+            ),
+        ] {
+            let json = json.map_err(internal_err)?;
+            outer.set_item(name, json_module.call_method1("loads", (json,))?)?;
+        }
 
         Ok(outer.into())
     }
@@ -1188,4 +1192,37 @@ impl Chat {
             .matches_registered_key(public_key_b64)
             .map_err(to_py_err)
     }
+}
+
+/// A `ConversationKeyResult` as the dict `extract_conversation_keys` returns
+/// and `decrypt_events` returns as `conversation_keys`.
+fn conversation_keys_dict(
+    py: Python<'_>,
+    result: chat_xdk_core::ConversationKeyResult,
+) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("keys", key_map_dict(py, &result.keys)?)?;
+    let keys_by_conversation = pyo3::types::PyDict::new(py);
+    for (conversation_id, keys) in &result.keys_by_conversation {
+        keys_by_conversation.set_item(conversation_id.as_str(), key_map_dict(py, keys)?)?;
+    }
+    dict.set_item("keys_by_conversation", keys_by_conversation)?;
+    match result.latest_version {
+        Some(version) => dict.set_item("latest_version", version)?,
+        None => dict.set_item("latest_version", py.None())?,
+    }
+    dict.set_item("latest_versions", result.latest_versions)?;
+    Ok(dict)
+}
+
+/// A key map as a dict mapping each key version to the raw key (`bytes`).
+fn key_map_dict<'py>(
+    py: Python<'py>,
+    keys: &HashMap<String, XChatConversationKey>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    for (version, key) in keys {
+        dict.set_item(version.as_str(), key.encoded().to_vec().into_pyobject(py)?)?;
+    }
+    Ok(dict)
 }

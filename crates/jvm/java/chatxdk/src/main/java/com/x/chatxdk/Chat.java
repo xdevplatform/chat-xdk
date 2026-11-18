@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -497,7 +498,10 @@ public final class Chat implements AutoCloseable {
      *
      * @param events Base64-encoded raw event strings received from the webhook.
      *     Pass only {@code KeyChange} events — other event types are ignored.
-     * @return Decrypted keys and {@link ConversationKeyBundle#latestVersion}. Pass
+     * @return Decrypted keys and {@link ConversationKeyBundle#latestVersion}; signatures are not
+     *     checked. {@link ConversationKeyBundle#latestVersion} is the batch's highest key version
+     *     when every event belongs to one conversation, and null when they belong to more than
+     *     one: read {@link ConversationKeyBundle#latestVersions}. Pass
      *     {@link ConversationKeyBundle#keys} to {@link #decryptEvent}.
      */
     public ConversationKeyBundle extractConversationKeys(List<String> events) throws Exception {
@@ -550,10 +554,17 @@ public final class Chat implements AutoCloseable {
      * <p>The signing keys must include those of every member who signed a key change in the batch,
      * whether or not that member sent a message in it: a recent key change whose signature does not
      * verify has its key dropped, and every message under that key then fails.
-     * {@link DecryptEventsResult#unverifiedKeyChanges} lists each such key change with why it did
+     * {@link DecryptEventsResult#unverifiedKeyChanges} holds each such key change with why it did
      * not verify and, when its signer's key was missing, the {@link UnverifiedKeyChange#senderId}
      * and {@link UnverifiedKeyChange#publicKeyVersion} to fetch: add that user's public keys and
-     * decrypt again.
+     * decrypt again. {@link DecryptEventsResult#undecryptableKeyChanges} holds each key change
+     * whose key this chat could not decrypt, and {@link DecryptEventsResult#rejectedSigningKeys}
+     * each signing key left out because its identity binding does not verify.
+     *
+     * <p>For a batch whose events belong to more than one conversation, read
+     * {@link ConversationKeyBundle#keysByConversation} and
+     * {@link ConversationKeyBundle#latestVersions} by conversation id:
+     * {@link ConversationKeyBundle#latestVersion} is null for such a batch.
      */
     public DecryptEventsResult decryptEvents(DecryptEventsParams parameters) throws Exception {
         throwIfDisposed();
@@ -587,14 +598,11 @@ public final class Chat implements AutoCloseable {
                 errNode.fields().forEachRemaining(e -> errors.put(e.getKey(), e.getValue().asText("")));
             }
             out.errors = errors;
-            List<UnverifiedKeyChange> unverifiedKeyChanges = new ArrayList<>();
-            JsonNode unverified = root.get("unverified_key_changes");
-            if (unverified != null && unverified.isArray()) {
-                for (JsonNode el : unverified) {
-                    unverifiedKeyChanges.add(ChatJson.MAPPER.treeToValue(el, UnverifiedKeyChange.class));
-                }
-            }
-            out.unverifiedKeyChanges = unverifiedKeyChanges;
+            out.unverifiedKeyChanges =
+                    parseIndexed(root.get("unverified_key_changes"), UnverifiedKeyChange.class);
+            out.undecryptableKeyChanges =
+                    parseIndexed(root.get("undecryptable_key_changes"), UndecryptableKeyChange.class);
+            out.rejectedSigningKeys = parseIndexed(root.get("rejected_signing_keys"), RejectedSigningKey.class);
             return out;
         } finally {
             Reference.reachabilityFence(this);
@@ -1204,14 +1212,15 @@ public final class Chat implements AutoCloseable {
             b.keys = Map.of();
             return b;
         }
-        Map<String, byte[]> keys = new LinkedHashMap<>();
-        JsonNode keysEl = root.get("keys");
-        if (keysEl != null && keysEl.isObject()) {
-            keysEl.fields()
-                    .forEachRemaining(
-                            e -> keys.put(e.getKey(), Base64.getDecoder().decode(e.getValue().asText())));
+        b.keys = parseKeyMap(root.get("keys"));
+        Map<String, Map<String, byte[]>> keysByConversation = new LinkedHashMap<>();
+        JsonNode keysByConversationEl = root.get("keys_by_conversation");
+        if (keysByConversationEl != null && keysByConversationEl.isObject()) {
+            keysByConversationEl
+                    .fields()
+                    .forEachRemaining(e -> keysByConversation.put(e.getKey(), parseKeyMap(e.getValue())));
         }
-        b.keys = keys;
+        b.keysByConversation = keysByConversation;
         if (root.hasNonNull("latest_version")) {
             b.latestVersion = root.get("latest_version").asText();
         }
@@ -1222,6 +1231,30 @@ public final class Chat implements AutoCloseable {
         }
         b.latestVersions = latestVersions;
         return b;
+    }
+
+    /** Parse a key map, {@code {"version": "base64", ...}}. */
+    private static Map<String, byte[]> parseKeyMap(JsonNode keysEl) {
+        Map<String, byte[]> keys = new LinkedHashMap<>();
+        if (keysEl != null && keysEl.isObject()) {
+            keysEl.fields()
+                    .forEachRemaining(
+                            e -> keys.put(e.getKey(), Base64.getDecoder().decode(e.getValue().asText())));
+        }
+        return keys;
+    }
+
+    /** Parse an object keyed by index, as a string, into its entries. */
+    private static <T> Map<String, T> parseIndexed(JsonNode node, Class<T> type) throws Exception {
+        Map<String, T> entries = new LinkedHashMap<>();
+        if (node != null && node.isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                entries.put(field.getKey(), ChatJson.MAPPER.treeToValue(field.getValue(), type));
+            }
+        }
+        return entries;
     }
 
     private static Object[][] serializeEntities(List<EntityDescriptor> entities) {
