@@ -108,6 +108,14 @@ for (const dm of result.events) {
   }
 }
 
+// A key change verifies with the signing keys of the member who made it. One
+// that did not verify is listed here; when its key was dropped, the messages
+// under it are in result.errors. For "missingSigningKey", add the public keys
+// of change.senderId (GET /2/users/{id}/public_keys) and decrypt again.
+for (const change of result.unverifiedKeyChanges) {
+  console.warn(change.index, change.reason, change.senderId, change.keyDropped);
+}
+
 // Individual events after the initial load: the empty key map resolves from
 // the cache and the unset signing keys from the store (pass either
 // explicitly to override).

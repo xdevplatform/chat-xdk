@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### Added
+
+- `decrypt_events` reports the key changes whose signature did not verify.
+  Its result has a new `unverified_key_changes` list (`unverifiedKeyChanges`
+  in JS and the JVM, `UnverifiedKeyChanges` in Go and .NET), one entry per
+  key change in the batch whose key the chat decrypted but whose signature
+  did not verify: its `index` in the batch, a `reason`, whether its key was
+  dropped (`key_dropped`), its `conversation_id` and
+  `conversation_key_version`, and the `sender_id` and `public_key_version` of
+  the signing key it names. The reason is `MissingSigningKey` when the
+  signer's signing key was not among the keys the call verified with,
+  `InvalidSignature` when the signature does not verify against it, and
+  `Unverifiable` when the key change carries no signature the SDK can check.
+  The list is empty when every key change verified, so callers that don't
+  read it see no change.
+  - A key change is signed by the member who made it, who need not have
+    written any message in the batch. Pass that member's public keys
+    (`GET /2/users/{id}/public_keys`) with the other signing keys. A key
+    change sequenced since late June 2026 that does not verify has its key
+    dropped, as before; until now nothing in the result said so, and every
+    message under that key failed with an error that asked for the key
+    change events the batch already held.
+- `decrypt_events` and `extract_conversation_keys` report the latest key
+  version of each conversation, in `conversation_keys.latest_versions`
+  (`latestVersions`, `LatestVersions`): a map from the conversation id the
+  events carry to that conversation's version. From `decrypt_events` it holds
+  the newest version whose key change verified.
+
+### Changed
+
+- `decrypt_events` sets `conversation_keys.latest_version` only when the
+  batch's verified key versions belong to one conversation. A batch with
+  events of several conversations that each have a verified key version got
+  the highest of them, which is another conversation's key version for all
+  but one: encrypting with it sends a message its recipients cannot read. It
+  is now null for such a batch; read `latest_versions[conversation_id]`. A
+  batch of one conversation, and `extract_conversation_keys`, report it as
+  before.
+- Errors for an event whose signature could not be verified say why. `…
+  signature could not be verified: signature missing or no matching signing
+  key` is now either `… the event carries no signature`, `… no signing key
+  for sender <id> at public_key_version <version> among the signing keys
+  given; pass that user's public keys as signing keys`, or `… its signed
+  payload cannot be rebuilt from the event`. In a `decrypt_events` batch, a
+  message whose key was dropped with its key change fails with `Message
+  encrypted with key version '<version>' but no matching key found: the key
+  change for that version, event <index> of the batch, did not verify, so its
+  key was dropped: <why>`. The errors' kinds are unchanged.
+
 ## [0.7.5] - 2026-11-16
 
 ### Changed

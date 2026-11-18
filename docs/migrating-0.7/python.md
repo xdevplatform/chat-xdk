@@ -892,12 +892,16 @@ with, is the newest version whose key change verified, and it never moves
 back for the chat's lifetime. A key change verifies only against its
 sender's signing key, so give the chat every participant's signing keys,
 your own included, before you decrypt. It's `None` until a key change
-verifies: a key change the SDK can't verify still adds its key to
-`result["conversation_keys"]["keys"]`, for decrypting, but never becomes the
-version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.x can return `None`: fetch the missing signing keys or the
-conversation's key-change events and decrypt again, rather than encrypting
-under the highest key in `keys`:
+verifies: a key change the SDK can't verify never becomes the version you
+encrypt with, and one sequenced since late June 2026 also has its key left
+out of `result["conversation_keys"]["keys"]`, so the messages under it don't
+decrypt; `result["unverified_key_changes"]` lists each such key change and
+the signing key it needs. A batch that spans conversations reports each
+one's version in `result["conversation_keys"]["latest_versions"]`, and
+`latest_version` is `None` when more than one has a verified version. Where
+0.5.x returned the batch's highest version, 0.7.x can return `None`: fetch
+the missing signing keys or the conversation's key-change events and decrypt
+again, rather than encrypting under the highest key in `keys`:
 
 ```python
 # 0.5.x

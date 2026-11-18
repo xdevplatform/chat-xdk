@@ -1010,7 +1010,14 @@ and `decrypt_event` fall back when its key map is empty. Its guardrails:
 
 - A key enters the cache **only** when its key-change event carries a valid
   signature — a merely adopted (unverified) key change can decrypt history but
-  never becomes an encryption key.
+  never becomes an encryption key. Key changes are adopted unverified only
+  when sequenced before late June 2026 (`sequence_id` below
+  `2070276095283454002`) or signed below signature version 6, so stored
+  history stays readable; any other key change that does not verify has its
+  key dropped. `decrypt_events` lists either kind in
+  `unverified_key_changes`, with why it did not verify: its signer's signing
+  key was not among the keys given, its signature is invalid, or it carries
+  no signature the SDK can check.
 - The cached version follows the per-conversation monotonic high-water mark:
   a replayed older key change, even validly signed, never displaces a newer
   cached key, so encryption cannot be downgraded to a stale key.

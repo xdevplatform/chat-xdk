@@ -88,6 +88,13 @@ for dm in result["messages"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
 
+# A key change verifies with the signing keys of the member who made it. One
+# that did not verify is listed here; when its key was dropped, the messages
+# under it are in result["errors"]. For "MissingSigningKey", add the public
+# keys of change["sender_id"] (GET /2/users/{id}/public_keys) and decrypt again.
+for change in result["unverified_key_changes"]:
+    print(change["index"], change["reason"], change["sender_id"], change["key_dropped"])
+
 # Individual events after the initial load: the empty key map resolves from
 # the cache and the unset signing keys from the store (pass either
 # explicitly to override).

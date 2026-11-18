@@ -52,6 +52,15 @@ try (Chat chat = new Chat()) {
     // verified conversation keys populate the cache.
     DecryptEventsResult batch = chat.decryptEvents(new DecryptEventsParams(rawEventB64List));
 
+    // A key change verifies with the signing keys of the member who made it.
+    // One that did not verify is listed here; when its key was dropped, the
+    // messages under it are in batch.errors. For MissingSigningKey, add the
+    // public keys of change.senderId (GET /2/users/{id}/public_keys) and
+    // decrypt again.
+    for (UnverifiedKeyChange change : batch.unverifiedKeyChanges) {
+        System.err.println(change.index + " " + change.reason + " " + change.senderId);
+    }
+
     // Individual events: the empty key map and unset signing keys resolve
     // from the session stores.
     JsonNode event = chat.decryptEvent(new DecryptEventParams(eventB64, Map.of()));
