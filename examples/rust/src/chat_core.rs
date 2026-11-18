@@ -8,7 +8,8 @@
 //! - conversation keys  -> [`ChatCore::prepare_conversation_key_change`] / [`ChatCore::decrypt_conversation_key`]
 //! - message encryption -> [`ChatCore::encrypt_reply`], then
 //!   [`ChatCore::encrypt_media`] for its files
-//! - event decryption   -> [`ChatCore::decrypt_batch`] (decrypt_events) and
+//! - event decryption   -> [`ChatCore::decrypt_batch`] /
+//!   [`ChatCore::decrypt_batch_with_signers`] (decrypt_events) and
 //!   [`ChatCore::decrypt_one`] (decrypt_event)
 
 use std::collections::HashMap;
@@ -23,6 +24,7 @@ use chat_xdk_core::{
     GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
     PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
     PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
+    UnverifiedKeyChangeReason,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -206,6 +208,34 @@ impl ChatCore {
             &DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
                 .with_signing_keys(signing_keys.to_vec()),
         )
+    }
+
+    /// Batch path that also gets the signing keys its key changes need.
+    ///
+    /// A key change is signed by the member who made it, who may have written
+    /// none of the page's messages, so the keys of the messages' senders do
+    /// not verify it. Unverified, a recent key change loses its key and the
+    /// messages under it do not decrypt. When the batch reports key changes
+    /// whose signer's keys were missing, this calls `fetch_signing_keys`
+    /// with those signers, adds the keys it returns to `signing_keys`, and
+    /// decrypts the batch again.
+    pub fn decrypt_batch_with_signers(
+        &self,
+        events: &[&str],
+        signing_keys: &mut Vec<SigningKeyEntry>,
+        fetch_signing_keys: impl FnOnce(&[String]) -> Vec<SigningKeyEntry>,
+    ) -> DecryptEventsResult {
+        let result = self.decrypt_batch(events, signing_keys);
+        let signers = missing_key_change_signers(&result);
+        if signers.is_empty() {
+            return result;
+        }
+        let fetched = fetch_signing_keys(&signers);
+        if fetched.is_empty() {
+            return result;
+        }
+        signing_keys.extend(fetched);
+        self.decrypt_batch(events, signing_keys)
     }
 
     /// Single-event path — used for each new event after the initial load.
@@ -466,6 +496,21 @@ impl Default for ChatCore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The users whose signing keys a [`ChatCore::decrypt_batch`] result lacked
+/// to verify a key change, each once: fetch their public keys and decrypt
+/// again.
+pub fn missing_key_change_signers(result: &DecryptEventsResult) -> Vec<String> {
+    let mut signers: Vec<String> = result
+        .unverified_key_changes
+        .values()
+        .filter(|change| change.reason == UnverifiedKeyChangeReason::MissingSigningKey)
+        .filter_map(|change| change.sender_id.clone())
+        .collect();
+    signers.sort();
+    signers.dedup();
+    signers
 }
 
 /// Pull the plain text out of a decrypted Message event, or `None`.

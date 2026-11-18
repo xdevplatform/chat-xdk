@@ -7,7 +7,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chat_xdk_core::error::SdkError;
-use chat_xdk_core::{Event, SigningKeyEntry, FEATURES_REFRESH_MS};
+use chat_xdk_core::{DecryptEventsResult, Event, SigningKeyEntry, FEATURES_REFRESH_MS};
 
 use crate::chat_core::{message_text, ChatCore, ReplyOptions};
 use crate::x_api::{ChatApi, EventItem};
@@ -48,29 +48,72 @@ impl<A: ChatApi> Bot<A> {
         })
     }
 
+    /// The signing keys of the senders of `events`.
     fn signing_keys_for(&self, events: &[EventItem]) -> Vec<SigningKeyEntry> {
         let mut seen = HashSet::new();
+        let senders: Vec<String> = events
+            .iter()
+            .map(|e| e.sender_id.clone())
+            .filter(|id| !id.is_empty() && *id != self.bot_user_id && seen.insert(id.clone()))
+            .collect();
+        self.signing_keys_of(&senders)
+    }
+
+    /// The signing keys of `user_ids`, fetched from the X API.
+    fn signing_keys_of(&self, user_ids: &[String]) -> Vec<SigningKeyEntry> {
         let mut keys = Vec::new();
-        for e in events {
-            if e.sender_id.is_empty()
-                || e.sender_id == self.bot_user_id
-                || !seen.insert(e.sender_id.clone())
-            {
-                continue;
-            }
-            match self.api.get_public_keys(&e.sender_id) {
+        for user_id in user_ids {
+            match self.api.get_public_keys(user_id) {
                 Ok(mut pks) => keys.append(&mut pks),
-                Err(err) => eprintln!("public_keys_fetch_failed sender={} err={err}", e.sender_id),
+                Err(err) => eprintln!("public_keys_fetch_failed user={user_id} err={err}"),
             }
         }
         keys
+    }
+
+    /// Batch-decrypt `events`, adding to `signing_keys` the keys of the
+    /// members who made their key changes: they sign them, and may have sent
+    /// none of the page's messages. Logs what the batch still could not use.
+    fn decrypt_batch(
+        &self,
+        conversation_id: &str,
+        events: &[&str],
+        signing_keys: &mut Vec<SigningKeyEntry>,
+    ) -> DecryptEventsResult {
+        let result = self
+            .core
+            .decrypt_batch_with_signers(events, signing_keys, |user_ids| {
+                self.signing_keys_of(user_ids)
+            });
+        for (index, change) in &result.unverified_key_changes {
+            eprintln!(
+                "key_change_unverified conv={conversation_id} event={index} reason={:?} \
+                 signer={} key_dropped={}",
+                change.reason,
+                change.sender_id.as_deref().unwrap_or(""),
+                change.key_dropped
+            );
+        }
+        for (index, change) in &result.undecryptable_key_changes {
+            eprintln!(
+                "key_change_undecryptable conv={conversation_id} event={index} reason={:?}",
+                change.reason
+            );
+        }
+        for (index, key) in &result.rejected_signing_keys {
+            eprintln!(
+                "signing_key_rejected index={index} user={} version={}",
+                key.user_id, key.public_key_version
+            );
+        }
+        result
     }
 
     /// Initial load: batch-decrypt the backlog (decrypt_events path), filling
     /// the SDK's conversation-key cache from the key changes.
     pub fn load_backlog(&mut self, conversation_id: &str) -> Result<(), String> {
         let (events, key_events, next) = self.api.get_events(conversation_id, 100, None)?;
-        let signing_keys = self.signing_keys_for(&events);
+        let mut signing_keys = self.signing_keys_for(&events);
         // The key events carry the conversation keys the messages decrypt
         // under; they must be in the same batch.
         let refs: Vec<&str> = key_events
@@ -83,7 +126,7 @@ impl<A: ChatApi> Bot<A> {
                     .map(|e| e.encoded_event.as_str()),
             )
             .collect();
-        let result = self.core.decrypt_batch(&refs, &signing_keys);
+        let result = self.decrypt_batch(conversation_id, &refs, &mut signing_keys);
 
         let st = self.state.entry(conversation_id.to_string()).or_default();
         let key_count = result.conversation_keys.keys.len();
@@ -104,14 +147,15 @@ impl<A: ChatApi> Bot<A> {
             .and_then(|s| s.pagination_token.clone());
         let (events, key_events, next) =
             self.api.get_events(conversation_id, 50, token.as_deref())?;
-        let signing_keys = self.signing_keys_for(&events);
+        let mut signing_keys = self.signing_keys_for(&events);
 
         // Key changes for this page arrive in meta, not data; only the batch
         // path feeds the key cache, so route them through it before
-        // decrypting the messages that need them.
+        // decrypting the messages that need them. The batch fetches the keys
+        // of the members who made them.
         if !key_events.is_empty() {
             let refs: Vec<&str> = key_events.iter().map(String::as_str).collect();
-            self.core.decrypt_batch(&refs, &signing_keys);
+            self.decrypt_batch(conversation_id, &refs, &mut signing_keys);
         }
 
         for item in &events {
@@ -135,8 +179,11 @@ impl<A: ChatApi> Bot<A> {
                 // Only the batch path adopts keys into the cache; replay the
                 // key change through it so the rotated key becomes the
                 // sending key.
-                self.core
-                    .decrypt_batch(&[item.encoded_event.as_str()], &signing_keys);
+                self.decrypt_batch(
+                    conversation_id,
+                    &[item.encoded_event.as_str()],
+                    &mut signing_keys,
+                );
                 continue;
             }
 

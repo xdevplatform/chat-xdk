@@ -40,33 +40,64 @@ export class ChatBot {
     return this.state.get(conversationId);
   }
 
-  /** Fetch signing keys for unseen senders and refresh the SDK's store. */
+  /** Fetch signing keys for the unseen senders of `events` and refresh the SDK's store. */
   async #storeSigningKeysFor(events) {
-    const senders = new Set(
-      events
-        .map((e) => String(e.senderId ?? e.sender_id ?? ""))
-        .filter((id) => id && id !== this.botUserId),
-    );
+    const senders = events
+      .map((e) => String(e.senderId ?? e.sender_id ?? ""))
+      .filter((id) => id && id !== this.botUserId);
+    await this.#storeSigningKeysOf(senders);
+  }
+
+  /**
+   * Fetch the signing keys of the users among `userIds` not fetched yet and
+   * refresh the SDK's store. Resolves to whether it stored any.
+   */
+  async #storeSigningKeysOf(userIds) {
     let changed = false;
-    for (const senderId of senders) {
-      if (this.signingKeys.has(senderId)) continue;
+    for (const userId of new Set(userIds)) {
+      if (this.signingKeys.has(userId)) continue;
       try {
-        const entries = (await this.api.getPublicKeys(senderId)).map((pk) => ({
-          userId: senderId,
+        const entries = (await this.api.getPublicKeys(userId)).map((pk) => ({
+          userId,
           publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
           publicKey: pk.signingPublicKey ?? pk.signing_public_key ?? "",
           identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
           identityPublicKeySignature:
             pk.identityPublicKeySignature ?? pk.identity_public_key_signature ?? "",
         }));
-        this.signingKeys.set(senderId, entries);
+        this.signingKeys.set(userId, entries);
         changed = true;
       } catch {
-        console.warn(`public_keys_fetch_failed sender=${senderId}`);
+        console.warn(`public_keys_fetch_failed user=${userId}`);
       }
     }
     // setSigningKeys replaces the previous set, so pass every known entry.
     if (changed) this.core.setSigningKeys([...this.signingKeys.values()].flat());
+    return changed;
+  }
+
+  /**
+   * Batch-decrypt `eventsB64`, fetching the signing keys of the members who
+   * made its key changes: they sign them, and may have sent none of the
+   * page's messages. Logs what the batch still could not use.
+   */
+  async #decryptBatch(conversationId, eventsB64) {
+    const batch = await this.core.decryptBatchWithSigners(eventsB64, (userIds) =>
+      this.#storeSigningKeysOf(userIds),
+    );
+    for (const [index, change] of Object.entries(batch.unverifiedKeyChanges)) {
+      console.warn(
+        `key_change_unverified conv=${conversationId} event=${index} reason=${change.reason} ` +
+          `signer=${change.senderId} key_dropped=${change.keyDropped}`,
+      );
+    }
+    for (const [index, change] of Object.entries(batch.undecryptableKeyChanges)) {
+      console.warn(`key_change_undecryptable conv=${conversationId} event=${index} reason=${change.reason}`);
+    }
+    for (const [index, key] of Object.entries(batch.rejectedSigningKeys)) {
+      console.warn(`signing_key_rejected index=${index} user=${key.userId} version=${key.publicKeyVersion}`);
+    }
+    return batch;
   }
 
   /** Initial load: batch-decrypt the backlog (decryptEvents path). */
@@ -87,7 +118,7 @@ export class ChatBot {
 
     // Signing keys come from the store; the verified conversation keys land
     // in the SDK's key cache, so no key state is kept in the bot.
-    const batch = this.core.decryptBatch(eventsB64);
+    const batch = await this.#decryptBatch(conversationId, eventsB64);
     // The XDK response model may expose either casing for the token.
     st.paginationToken = page.meta?.nextToken ?? page.meta?.next_token;
     console.log(
@@ -108,12 +139,12 @@ export class ChatBot {
     await this.#storeSigningKeysFor(raw);
     // Key changes for this page arrive in meta, not data; only the batch
     // path feeds the key cache, so route them through it before decrypting.
-    // This runs after the signing keys are stored: a key change from a
-    // sender missing from the store would fail verification and never be
-    // cached.
+    // The batch fetches the keys of the members who made them: a key change
+    // whose signer is missing from the store would fail verification and
+    // never be cached.
     const keyEventsB64 =
       page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
-    if (keyEventsB64.length) this.core.decryptBatch(keyEventsB64);
+    if (keyEventsB64.length) await this.#decryptBatch(conversationId, keyEventsB64);
 
     for (const item of raw) {
       const eventB64 = item.encodedEvent ?? item.encoded_event;
@@ -131,7 +162,7 @@ export class ChatBot {
       if (event.type === "keyChange") {
         // Only the batch path feeds the key cache, so route key changes back
         // through it to adopt the rotated key.
-        this.core.decryptBatch([eventB64]);
+        await this.#decryptBatch(conversationId, [eventB64]);
         continue;
       }
       await this.#maybeReply(conversationId, event, eventB64);

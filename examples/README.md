@@ -72,6 +72,24 @@ flowchart LR
 The offline test exercises the crypto core directly; only the I/O layer touches
 the network.
 
+### Signing keys for key changes
+
+A bot verifies each event against the signing keys of the user who sent it,
+which it fetches from the X API (`GET /2/users/{id}/public_keys`). A key
+change is signed by the member who made it, who may have sent none of the
+messages on the page, so fetching keys for the senders of the messages is not
+enough: without its signer's keys a recent key change does not verify, its key
+is dropped, and the messages under it do not decrypt.
+
+Each bot therefore decrypts a batch through its crypto core's
+`decryptBatchWithSigners` (`decrypt_batch_with_signers`,
+`DecryptBatchWithSigners`). It decrypts the batch, reads the result's
+`unverifiedKeyChanges` for the key changes whose reason is a missing signing
+key, fetches the public keys of those signers, and decrypts the batch again.
+The bots log what the second pass still reports: key changes that did not
+verify, key changes whose key the bot could not decrypt, and signing keys that
+were rejected.
+
 ## Running an example
 
 ```bash

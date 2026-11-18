@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { ChatCore } from "../src/chat-core.mjs";
+import { delivered, deliveredAction } from "../../../crates/wasm/js/tests/frame.mjs";
+import { ChatCore, messageText, missingKeyChangeSigners } from "../src/chat-core.mjs";
 
 const vectors = JSON.parse(
   await readFile(new URL("../../../tests/fixtures/sdk_vectors.json", import.meta.url), "utf8"),
@@ -114,6 +115,70 @@ test("session cache: decryptBatch feeds the key cache, encryptReply omits the ke
   assert.ok(body.encoded_message_create_event);
   assert.ok(body.message_id);
   assert.ok(body.xdk_version);
+});
+
+/** A core with fresh keys as user `userId`, and the keys others hold for it. */
+async function party(userId) {
+  const core = await ChatCore.create();
+  const { registration, privateKeysB64 } = core.generateAndRegister();
+  core.loadKeys(privateKeysB64, "1");
+  core.setIdentity(userId);
+  const key = registration.publicKey;
+  return {
+    core,
+    userId,
+    signingKey: {
+      userId,
+      publicKeyVersion: "1",
+      publicKey: key.signingPublicKey,
+      identityPublicKey: key.publicKey,
+      identityPublicKeySignature: key.identityPublicKeySignature,
+    },
+    publicKey: { userId, identityPublicKey: key.publicKey, publicKeyVersion: "1" },
+  };
+}
+
+test("decryptBatchWithSigners gets the keys of the member who made a key change", async () => {
+  // An admin rotates a group's key and a member sends a message under it.
+  // The bot holds the member's signing keys: the member is the only sender
+  // on the page.
+  const [admin, member, bot] = await Promise.all(["5001", "5002", "5003"].map(party));
+  const prepared = admin.core.prepareConversationKeyChange({
+    publicKeys: [admin, member, bot].map((each) => each.publicKey),
+    conversationId: "g900",
+  });
+  const keyChange = deliveredAction(prepared.actionSignatures[0], admin.userId, "g900", "2100000000000000000");
+  const body = member.core.encryptReply({
+    conversationId: "g900",
+    text: "hello group",
+    conversationKey: prepared.conversationKey,
+    conversationKeyVersion: prepared.conversationKeyVersion,
+  });
+  const events = [keyChange, delivered(body.event_b64, "2100000000000000001")];
+  bot.core.setSigningKeys([member.signingKey]);
+
+  // Without the admin's keys the key change does not verify: its key is
+  // dropped and the message does not decrypt.
+  const unverified = bot.core.decryptBatch(events);
+  assert.deepEqual(unverified.events, []);
+  assert.deepEqual(missingKeyChangeSigners(unverified), ["5001"]);
+
+  const asked = [];
+  const batch = await bot.core.decryptBatchWithSigners(events, async (userIds) => {
+    asked.push(...userIds);
+    bot.core.setSigningKeys([member.signingKey, admin.signingKey]);
+    return true;
+  });
+  assert.deepEqual(asked, ["5001"]);
+  assert.deepEqual(batch.errors, {});
+  assert.deepEqual(missingKeyChangeSigners(batch), []);
+  assert.deepEqual(
+    batch.events.map(({ event }) => messageText(event)),
+    [null, "hello group"],
+  );
+
+  // With every signer's keys stored there is nothing to fetch.
+  await bot.core.decryptBatchWithSigners(events, async () => assert.fail("no signer's keys are missing"));
 });
 
 test("decryptBatch on an empty list is safe", async () => {

@@ -14,7 +14,8 @@ namespace ChatBot;
 ///   <item>key management     -> LoadKeys / SetIdentity / GenerateAndRegister</item>
 ///   <item>conversation keys  -> PrepareConversationKeyChange / DecryptConversationKey</item>
 ///   <item>message encryption -> EncryptReply, then EncryptMedia for its files</item>
-///   <item>event decryption   -> DecryptBatch (DecryptEvents) and DecryptOne (DecryptEvent)</item>
+///   <item>event decryption   -> DecryptBatch / DecryptBatchWithSignersAsync (DecryptEvents)
+///   and DecryptOne (DecryptEvent)</item>
 /// </list>
 /// </summary>
 public sealed class ChatCore : IDisposable
@@ -88,6 +89,34 @@ public sealed class ChatCore : IDisposable
         {
             SigningKeys = signingKeys?.ToList(),
         });
+
+    /// <summary>
+    /// Batch path that also gets the signing keys its key changes need.
+    ///
+    /// A key change is signed by the member who made it, who may have written
+    /// none of the page's messages, so the keys of the messages' senders do
+    /// not verify it. Unverified, a recent key change loses its key and the
+    /// messages under it do not decrypt. When the batch reports key changes
+    /// whose signer's keys were missing, this calls
+    /// <paramref name="fetchSigningKeys"/> with those signers, adds the keys
+    /// it returns to <paramref name="signingKeys"/>, and decrypts the batch
+    /// again.
+    /// </summary>
+    public async Task<DecryptEventsResult> DecryptBatchWithSignersAsync(
+        IReadOnlyList<string> eventsB64,
+        List<SigningKeyEntry> signingKeys,
+        Func<IReadOnlyList<string>, Task<List<SigningKeyEntry>>> fetchSigningKeys)
+    {
+        var result = DecryptBatch(eventsB64, signingKeys);
+        var signers = EventHelpers.MissingKeyChangeSigners(result);
+        if (signers.Count == 0)
+            return result;
+        var fetched = await fetchSigningKeys(signers);
+        if (fetched.Count == 0)
+            return result;
+        signingKeys.AddRange(fetched);
+        return DecryptBatch(eventsB64, signingKeys);
+    }
 
     /// <summary>Single-event path — used for each new event after the initial load.</summary>
     public JsonElement DecryptOne(string eventB64, Dictionary<string, byte[]> conversationKeys, IEnumerable<SigningKeyEntry>? signingKeys = null)
@@ -319,6 +348,20 @@ public sealed record SendBody(
 /// <summary>Pull the plain text out of a decrypted Message event, or null.</summary>
 public static class EventHelpers
 {
+    /// <summary>
+    /// The users whose signing keys a <see cref="ChatCore.DecryptBatch"/>
+    /// result lacked to verify a key change, each once: fetch their public
+    /// keys and decrypt again.
+    /// </summary>
+    public static List<string> MissingKeyChangeSigners(DecryptEventsResult result) =>
+        result.UnverifiedKeyChanges.Values
+            .Where(change => change.Reason == UnverifiedKeyChangeReason.MissingSigningKey)
+            .Select(change => change.SenderId)
+            .OfType<string>()
+            .Distinct()
+            .OrderBy(userId => userId, StringComparer.Ordinal)
+            .ToList();
+
     public static string? MessageText(JsonElement evt)
     {
         if (!evt.TryGetProperty("type", out var type) || type.GetString() != "Message")

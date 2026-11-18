@@ -9,7 +9,8 @@
  *   - key management     -> loadKeys / generateAndRegister / setIdentity
  *   - conversation keys  -> prepareConversationKeyChange / setCacheKeys
  *   - message encryption -> encryptReply / encryptReaction, then encryptMedia for files
- *   - event decryption   -> decryptBatch (decryptEvents) and decryptOne (decryptEvent)
+ *   - event decryption   -> decryptBatch / decryptBatchWithSigners (decryptEvents)
+ *                           and decryptOne (decryptEvent)
  *
  * The session model: identity (setIdentity), signing keys (setSigningKeys),
  * and the conversation-key cache (setCacheKeys) are set once, so the
@@ -133,6 +134,25 @@ export class ChatCore {
   /** Batch path — used on initial conversation load (also feeds the key cache). */
   decryptBatch(eventsB64, signingKeys) {
     return this.#chat.decryptEvents({ events: eventsB64, signingKeys });
+  }
+
+  /**
+   * Batch path that also gets the signing keys its key changes need.
+   *
+   * A key change is signed by the member who made it, who may have written
+   * none of the page's messages, so the keys of the messages' senders do not
+   * verify it. Unverified, a recent key change loses its key and the
+   * messages under it do not decrypt. When the batch reports key changes
+   * whose signer's keys were missing, this calls
+   * `storeSigningKeysOf(userIds)` with those signers, which fetches their
+   * public keys, stores them (setSigningKeys) and resolves to whether it
+   * stored any, and then decrypts the batch again.
+   */
+  async decryptBatchWithSigners(eventsB64, storeSigningKeysOf) {
+    const batch = this.decryptBatch(eventsB64);
+    const signers = missingKeyChangeSigners(batch);
+    if (signers.length === 0 || !(await storeSigningKeysOf(signers))) return batch;
+    return this.decryptBatch(eventsB64);
   }
 
   /**
@@ -372,6 +392,17 @@ export class ChatCore {
   decrypt(ciphertextB64, conversationKey) {
     return this.#chat.decrypt(ciphertextB64, conversationKey);
   }
+}
+
+/**
+ * The users whose signing keys a decryptBatch result lacked to verify a key
+ * change, each once: fetch their public keys and decrypt again.
+ */
+export function missingKeyChangeSigners(batch) {
+  const signers = Object.values(batch.unverifiedKeyChanges)
+    .filter((change) => change.reason === "missingSigningKey" && change.senderId)
+    .map((change) => change.senderId);
+  return [...new Set(signers)];
 }
 
 /** Pull the plain text out of a decrypted Message event, or null. */
