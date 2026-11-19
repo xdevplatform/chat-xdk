@@ -118,10 +118,11 @@ func main() {
 }
 ```
 
-With the key cache on, calls that omit their conversation key read it from
-the cache: the encrypt methods and the group title, description and avatar
-changes use the conversation's newest key, and `DecryptEvent`, `DecryptFile`
-and `FileDecryptor` the key at the version the event names. So
+With the key cache on, the chat keeps every key version of a conversation,
+and calls that omit their conversation key read it from the cache: the
+encrypt methods and the group title, description and avatar changes use the
+conversation's newest key, and `DecryptEvent`, `DecryptFile` and
+`FileDecryptor` the key at the version the event names. So
 `DecryptFileParams.ConversationKeys`, `FileDecryptorParams.ConversationKeys`
 and `GroupAvatarChangeParams.ConversationKeyVersion` may be left unset. A
 value that is passed is used as is.
@@ -171,7 +172,8 @@ With a hook set:
 Setting a hook turns the key cache on (`SetCacheKeys`). An error the hook
 returns is returned by the call that ran it. A lookup is not repeated for a
 minute: a user the hook was called for and whose key did not arrive is left
-out of the next calls until then.
+out of the next calls until then. No other method calls the hook:
+`DecryptEvent` verifies with the keys the chat has stored.
 
 Without a hook, the same steps are calls of their own:
 
@@ -184,8 +186,31 @@ batch, _ = chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64Lis
 ```
 
 `AddPublicKeys` adds to the keys `SetSigningKeys` and `AddSigningKeys`
-store. Signing keys and public keys that a call is passed are used as they
-are, and the hook is not called for that call.
+store. The four prepare calls above read the stored keys without a hook too:
+leave `PublicKeys` nil once the members' keys are stored. Signing keys and
+public keys that a call is passed are used as they are, and the hook is not
+called for that call.
+
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Give each chat the same function,
+  over one cache of `GET /2/users/{id}/public_keys` answers for the whole
+  process. Have the cache share a lookup that is under way, drop a lookup
+  that failed so the next call tries again, and expire each answer after a
+  few minutes so a key a user registers later is picked up.
+  [`examples/go/multiuser.go`](../../examples/go/multiuser.go) has one
+  (`SharedPublicKeys`), with `UserChats` for the chats.
+- **Add keys, don't replace them.** `SetSigningKeys` replaces every stored
+  key, the ones the hook fetched included, and the chat then waits a minute
+  before it asks the hook for them again. With a hook set, add keys with
+  `AddSigningKeys` or `AddPublicKeys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 

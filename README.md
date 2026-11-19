@@ -48,7 +48,9 @@ Python/Rust, PascalCase in .NET/Go):
    [Public keys and the hook](docs/API.md#public-keys-and-the-hook)).
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
-   keys by user automatically. Per-event errors are collected in the result;
+   keys by user automatically. With a hook set, it fetches the public keys the
+   batch lacks and decrypts once more (`decryptEventsAsync` in JS and .NET).
+   Per-event errors are collected in the result;
    only invalid params throw. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
    The signing keys must include those of every member who made a key change
@@ -61,7 +63,9 @@ Python/Rust, PascalCase in .NET/Go):
    conversation id: `conversationKeys.keysByConversation` and
    `conversationKeys.latestVersions`.
 4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
-   decrypts one event (webhook / poll). Throws on failure.
+   decrypts one event (webhook / poll). Throws on failure. With the key
+   cache on, `conversationKeys` can be left out, and a key change that
+   verifies here is cached as one in a batch is.
 5. **Reply** — `encryptMessage({conversationId, text})` or
    `encryptReply({conversationId, text, replyToEvent})` → POST the result to
    the X Chat API.
@@ -79,6 +83,13 @@ Python/Rust, PascalCase in .NET/Go):
 |--------|----------|
 | `decryptEvents` | Batch (initial load, pagination). Self-extracts keys; collects errors. |
 | `decryptEvent` | Single event (webhook, real-time) with cached keys. Throws on error. |
+
+**Many users, many conversations.** A server keeps one chat per signed-in
+user, for all of that user's conversations, never one per conversation, and
+gives every chat the same `resolvePublicKeys` function over one cache of
+public keys for the process. See [Many users, many
+conversations](docs/API.md#many-users-many-conversations); each example has
+the pattern as code that runs.
 
 > The conversation id is part of the message signature. The SDK signs it in its
 > canonical (colon-separated) form, so you can pass either the colon or the

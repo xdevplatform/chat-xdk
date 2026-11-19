@@ -98,7 +98,14 @@ changes use the conversation's newest key, and `DecryptEvent`, `DecryptFile`
 and `FileDecryptor` the key at the version the event names. So
 `DecryptFileParams` and `FileDecryptorParams` can be created without a key
 map, and `GroupAvatarChangeParams` without a key version. A value that is
-passed is used as is.
+passed is used as is. The cache keeps every key version of a conversation,
+so a message or file sent before a key change still decrypts after it.
+`PrepareConversationKeyChange`, `PrepareGroupCreate`,
+`PrepareGroupMembersChange` and `PrepareGroupMembersRemove` cache the key
+they make as the conversation's newest, so a send right after one of them
+uses that key.
+
+Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatXdkUtilities`**.
 
 ## Other users' public keys
 
@@ -156,7 +163,26 @@ var created = await chat.PrepareGroupCreateAsync(
 - A call that passes `SigningKeys` or `PublicKeys` uses them as is and never
   calls the hook.
 
-Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatXdkUtilities`**.
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Give each chat the same function,
+  over one cache of `GET /2/users/{id}/public_keys` answers for the whole
+  process. Have the cache share a lookup that is under way, drop a lookup
+  that failed so the next call tries again, and expire each answer after a
+  few minutes so a key a user registers later is picked up.
+  [`examples/dotnet/ChatBot/MultiUser.cs`](../../examples/dotnet/ChatBot/MultiUser.cs)
+  has one (`SharedPublicKeys`), with `UserChats` for the chats.
+- **Add keys, don't replace them.** `SetSigningKeys` replaces every stored
+  key, the ones the hook fetched included, and the chat then waits a minute
+  before it asks the hook for them again. With a hook set, add keys with
+  `AddSigningKeys` or `AddPublicKeys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 

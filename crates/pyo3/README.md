@@ -185,12 +185,14 @@ created = chat.prepare_group_create(
   they are passed no `public_keys`, call the hook for the members who have
   no stored key.
 
+No other method calls the hook: `decrypt_event` fetches no keys.
+
 The hook is called with a list of user ids and returns a dict from user id
 to that user's records, leaving out a user it has nothing for. A record is
 read as the X API sends it; other fields, such as `juicebox_config`, are
-ignored. An exception the hook raises reaches the caller. Setting a hook
-turns the key cache on. A lookup that brought no key is not repeated for a
-minute.
+ignored. The hook runs on the calling thread, and an exception it raises
+reaches the caller. Setting a hook turns the key cache on. A lookup that
+brought no key is not repeated for a minute.
 
 `public_keys` is optional on the params of those four prepare methods. Left
 out, the new key is encrypted to the stored public keys of the members the
@@ -221,6 +223,27 @@ if user_ids:
 list a user again for a minute when the lookup brought no key.
 `add_public_keys` adds to the stored signing keys, as `add_signing_keys`
 does.
+
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Give each chat the same function,
+  over one cache of `GET /2/users/{id}/public_keys` answers for the whole
+  process. Have the cache share a lookup that is under way, drop a lookup
+  that failed so the next call tries again, and expire each answer after a
+  few minutes so a key a user registers later is picked up.
+  [`examples/python/multi_user.py`](../../examples/python/multi_user.py)
+  has one (`SharedPublicKeys`), with `UserChats` for the chats.
+- **Add keys, don't replace them.** `set_signing_keys` replaces every stored
+  key, the ones the hook fetched included, and the chat then waits a minute
+  before it asks the hook for them again. With a hook set, add keys with
+  `add_signing_keys` or `add_public_keys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 

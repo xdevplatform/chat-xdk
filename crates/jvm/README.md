@@ -89,6 +89,7 @@ try (Chat chat = new Chat()) {
 }
 ```
 
+The key cache keeps every key version of a conversation, not only the newest.
 With the key cache on, calls that omit their conversation key read it from
 the cache: the encrypt methods and the group title, description and avatar
 changes use the conversation's newest key, and `decryptEvent`, `decryptFile`
@@ -130,6 +131,9 @@ PreparedConversationChange created =
         chat.prepareGroupCreate(new GroupCreateParams(groupId, memberIds, adminIds));
 ```
 
+- Only `decryptEvents` and the four prepare calls above call the resolver.
+  `decryptEvent` does not: it verifies with the signing keys it is passed,
+  or with the stored ones.
 - Setting a resolver turns the key cache on (`setCacheKeys(true)`). The
   resolver runs on the calling thread, at most once per call, and an
   exception it throws is thrown by the decrypt or prepare call.
@@ -149,11 +153,35 @@ PreparedConversationChange created =
 - A call that passes `signingKeys` or `publicKeys` uses them as is and never
   calls the resolver.
 
-Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One resolver for every chat.** Give each chat the same
+  `PublicKeyResolver`, over one cache of `GET /2/users/{id}/public_keys`
+  answers for the whole process. Have the cache share a lookup that is under
+  way, drop a lookup that failed so the next call tries again, and expire
+  each answer after a few minutes so a key a user registers later is picked
+  up.
+  [`examples/jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java`](../../examples/jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java)
+  has one (`SharedPublicKeys`), with
+  [`UserChats`](../../examples/jvm/src/main/java/com/example/chatbot/UserChats.java)
+  for the chats.
+- **Add keys, don't replace them.** `setSigningKeys` replaces every stored
+  key, the ones the resolver fetched included, and the chat then waits a
+  minute before it asks the resolver for them again. With a resolver set,
+  add keys with `addSigningKeys` or `addPublicKeys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 
 See the **JVM** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
+
+Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
 
 ## Network access
 

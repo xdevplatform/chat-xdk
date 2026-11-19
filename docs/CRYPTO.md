@@ -1059,6 +1059,14 @@ key map is empty. Its guardrails:
   as it is for keys the caller passes. The hook runs in the host language:
   the core calls no code but its own, and only asks which users' keys are
   missing and takes the records back.
+- A process with several signed-in users keeps one chat per user and may
+  put one cache of fetched public-key records behind the hook of all of them
+  ([API.md](API.md#many-users-many-conversations)). The records are public,
+  and each chat checks every record's identity binding itself before it
+  verifies with it or encrypts to it, so a wrong record in the cache does to
+  each chat what a wrong answer from the X API would. Nothing else is
+  shared: each chat keeps its own private keys, conversation keys, stored
+  public keys and verified key versions.
 
 ### Known Limitations
 

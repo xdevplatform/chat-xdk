@@ -80,7 +80,8 @@ await chat.unlock("2580");
 chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
 chat.setCacheKeys(true);
 // Each signing-key entry carries all five fields from the X API
-// public keys response.
+// public keys response. setSigningKeys replaces the stored keys;
+// addSigningKeys adds to them.
 chat.setSigningKeys([
   {
     userId: "111",
@@ -240,6 +241,86 @@ if (userIds.length > 0) {
 
 `missingPublicKeys` also remembers what it returned: it does not list the
 same missing key again for a minute.
+
+`addPublicKeys` and `addSigningKeys` add to the stored keys, where
+`setSigningKeys` replaces them all. With a hook set, add: `setSigningKeys`
+also drops the keys the hook fetched, and the chat waits a minute before it
+asks the hook for them again.
+
+### Many users, many conversations
+
+A server often has many users signed in at once, each in many conversations.
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Each chat stores only the keys it
+  was given, so give every chat the same `resolvePublicKeys`, over one cache
+  of `GET /2/users/{id}/public_keys` answers for the whole process. Then two
+  chats that meet the same user cost one request. Have the cache share a
+  lookup that is under way, drop a lookup that failed so the next call tries
+  again, and expire each answer after a few minutes so a key a user
+  registers later is picked up.
+- **Add keys, don't replace them**, as above.
+
+```js
+import { createChat } from "@xdevplatform/chat-xdk";
+
+const KEY_TTL_MS = 5 * 60_000;
+const keyCache = new Map(); // userId -> { records: Promise<records | null>, expires }
+const resolvePublicKeys = async (ids) => {
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    let entry = keyCache.get(id);
+    if (!entry || entry.expires <= Date.now()) {
+      const fresh = { expires: Date.now() + KEY_TTL_MS };
+      // A failed lookup is dropped, so the next call fetches again.
+      fresh.records = xApi.getPublicKeys(id).catch(() => {
+        if (keyCache.get(id) === fresh) keyCache.delete(id);
+        return null;
+      });
+      keyCache.set(id, (entry = fresh));
+    }
+    const recs = await entry.records;
+    if (recs) out[id] = recs;
+  }));
+  return out;
+};
+
+const chats = new Map(); // localUserId -> Promise<chat>
+function chatFor(user) {
+  if (!chats.has(user.id)) chats.set(user.id, openChat(user));
+  return chats.get(user.id);
+}
+async function openChat(user) {
+  const chat = await createChat({
+    juiceboxConfig: user.juiceboxConfig,
+    getAuthToken: user.getAuthToken,
+    resolvePublicKeys,
+  });
+  await chat.unlock(user.pin);
+  chat.setIdentity({ userId: user.id, signingKeyVersion: user.signingKeyVersion });
+  return chat;
+}
+
+// For a request of a signed-in user:
+const chat = await chatFor(user);
+const result = await chat.decryptEventsAsync({ events: rawEvents });
+```
+
+`xApi.getPublicKeys(id)` stands for your call to
+`GET /2/users/{id}/public_keys`, which resolves to the `data` array of the
+response. `chats` keeps the promise of each chat, so two requests of one
+user that arrive together share one chat. Run `unlock` and the other
+Juicebox calls one chat at a time: juicebox-sdk reads its auth-token callback
+from one place in the process. When a user signs out, take the chat out of
+`chats` and call `free()` on it.
+
+[`examples/js/src/multi-user.mjs`](../../../examples/js/src/multi-user.mjs)
+has this pattern as code that runs, with tests, and
+[Many users, many conversations](../../../docs/API.md#many-users-many-conversations)
+says when a key a user registers later is picked up.
 
 ## API
 
