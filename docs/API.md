@@ -240,6 +240,7 @@ from the session identity set via `set_identity`.
 | 21 | **extract_conversation_keys** | `(events: &[&str]) → ConversationKeyResult` | `extractConversationKeys(string[]) → ConversationKeyResult` | `extract_conversation_keys(list[str]) → dict` | `ExtractConversationKeys(events []string) (*ConversationKeyBundle, error)` | `extractConversationKeys(List<String>)` | `ExtractConversationKeys(IEnumerable<string>)` |
 | 22 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
 | 23 | **set_signing_keys** | `set_signing_keys(&[SigningKeyEntry])` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
+| 23a | **add_signing_keys** | `add_signing_keys(&[SigningKeyEntry])` | `addSigningKeys(signingKeys: SigningKeyEntry[])` | `add_signing_keys(list[dict])` | `AddSigningKeys(keys []SigningKeyEntry) error` | `addSigningKeys(List<SigningKeyEntry>)` | `AddSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
 | 24 | **decrypt_events** | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `decryptEvents(params: DecryptEventsParams) → DecryptEventsResult` | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `DecryptEvents(DecryptEventsParams) (*DecryptEventsResult, error)` | `decryptEvents(DecryptEventsParams)` → `DecryptEventsResult` | `DecryptEvents(DecryptEventsParams)` → `DecryptEventsResult` |
 | 25 | **decrypt_event** | `decrypt_event(DecryptEventParams) → Event` | `decryptEvent(params: DecryptEventParams) → Event` | `decrypt_event(DecryptEventParams) → dict` | `DecryptEvent(DecryptEventParams) (*Event, error)` | `decryptEvent(DecryptEventParams)` → `JsonNode` | `DecryptEvent(DecryptEventParams)` → `JsonElement` |
 
@@ -248,23 +249,40 @@ unset or empty key fields and fall back to two opt-in session stores:
 
 - `set_signing_keys(entries)` stores signing keys that `decrypt_events` and
   `decrypt_event` use when their params' `signing_keys` is unset or empty.
-  Each call replaces the previous set. Only this explicit call populates the
-  store — a key carried inside an event is never trusted for verification.
+  Each call replaces the previous set. `add_signing_keys(entries)` adds to
+  the set instead: an entry replaces the stored entry of the same user and
+  key version, and any other is added, so keys fetched for one more user
+  don't have to be passed with every key fetched before. Only these two
+  calls populate the store — a key carried inside an event is never trusted
+  for verification.
 - `set_cache_keys(enabled)` enables the conversation-key cache (**off by
-  default**). While enabled, `decrypt_events` caches, per conversation, the
-  key whose key change carried a valid signature at the highest version seen;
-  `decrypt_event` falls back to it when its params' `conversation_keys` map is
-  omitted or empty; and the `encrypt_*` methods and the group title and
-  description prepares resolve an omitted `conversation_key` /
-  `conversation_key_version` pair from it. Disabling
-  clears the cache; the cached keys zeroize on drop.
+  default**). While enabled, the cache keeps, per conversation, every key it
+  is given, by key version:
 
-  Only `decrypt_events` populates the cache, and only from KeyChange events
-  in its own batch whose signature verified. `extract_conversation_keys`
-  never feeds it: that method adopts every decryptable key without signature
-  checks, and the cache holds verified keys only. To use its result, pass
-  the returned key map (`keys`, or the event's conversation's entry in
+  - the key of each key change whose signature verified, from
+    `decrypt_events` and from `decrypt_event`;
+  - the key each prepare call makes: `prepare_conversation_key_change`,
+    `prepare_group_create`, `prepare_group_members_change` and
+    `prepare_group_members_remove`.
+
+  A call that omits its conversation key reads it from the cache. The
+  `encrypt_*` methods, the group title and description prepares and
+  `prepare_group_avatar_change` use the conversation's newest key.
+  `decrypt_event`, `decrypt_file` and `file_decryptor` use the key at the
+  version the event names, so a message under an older key still decrypts.
+  Disabling clears the cache; the cached keys zeroize on drop.
+
+  `extract_conversation_keys` never feeds the cache: that method adopts
+  every decryptable key without signature checks, and the cache holds
+  verified keys and the chat's own. To use its result, pass the returned key
+  map (`keys`, or the event's conversation's entry in
   `keys_by_conversation`) to `decrypt_event` explicitly.
+
+  A prepared key is cached when the prepare call returns, before its
+  request is sent. If the X API rejects the request, no one else holds that
+  key, and the cache still has it as the conversation's newest: prepare the
+  change again, or pass the key to encrypt with explicitly, until a newer
+  key change verifies.
 
 An explicit non-empty value always wins over the stores. The stores do not
 change the two decrypt contracts: `decrypt_events` collects per-event errors
@@ -284,7 +302,7 @@ on failure.
 
 **Typical flow:**
 1. Once per instance: `setSigningKeys(allParticipantKeys)` and `setCacheKeys(true)`. "All participants" includes every member who made a key change, whether or not they wrote a message you are decrypting (see [Signing keys for key changes](#signing-keys-for-key-changes))
-2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains each conversation's latest verified key). Check `unverifiedKeyChanges`, `undecryptableKeyChanges` and `rejectedSigningKeys` on the result: an entry means a key change did not verify, a key change's key could not be decrypted, or a signing key was left out
+2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains the key of every key change that verified). Check `unverifiedKeyChanges`, `undecryptableKeyChanges` and `rejectedSigningKeys` on the result: an entry means a key change did not verify, a key change's key could not be decrypted, or a signing key was left out
 3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64 })` — the omitted key map and signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keysByConversation[conversationId]` client-side (or `result.conversationKeys.keys`, for a batch of one conversation) and pass it as `conversationKeys`.
 
 ---
@@ -317,12 +335,17 @@ A member removal posts its signatures on `/members/remove` together with
 `group_key_rotation_data`: the new `conversation_key_version` and the
 `conversation_participant_keys` for the members who stay.
 
-After any of these, store the returned `conversationKey` and
-`conversationKeyVersion`, and pass both to `encryptMessage` and the other
-encrypt and prepare calls. The key cache (`setCacheKeys`) adopts the new key
-only once `decryptEvents` decrypts the key change from the conversation's
-events and verifies it; until then an encrypt call that omits the key
-resolves the previous one, which the members a removal removed still hold.
+After any of these, the conversation has a new key. With the key cache on
+(`setCacheKeys`), the prepare call caches it as the conversation's newest
+key, so the encrypt and prepare calls that follow use it without being
+passed anything. Without the cache, store the returned `conversationKey`
+and `conversationKeyVersion` and pass both to `encryptMessage` and the
+other encrypt and prepare calls.
+
+The key is cached when the prepare call returns. If the request it belongs
+to fails, the conversation's other members never received that key: prepare
+the change again and send that one, or pass the key to encrypt with
+explicitly.
 
 ```typescript
 const next = chat.encryptMessage({
@@ -587,8 +610,9 @@ for each one passed, signed as
 them and marked as key-rotation re-encryptions (`for_key_rotation`), which
 recipients' `decrypt_event` and `decrypt_events` drop rather than return as
 changes (see [decrypt_events](#decrypt_events--batch-self-contained)); then
-the conversation-key change. Store the new key and version, and pass them
-to the encrypt and prepare calls until the key cache holds them (see
+the conversation-key change. The key cache, when it is on, holds the new
+key from this call; otherwise store the new key and version, and pass them
+to the encrypt and prepare calls (see
 [Conversation lifecycle](#conversation-lifecycle--when-to-use-which-prepare-method)).
 
 Send that result as `POST /2/chat/conversations/{id}/members/remove`.
@@ -714,11 +738,13 @@ Sign a group avatar change. An avatar URL is not encrypted; the image is.
 The app encrypts the image bytes under the conversation key with
 [`encrypt_file_with_key`](#files-media), as X clients do, uploads them to the
 group's media, and passes the image's media URL. Required:
-`conversation_id`; `new_avatar_url`, that media URL, signed and sent as is;
-and `conversation_key_version`, the version of the key the image is
-encrypted under. The `sender_id` / `signing_key_version` overrides resolve
-from the session identity. Returns a `PreparedAction`: one signature over
-the key version and the URL.
+`conversation_id` and `new_avatar_url`, that media URL, signed and sent as
+is. `conversation_key_version` is the version of the key the image is
+encrypted under; left out or empty, it is the version of the conversation's
+newest key in the key cache, and the call fails with an invalid-state error
+when the cache holds no key for the conversation. The `sender_id` /
+`signing_key_version` overrides resolve from the session identity. Returns
+a `PreparedAction`: one signature over the key version and the URL.
 
 ```text
 GroupChangeEvent.GroupAvatarUrlChange,{message_id},{sender_id},{conversation_id},{conversation_key_version},{new_avatar_url}
@@ -982,7 +1008,8 @@ verified versions:
   conversations of the batch both use is left out of it. The SDK decrypts
   each message with its own conversation's key either way.
 
-The key cache (`set_cache_keys`) is per conversation.
+The key cache (`set_cache_keys`) is per conversation, and keeps the key of
+every key change that verified, not only the newest.
 
 Three more fields say what the call could not use. Like `errors`, each is a
 map keyed by an index, as a string in the bindings where `errors` is, and
@@ -1318,6 +1345,8 @@ In Python, `result["errors"]` maps **string** indices (e.g. `"2"`) to error mess
 #### decrypt_event — single event, with pre-cached keys
 
 Decrypts a single event using conversation keys you already have — cached from a prior `decryptEvents` or `extractConversationKeys` call, or resolved from the opt-in key cache (`setCacheKeys`) when the key map is empty.
+
+A key change that verifies is recorded as `decryptEvents` records it: its version becomes the conversation's newest verified one unless a newer is known, and with the key cache on its key is cached. So a chat that receives its events one at a time needs no batch call to pick up a rotated key.
 
 **Params: `DecryptEventParams`**
 
@@ -1804,8 +1833,8 @@ the key itself (names per language idiom):
 |---|---|
 | `EncryptFileParams` | `file`, `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
 | `FileEncryptorParams` | `event_b64`, `media_hash_key`; optional `conversation_key` + `conversation_key_version` |
-| `DecryptFileParams` | `encrypted`, `event_b64`, `conversation_keys`, `media_hash_key` |
-| `FileDecryptorParams` | `event_b64`, `conversation_keys`, `media_hash_key` |
+| `DecryptFileParams` | `encrypted`, `event_b64`, `media_hash_key`; optional `conversation_keys` |
+| `FileDecryptorParams` | `event_b64`, `media_hash_key`; optional `conversation_keys` |
 | `EncryptFileWithKeyParams` | `file`, `key` |
 | `DecryptFileWithKeyParams` | `encrypted`, `key` |
 
@@ -1814,7 +1843,9 @@ the key itself (names per language idiom):
 `conversation_key_version` are the raw 32-byte key the message was encrypted
 under and its version, set together as on `EncryptMessageParams`; with both
 unset they resolve from the key cache. On a receive, `conversation_keys` is
-the conversation's key map (version → raw 32-byte key). Each file of a
+the conversation's key map (version → raw 32-byte key); left out or empty,
+the map is the conversation's keys in the key cache, and a map that is
+passed is the only source. Each file of a
 message is encrypted under its own key, derived from the message's key and
 the file's attachment (see [CRYPTO.md — Media Keys](CRYPTO.md#media-keys)),
 so a file encrypted for another message or attachment does not decrypt.

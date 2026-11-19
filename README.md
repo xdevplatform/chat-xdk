@@ -41,7 +41,8 @@ Python/Rust, PascalCase in .NET/Go):
    when your keys were registered; every signed action defaults its sender and
    signing-key version to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
-   per-call key plumbing.
+   per-call key plumbing; `addSigningKeys(signingKeys)` adds more users' keys
+   later without replacing the set.
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
    keys by user automatically. Per-event errors are collected in the result;
@@ -66,7 +67,8 @@ Python/Rust, PascalCase in .NET/Go):
    `encryptFile({file, eventB64, mediaHashKey})` with the payload's
    `eventB64` (plus `conversationKey` and `conversationKeyVersion` unless the
    key cache holds them, as for the message). `decryptFile` opens a received
-   file from its message's event. A file no message carries, such as a
+   file from its message's event, with the conversation's key map or, when
+   that is left out, the key cache. A file no message carries, such as a
    group's avatar image under the conversation key, goes through
    `encryptFileWithKey({file, key})` and `decryptFileWithKey({encrypted, key})`.
 
