@@ -13,6 +13,10 @@ Flow (encrypt on send, decrypt on receive):
 The SDK fetches the public keys it lacks through a hook the bot sets once:
 the bot keeps no signing keys of its own.
 
+One bot serves one signed-in user, in any number of conversations. A process
+with several signed-in users keeps one chat per user and gives each the same
+public-key resolver (see ``multi_user.py``).
+
 Conversation state is held in memory, one entry per conversation.
 Run it with ``python run.py`` after filling in ``.env``.
 """

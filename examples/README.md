@@ -121,6 +121,45 @@ The browser app in [`js/public/`](js/public) drives the lower-level WASM
 `Chat`, which has no hook. It does the same steps by hand: `missingPublicKeys`
 names the users to fetch, and `addPublicKeys` stores their records.
 
+### Many signed-in users in one process
+
+Each bot serves one signed-in user. A server that signs many users in follows
+two rules, and every example has them as code with an offline test:
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one per signed-in user, for all of that user's
+  conversations, and never one per conversation: the chat keeps conversation
+  keys by conversation and public keys by user id. `UserChats` does this: it
+  returns the user's chat, and creates it on the first call.
+- **One public-keys hook for every chat.** Other users' public keys are the
+  same whichever chat asks. `SharedPublicKeys` is one hook function over one
+  cache of `GET /2/users/{id}/public_keys` answers for the whole process, so
+  two chats that meet the same user cost one request. It shares a lookup
+  that is under way, drops a lookup that failed so the next call tries
+  again, and fetches an answer again after its TTL (5 minutes unless you say
+  otherwise), so a key a user registers later is picked up.
+
+| Language | File | Shared hook | One chat per user |
+|----------|------|-------------|-------------------|
+| JavaScript | [`js/src/multi-user.mjs`](js/src/multi-user.mjs) | `sharedPublicKeys(getPublicKeys, { ttlMs })` | `UserChats.chatFor(user)` |
+| Python | [`python/multi_user.py`](python/multi_user.py) | `SharedPublicKeys(fetch, ttl_seconds).resolve` | `UserChats.chat_for(...)` |
+| Go | [`go/multiuser.go`](go/multiuser.go) | `NewSharedPublicKeys(fetch, ttl).Resolve` | `UserChats.ChatFor(...)` |
+| Rust | [`rust/src/multi_user.rs`](rust/src/multi_user.rs) | `SharedPublicKeys::new(fetch)`, and its `hook()` | `UserChats::chat_for(...)` |
+| .NET | [`dotnet/ChatBot/MultiUser.cs`](dotnet/ChatBot/MultiUser.cs) | `new SharedPublicKeys(fetch, ttl).ResolveAsync` | `UserChats.ChatFor(...)` |
+| JVM | [`SharedPublicKeys.java`](jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java), [`UserChats.java`](jvm/src/main/java/com/example/chatbot/UserChats.java) | `new SharedPublicKeys(fetcher)` | `UserChats.chatFor(...)` |
+
+Each example's multi-user test signs two users in and checks that their
+chats fetch the keys of a user they both meet once, that one chat serves two
+conversations, and that the shared hook retries a failed lookup and fetches
+again after its TTL. The JavaScript example also runs one bot per signed-in
+user this way: [`js/src/multi-bot.mjs`](js/src/multi-bot.mjs).
+
+With a hook set, give a chat keys you already hold with `addSigningKeys` or
+`addPublicKeys`. `setSigningKeys` replaces every stored key, the fetched
+ones included. [Many users, many
+conversations](../docs/API.md#many-users-many-conversations) has the rest:
+what a chat keeps, and when a key a user registers later is picked up.
+
 ## Running an example
 
 ```bash

@@ -45,10 +45,12 @@ export class ChatCore {
 
   /**
    * Async factory. The keys live in a local blob rather than Juicebox, so the
-   * chat is created without getAuthToken.
+   * chat is created without getAuthToken. `options` are `createChat`'s: a
+   * process with several signed-in users passes each chat the same
+   * `resolvePublicKeys` (see multi-user.mjs).
    */
-  static async create() {
-    return new ChatCore(await createChat());
+  static async create(options = {}) {
+    return new ChatCore(await createChat(options));
   }
 
   /** The size of a file once encrypted: the size its upload declares. */
@@ -128,8 +130,21 @@ export class ChatCore {
   }
 
   /**
+   * Set the SDK's public-keys hook to `resolvePublicKeys` as it is: a
+   * function that takes user ids and resolves to each user's records, by
+   * user id. A process with several signed-in users gives every chat the
+   * same function, so they share its lookups (see multi-user.mjs).
+   */
+  resolvePublicKeysWith(resolvePublicKeys) {
+    this.#chat.setResolvePublicKeys(resolvePublicKeys);
+  }
+
+  /**
    * Store the participants' signing keys by hand; decrypt calls that omit
-   * their signingKeys argument verify against this store.
+   * their signingKeys argument verify against this store. Each call replaces
+   * every stored key, the ones a public-keys hook fetched included, so a
+   * chat with a hook adds keys with the SDK's addSigningKeys or
+   * addPublicKeys instead.
    */
   setSigningKeys(signingKeys) {
     this.#chat.setSigningKeys(signingKeys);
@@ -437,6 +452,14 @@ export class ChatCore {
   /** Decrypt a group title or description the X API returns. */
   decrypt(ciphertextB64, conversationKey) {
     return this.#chat.decrypt(ciphertextB64, conversationKey);
+  }
+
+  /**
+   * Clear the keys from memory and release the chat, when its user signs
+   * out. The core must not be used afterwards.
+   */
+  close() {
+    this.#chat.free();
   }
 }
 

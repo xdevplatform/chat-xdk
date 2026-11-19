@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.Chat;
 import com.x.chatxdk.FileDecryptor;
 import com.x.chatxdk.FileEncryptor;
+import com.x.chatxdk.PublicKeyResolver;
 import com.x.chatxdk.Types.*;
 
 import java.io.ByteArrayOutputStream;
@@ -131,6 +132,16 @@ public final class ChatCore implements AutoCloseable {
             }
             return records;
         });
+    }
+
+    /**
+     * Set the SDK's public-key resolver to {@code resolver} as it is: it takes
+     * user ids and returns each user's records, by user id. A process with
+     * several signed-in users gives every chat the same resolver, so the chats
+     * share its lookups (see {@link SharedPublicKeys} and {@link UserChats}).
+     */
+    public void resolvePublicKeysWith(PublicKeyResolver resolver) {
+        chat.setResolvePublicKeys(resolver);
     }
 
     // -- Conversation keys --------------------------------------------------

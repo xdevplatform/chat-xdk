@@ -12,9 +12,12 @@ first run); conversation state is in memory.
 | [`src/chat_core.rs`](src/chat_core.rs) | All encryption logic — the only file that touches `chat_xdk_core`. |
 | [`src/x_api.rs`](src/x_api.rs) | The X Chat API I/O layer (the `ChatApi` trait + an HTTP client, `ureq`). |
 | [`src/bot.rs`](src/bot.rs) | The receive → decrypt → reply → encrypt → send loop. |
+| [`src/multi_user.rs`](src/multi_user.rs) | Many signed-in users in one process: one chat per user, one shared public-key lookup. |
 | [`src/main.rs`](src/main.rs) | Entrypoint: config, key load/generate, run. |
 | [`src/bin/register.rs`](src/bin/register.rs) | One-time public-key registration (`cargo run --bin register`). |
 | [`tests/chat_core.rs`](tests/chat_core.rs) | Offline tests driving the real binding (no mocks), the bot loop over a fake X API included. |
+| [`tests/multi_user.rs`](tests/multi_user.rs) | Offline tests of the multi-user helpers, on the real binding. |
+| [`tests/common/mod.rs`](tests/common/mod.rs) | What the two offline tests share: users with fresh keys, and a group's events as delivered. |
 
 ## Prerequisites
 
@@ -48,6 +51,51 @@ arrives, and the result's `missing_signing_keys` lists what did not.
 The HTTP client is behind the default `http` feature. To build only the crypto
 core (no network stack), use `cargo build --no-default-features`.
 
+## Many signed-in users in one process
+
+A chat holds one user's private keys and signs as that user. A server with
+several signed-in users keeps **one chat per user**, for all of that user's
+conversations, and never one per conversation: the chat keeps its
+conversation keys by conversation, and the public keys it has met by user id.
+
+Other users' public keys are the same whichever chat asks, so the chats share
+**one public-key hook**. [`src/multi_user.rs`](src/multi_user.rs) has both
+parts:
+
+- `SharedPublicKeys::new(fetch)` is the cache behind that hook. `fetch`
+  returns one user's records, as `ChatCore::fetch_public_keys_with` takes it.
+  The cache keeps the answers of `GET /2/users/{id}/public_keys` by user id
+  for the whole process, so two chats that meet the same user cost one
+  request. Calls that ask for a user whose lookup is under way wait for that
+  lookup, whichever thread they run on. A lookup that fails is dropped, so
+  the next call tries again. An answer is served for 5 minutes (`with_ttl`
+  sets another time) and then fetched again, so a key a user registers later
+  is picked up. Its `resolve` has the shape of the SDK's hook, and `hook()`
+  returns it as one.
+- `UserChats` keeps one `ChatCore` per signed-in user, each with that hook:
+  `chats.chat_for(user_id, private_keys_b64, signing_key_version)?` returns
+  the user's chat in an `Arc`. `chats.close(user_id)` signs a user out.
+
+```rust
+use std::sync::Arc;
+use chatbot_rs::multi_user::{SharedPublicKeys, UserChats};
+
+let public_keys = SharedPublicKeys::new(move |user_id: &str| api.get_public_keys(user_id));
+let chats = UserChats::new(Arc::new(public_keys));
+
+// On each request, for the signed-in user it belongs to:
+let chat = chats.chat_for(user_id, private_keys_b64, signing_key_version)?;
+let page = chat.decrypt_batch(&events);
+```
+
+With a hook set, add keys you already hold with the SDK's `add_signing_keys`
+or `add_public_keys`. `set_signing_keys` replaces every stored key, the
+fetched ones included, and the chat then waits a minute before it asks the
+hook for them again.
+
+A `Bot` serves one signed-in user, in any number of conversations: it owns
+its chat and sets that chat's hook itself.
+
 ## Registering your key (one-time)
 
 Before a bot can send or receive, its public key must be registered on the
@@ -79,7 +127,10 @@ committed public-key/signature vectors, and run a real encrypt → decrypt
 round-trip plus a conversation-key ECIES round-trip. They also run the bot over
 a fake X API: a page whose key change was signed by a member who sent no
 message decrypts once the SDK has fetched that member's keys, and the bot
-replies.
+replies. The multi-user tests sign two users in, and check that their chats
+fetch the keys of a user they both meet once, that one chat serves two
+conversations, and that the shared lookup serves two threads with one fetch,
+retries a failure and fetches again after its TTL.
 
 ## License
 

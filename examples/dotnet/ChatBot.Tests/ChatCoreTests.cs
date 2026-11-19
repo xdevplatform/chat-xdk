@@ -149,7 +149,7 @@ public class ChatCoreTests
 
     /// <summary>The event as delivered: <paramref name="eventB64"/> with the
     /// sequence id the server assigns, prepended as Thrift string field 1.</summary>
-    private static string Delivered(string eventB64, string sequenceId) =>
+    internal static string Delivered(string eventB64, string sequenceId) =>
         Convert.ToBase64String(ThriftString(1, sequenceId).Concat(Convert.FromBase64String(eventB64)).ToArray());
 
     /// <summary>A signed action as delivered: the event the server relays for
@@ -157,7 +157,7 @@ public class ChatCoreTests
     /// signatures, from <paramref name="senderId"/> in
     /// <paramref name="conversationId"/>, with the sequence id the server
     /// assigns.</summary>
-    private static string DeliveredAction(ActionSignature action, string senderId, string conversationId, string sequenceId)
+    internal static string DeliveredAction(ActionSignature action, string senderId, string conversationId, string sequenceId)
     {
         var signed = action.MessageEventSignature;
         var delivered = ThriftString(1, sequenceId)
@@ -176,12 +176,13 @@ public class ChatCoreTests
     }
 
     /// <summary>A core with fresh keys as a user, and the keys others hold for it.</summary>
-    private sealed class Party : IDisposable
+    internal sealed class Party : IDisposable
     {
         public Party(string userId)
         {
             UserId = userId;
             var (registration, privateKeysB64) = Core.GenerateAndRegister();
+            PrivateKeysB64 = privateKeysB64;
             Core.LoadKeys(privateKeysB64, "1");
             Core.SetIdentity(userId);
             var key = registration.PublicKey;
@@ -206,6 +207,10 @@ public class ChatCoreTests
 
         public ChatCore Core { get; } = new();
         public string UserId { get; }
+
+        /// <summary>This user's private-key blob, registered under key version 1.</summary>
+        public string PrivateKeysB64 { get; }
+
         public PublicKeyInput PublicKey { get; }
 
         /// <summary>This user's records as the X API returns them: the
@@ -218,7 +223,7 @@ public class ChatCoreTests
     /// <summary>A public-key fetch that serves the records of
     /// <paramref name="parties"/> and notes each user it is asked for in
     /// <paramref name="asked"/>. It fails for any other user.</summary>
-    private static Func<string, Task<List<JsonElement>>> PublicKeysOf(List<string> asked, params Party[] parties) =>
+    internal static Func<string, Task<List<JsonElement>>> PublicKeysOf(List<string> asked, params Party[] parties) =>
         userId =>
         {
             asked.Add(userId);

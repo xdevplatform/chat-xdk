@@ -96,6 +96,14 @@ func (c *ChatCore) FetchPublicKeysWith(fetch func(userID string) ([]chatxdk.Publ
 	})
 }
 
+// ResolvePublicKeysWith sets the SDK's public-key hook to resolve as it is:
+// a function that takes user ids and returns each user's records, by user
+// id. A process with several signed-in users gives every chat the same
+// function, so they share its lookups (see multiuser.go).
+func (c *ChatCore) ResolvePublicKeysWith(resolve func(userIDs []string) (map[string][]chatxdk.PublicKeyRecord, error)) {
+	c.chat.SetResolvePublicKeys(resolve)
+}
+
 // GenerateAndRegister creates a fresh identity. Returns the registration
 // payload to POST to the X API plus the exported private blob (base64 for
 // persistence; the SDK returns raw bytes).

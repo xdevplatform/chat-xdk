@@ -5,6 +5,10 @@
  * batch-decrypt each page (decryptEventsAsync) -> reply -> encrypt + sign ->
  * send. Conversation state is in memory. The browser app (public/) is the
  * interactive counterpart; both share the same crypto core.
+ *
+ * One bot serves one signed-in user, in any number of conversations. A
+ * process with several signed-in users runs one bot per user and hands each
+ * the same `resolvePublicKeys` (see multi-user.mjs and multi-bot.mjs).
  */
 import { ChatCore, messageText } from "./chat-core.mjs";
 import { XChatClient } from "./x-api.mjs";
@@ -17,7 +21,12 @@ export function generateReply(text) {
 }
 
 export class ChatBot {
-  constructor(core, api, botUserId) {
+  /**
+   * `resolvePublicKeys` is the function the process's chats share to fetch
+   * public keys (`sharedPublicKeys` in multi-user.mjs). Without it the bot
+   * fetches them for its own chat, with `api`.
+   */
+  constructor(core, api, botUserId, { resolvePublicKeys } = {}) {
     this.core = core;
     this.api = api;
     this.botUserId = botUserId;
@@ -27,7 +36,11 @@ export class ChatBot {
     // fetches the public keys a page of events lacks from the X API.
     this.core.setIdentity(botUserId);
     this.core.setCacheKeys(true);
-    this.core.fetchPublicKeysWith((userId) => this.api.getPublicKeys(userId));
+    if (resolvePublicKeys) {
+      this.core.resolvePublicKeysWith(resolvePublicKeys);
+    } else {
+      this.core.fetchPublicKeysWith((userId) => this.api.getPublicKeys(userId));
+    }
   }
 
   #state(conversationId) {

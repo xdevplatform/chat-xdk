@@ -6,6 +6,11 @@ namespace ChatBot;
 /// <summary>
 /// The receive -> decrypt -> reply -> encrypt -> send loop. Conversation state
 /// is kept in memory, one entry per conversation.
+///
+/// One bot serves one signed-in user, in any number of conversations. A
+/// process with several signed-in users keeps one chat per user and gives
+/// each the same public-keys resolver: <see cref="UserChats"/> and
+/// <see cref="SharedPublicKeys"/> in MultiUser.cs do that.
 /// </summary>
 public sealed class Bot
 {

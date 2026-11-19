@@ -216,6 +216,14 @@ impl ChatCore {
         self.inner.set_resolve_public_keys(Some(resolve));
     }
 
+    /// Set the SDK's public-key hook to `resolve` as it is: a function that
+    /// takes user ids and returns each user's records, by user id. A process
+    /// with several signed-in users gives every chat the same function, so
+    /// they share its lookups (see [`crate::multi_user`]).
+    pub fn resolve_public_keys_with(&self, resolve: ResolvePublicKeys) {
+        self.inner.set_resolve_public_keys(Some(resolve));
+    }
+
     // -- Conversation keys --------------------------------------------------
 
     /// Prepare a conversation-key change: a fresh key encrypted to every

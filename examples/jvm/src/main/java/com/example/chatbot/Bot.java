@@ -15,6 +15,11 @@ import java.util.Set;
 /**
  * The receive -&gt; decrypt -&gt; reply -&gt; encrypt -&gt; send loop. Conversation state
  * is kept in memory, one entry per conversation.
+ *
+ * <p>One bot serves one signed-in user, in any number of conversations. A
+ * process with several signed-in users keeps one chat per user and gives each
+ * the same public-key resolver (see {@link UserChats} and
+ * {@link SharedPublicKeys}).
  */
 public final class Bot {
 

@@ -5,22 +5,24 @@
 //! that the binding reproduces the committed key vectors. The X API is the one
 //! thing faked: a directory of users' public keys and one page of events.
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::signatures::ActionSignature;
 use chat_xdk_core::{
-    AttachmentDescriptor, DecryptEventsResult, EntityDescriptor, MissingSigningKey,
-    PreparedConversationChange, PublicKeyInput, PublicKeyRecord,
+    AttachmentDescriptor, EntityDescriptor, MissingSigningKey, PreparedConversationChange,
+    PublicKeyInput, PublicKeyRecord,
 };
 use chatbot_rs::bot::Bot;
 use chatbot_rs::chat_core::{
-    message_text, prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
+    prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
 };
 use chatbot_rs::x_api::{ChatApi, EventItem};
+use common::{delivered, key_change_and_message, party, public_keys_of, texts};
 use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
@@ -423,85 +425,8 @@ fn media_from_the_fixture_message_opens() {
     }
 }
 
-/// A Thrift string field: its id, then the value's length and bytes.
-fn thrift_string(id: u16, value: &str) -> Vec<u8> {
-    let mut field = vec![11];
-    field.extend(id.to_be_bytes());
-    field.extend((value.len() as u32).to_be_bytes());
-    field.extend(value.as_bytes());
-    field
-}
-
-/// `event_b64` as delivered: with the sequence id the server assigns,
-/// prepended as Thrift string field 1.
-fn delivered(event_b64: &str, sequence_id: &str) -> String {
-    let mut event = thrift_string(1, sequence_id);
-    event.extend(B64.decode(event_b64).unwrap());
-    B64.encode(event)
-}
-
-/// A signed action as delivered: the event the server relays for `action`,
-/// an entry of a prepared change's `action_signatures`, from `sender_id` in
-/// `conversation_id`, with the sequence id the server assigns.
-fn delivered_action(
-    action: &ActionSignature,
-    sender_id: &str,
-    conversation_id: &str,
-    sequence_id: &str,
-) -> String {
-    let signed = &action.message_event_signature;
-    let mut event = thrift_string(1, sequence_id);
-    event.extend(thrift_string(2, &action.message_id));
-    event.extend(thrift_string(3, sender_id));
-    event.extend(thrift_string(4, conversation_id));
-    event.extend([12, 0, 7]);
-    event.extend(B64.decode(&action.encoded_message_event_detail).unwrap());
-    event.extend([12, 0, 9]);
-    event.extend(thrift_string(1, &signed.signature));
-    event.extend(thrift_string(2, &signed.public_key_version));
-    event.extend(thrift_string(3, &signed.signature_version));
-    event.extend([0, 0]);
-    B64.encode(event)
-}
-
-/// A core with fresh keys as a user, and the keys others hold for it.
-struct Party {
-    core: ChatCore,
-    user_id: String,
-    /// The record the X API returns for the user's public keys.
-    record: PublicKeyRecord,
-    public_key: PublicKeyInput,
-}
-
-fn party(user_id: &str) -> Party {
-    let mut core = ChatCore::new();
-    let (payload, private_keys_b64) = core.generate_and_register().expect("generate_and_register");
-    core.load_keys(&private_keys_b64, "1").expect("load_keys");
-    core.set_identity(user_id).expect("set_identity");
-    let registration = payload.public_key;
-    Party {
-        core,
-        user_id: user_id.to_string(),
-        record: PublicKeyRecord::new(
-            "1",
-            registration.public_key.as_str(),
-            registration.signing_public_key.as_str(),
-            registration.identity_public_key_signature.as_str(),
-        ),
-        public_key: PublicKeyInput::new(user_id, registration.public_key.as_str(), "1"),
-    }
-}
-
 /// The group the tests' key changes and messages belong to.
 const GROUP: &str = "g900";
-
-/// The X API's public keys of `parties`: each user's records, by user id.
-fn public_keys_of(parties: &[&Party]) -> HashMap<String, Vec<PublicKeyRecord>> {
-    parties
-        .iter()
-        .map(|party| (party.user_id.clone(), vec![party.record.clone()]))
-        .collect()
-}
 
 /// The X API as the bot sees it, offline: users' public keys, one page of
 /// events, and a record of the keys it was asked for and the messages it
@@ -571,55 +496,6 @@ fn fetch_public_keys_from(
     asked
 }
 
-/// The page that follows a key rotation of [`GROUP`]: the key change `admin`
-/// made for `members`, which `admin` signed, and the message `author` then
-/// sent under the new key, both as delivered.
-fn key_change_and_message(
-    admin: &Party,
-    members: &[&Party],
-    author: &Party,
-    text: &str,
-) -> (String, String) {
-    let public_keys: Vec<PublicKeyInput> = members
-        .iter()
-        .map(|member| member.public_key.clone())
-        .collect();
-    let prepared = admin
-        .core
-        .prepare_conversation_key_change(&public_keys, Some(GROUP))
-        .expect("prepare_conversation_key_change");
-    let key = prepared
-        .conversation_key
-        .as_ref()
-        .expect("conversation key");
-    let key_change = delivered_action(
-        &prepared.action_signatures[0],
-        &admin.user_id,
-        GROUP,
-        "2100000000000000000",
-    );
-    let options =
-        ReplyOptions::default().with_conversation_key(key, &prepared.conversation_key_version);
-    let body = author
-        .core
-        .encrypt_reply(GROUP, text, options)
-        .expect("encrypt_reply");
-    (
-        key_change,
-        delivered(&body.event_b64, "2100000000000000001"),
-    )
-}
-
-/// The text of each event a batch decrypted; `None` for an event that is
-/// not a text message.
-fn texts(result: &DecryptEventsResult) -> Vec<Option<&str>> {
-    result
-        .events
-        .iter()
-        .map(|decrypted| message_text(&decrypted.event))
-        .collect()
-}
-
 /// The users a prepared change encrypts its key to, sorted.
 fn recipients(prepared: &PreparedConversationChange) -> Vec<&str> {
     let mut user_ids: Vec<&str> = prepared
@@ -636,8 +512,13 @@ fn decrypt_batch_fetches_the_keys_of_the_member_who_made_a_key_change() {
     // An admin rotates a group's key and a member sends a message under it:
     // the admin signed the key change and sent no message on the page.
     let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
-    let (key_change, message) =
-        key_change_and_message(&admin, &[&admin, &member, &bot], &member, "hello group");
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
+    );
     let events = [key_change.as_str(), message.as_str()];
 
     // With nothing to fetch public keys with, the result names the signing
@@ -671,8 +552,13 @@ fn decrypt_batch_fetches_the_keys_of_the_member_who_made_a_key_change() {
 #[test]
 fn a_failed_public_key_fetch_leaves_the_other_users_keys_arriving() {
     let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
-    let (key_change, message) =
-        key_change_and_message(&admin, &[&admin, &member, &bot], &member, "hello group");
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
+    );
     let events = [key_change.as_str(), message.as_str()];
 
     // The X API holds the admin's keys alone: the member's fetch fails.
@@ -729,8 +615,13 @@ fn prepare_calls_fetch_the_public_keys_they_are_not_passed() {
 #[test]
 fn the_bot_replies_to_a_message_under_a_key_change_whose_signer_sent_no_message() {
     let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
-    let (key_change, message) =
-        key_change_and_message(&admin, &[&admin, &member, &bot], &member, "hello group");
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
+    );
     let directory = public_keys_of(&[&admin, &member, &bot]);
 
     // The page as the X API returns it: the message in its data, the key

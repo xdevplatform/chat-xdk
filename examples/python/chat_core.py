@@ -143,6 +143,17 @@ class ChatCore:
 
         self.chat.set_resolve_public_keys(resolve)
 
+    def resolve_public_keys_with(
+        self, resolve: Callable[[list[str]], dict[str, list[dict[str, Any]]]]
+    ) -> None:
+        """Set the SDK's public-key hook to ``resolve`` as it is: a function
+        that takes user ids and returns each user's records, by user id.
+
+        A process with several signed-in users gives every chat the same
+        function, so they share its lookups (see ``multi_user.py``).
+        """
+        self.chat.set_resolve_public_keys(resolve)
+
     def set_cache_keys(self, enabled: bool) -> None:
         """Opt in to the SDK's verified conversation-key cache.
 
@@ -550,6 +561,11 @@ class ChatCore:
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
         """Decrypt a group title or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
+
+    def close(self) -> None:
+        """Clear the keys from memory, when the chat's user signs out. The
+        core must not be used afterwards."""
+        self.chat.lock()
 
 
 def message_text(event: dict[str, Any]) -> str | None:

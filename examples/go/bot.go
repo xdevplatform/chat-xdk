@@ -30,6 +30,10 @@ func newConversationState() *conversationState {
 }
 
 // Bot wires the crypto core to the X Chat API and runs the reply loop.
+//
+// One Bot serves one signed-in user, in any number of conversations. A
+// process with several signed-in users keeps one chat per user and gives
+// each the same public-key resolver: see multiuser.go.
 type Bot struct {
 	core      *ChatCore
 	api       *XChatClient

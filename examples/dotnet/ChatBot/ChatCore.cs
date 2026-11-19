@@ -115,6 +115,19 @@ public sealed class ChatCore : IDisposable
         };
     }
 
+    /// <summary>
+    /// Set the SDK's <c>ResolvePublicKeys</c> hook to
+    /// <paramref name="resolvePublicKeys"/> as it is: a function that takes
+    /// user ids and returns each user's records, by user id. A process with
+    /// several signed-in users gives every chat the same function, so they
+    /// share its lookups (see MultiUser.cs).
+    /// </summary>
+    public void ResolvePublicKeysWith(
+        Func<IReadOnlyList<string>, Task<IReadOnlyDictionary<string, IReadOnlyList<PublicKeyRecord>>>> resolvePublicKeys)
+    {
+        _chat.ResolvePublicKeys = resolvePublicKeys;
+    }
+
     // -- Conversation keys --------------------------------------------------
 
     /// <summary>

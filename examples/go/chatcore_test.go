@@ -572,6 +572,9 @@ func deliveredAction(t *testing.T, action chatxdk.ActionSignature, senderID, con
 type party struct {
 	core   *ChatCore
 	userID string
+	// privateKeysB64 is the user's private-key blob, registered under key
+	// version "1": what signs the user in to another chat.
+	privateKeysB64 string
 	// record is the record the X API returns for the user's public keys.
 	record    chatxdk.PublicKeyRecord
 	publicKey chatxdk.PublicKeyInput
@@ -593,8 +596,9 @@ func newParty(t *testing.T, userID string) *party {
 	}
 	registration := payload.PublicKey
 	return &party{
-		core:   core,
-		userID: userID,
+		core:           core,
+		userID:         userID,
+		privateKeysB64: privateKeysB64,
 		record: chatxdk.PublicKeyRecord{
 			PublicKeyVersion:           "1",
 			PublicKey:                  registration.PublicKey,
@@ -649,21 +653,27 @@ func (d *publicKeyDirectory) askedFor() []string {
 	return append([]string{}, d.asked...)
 }
 
-// keyChangeAndMessage is the page that follows a key rotation of testGroup:
-// the key change admin made for members, which admin signed, and the message
-// author then sent under the new key, both as delivered.
+// keyChangeAndMessage is the page keyChangeAndMessageIn builds for testGroup.
 func keyChangeAndMessage(t *testing.T, admin *party, members []*party, author *party, text string) (keyChange, message string) {
+	t.Helper()
+	return keyChangeAndMessageIn(t, testGroup, admin, members, author, text)
+}
+
+// keyChangeAndMessageIn is the page that follows a key rotation of the group
+// conversationID: the key change admin made for members, which admin signed,
+// and the message author then sent under the new key, both as delivered.
+func keyChangeAndMessageIn(t *testing.T, conversationID string, admin *party, members []*party, author *party, text string) (keyChange, message string) {
 	t.Helper()
 	publicKeys := make([]chatxdk.PublicKeyInput, 0, len(members))
 	for _, member := range members {
 		publicKeys = append(publicKeys, member.publicKey)
 	}
-	prepared, err := admin.core.PrepareConversationKeyChange(publicKeys, testGroup)
+	prepared, err := admin.core.PrepareConversationKeyChange(publicKeys, conversationID)
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
-	keyChange = deliveredAction(t, prepared.ActionSignatures[0], admin.userID, testGroup, "2100000000000000000")
-	body, err := author.core.EncryptReply(testGroup, text, &ReplyOptions{
+	keyChange = deliveredAction(t, prepared.ActionSignatures[0], admin.userID, conversationID, "2100000000000000000")
+	body, err := author.core.EncryptReply(conversationID, text, &ReplyOptions{
 		ConversationKey:        prepared.ConversationKey,
 		ConversationKeyVersion: prepared.ConversationKeyVersion,
 	})

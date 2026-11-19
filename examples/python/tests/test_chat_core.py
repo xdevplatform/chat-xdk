@@ -85,7 +85,9 @@ class _Party:
         self.core = ChatCore()
         self.user_id = user_id
         generated = self.core.generate_and_register()
-        self.core.load_keys(generated["private_keys_b64"], signing_key_version="1")
+        # The blob another chat imports to sign in as this user.
+        self.private_keys_b64 = generated["private_keys_b64"]
+        self.core.load_keys(self.private_keys_b64, signing_key_version="1")
         self.core.set_identity(user_id)
         registration = generated["registration"]
         self.public_key = {
@@ -103,18 +105,20 @@ class _Party:
         }
 
 
-def _group_page(admin: _Party, member: _Party, bot: _Party) -> list[str]:
-    """A page of group ``g900`` as ``bot`` receives it: the key change
-    ``admin`` made, then a message ``member`` sent under its key. The admin
-    signed the key change and sent no message."""
+def _group_page(
+    admin: _Party, member: _Party, *readers: _Party, conversation_id: str = "g900"
+) -> list[str]:
+    """A page of group ``conversation_id`` as each of ``readers`` receives
+    it: the key change ``admin`` made, then a message ``member`` sent under
+    its key. The admin signed the key change and sent no message."""
     prepared = admin.core.prepare_conversation_key_change(
-        [admin.public_key, member.public_key, bot.public_key], "g900"
+        [each.public_key for each in (admin, member, *readers)], conversation_id
     )
     key_change = _delivered_action(
-        prepared["action_signatures"][0], admin.user_id, "g900", "2100000000000000000"
+        prepared["action_signatures"][0], admin.user_id, conversation_id, "2100000000000000000"
     )
     body = member.core.encrypt_reply(
-        conversation_id="g900",
+        conversation_id=conversation_id,
         text="hello group",
         conversation_key=prepared["conversation_key"],
         conversation_key_version=prepared["conversation_key_version"],

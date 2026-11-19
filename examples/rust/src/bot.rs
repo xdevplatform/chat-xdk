@@ -1,6 +1,10 @@
 //! The receive -> decrypt -> reply -> encrypt -> send loop.
 //!
 //! Generic over [`ChatApi`] so it has no direct HTTP dependency.
+//!
+//! One [`Bot`] serves one signed-in user, in any number of conversations. A
+//! process with several signed-in users keeps one chat per user and gives
+//! each chat the same public-key hook: see [`crate::multi_user`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -139,7 +139,7 @@ class ChatCoreTest {
     }
 
     /** The event as delivered: {@code eventB64} with the sequence id the server assigns, prepended as Thrift string field 1. */
-    private static String delivered(String eventB64, String sequenceId) {
+    static String delivered(String eventB64, String sequenceId) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeString(out, 1, sequenceId);
         out.writeBytes(Base64.getDecoder().decode(eventB64));
@@ -151,7 +151,7 @@ class ChatCoreTest {
      * of a prepared change's action signatures, from {@code senderId} in {@code conversationId},
      * with the sequence id the server assigns.
      */
-    private static String deliveredAction(
+    static String deliveredAction(
             ActionSignature action, String senderId, String conversationId, String sequenceId) {
         MessageEventSignature signed = action.messageEventSignature;
         ByteArrayOutputStream event = new ByteArrayOutputStream();
@@ -170,9 +170,13 @@ class ChatCoreTest {
     }
 
     /** A core with fresh keys as a user, and the keys others hold for it. */
-    private static final class Party implements AutoCloseable {
+    static final class Party implements AutoCloseable {
         final ChatCore core = new ChatCore();
         final String userId;
+
+        /** The user's private-key blob, which signs the user in to another chat. */
+        final String privateKeysB64;
+
         final SigningKeyEntry signingKey;
         final PublicKeyInput publicKey;
 
@@ -182,7 +186,8 @@ class ChatCoreTest {
         Party(String userId) throws Exception {
             this.userId = userId;
             ChatCore.Generated generated = core.generateAndRegister();
-            core.loadKeys(generated.privateKeysB64(), "1");
+            privateKeysB64 = generated.privateKeysB64();
+            core.loadKeys(privateKeysB64, "1");
             core.setIdentity(userId);
             PublicKeyRegistration registration = generated.registration().publicKey;
             signingKey = new SigningKeyEntry(
@@ -221,7 +226,7 @@ class ChatCoreTest {
     }
 
     /** The text of each event of a result, null for an event that is not a message. */
-    private static List<String> texts(DecryptEventsResult result) {
+    static List<String> texts(DecryptEventsResult result) {
         List<String> texts = new ArrayList<>();
         for (DecryptedEvent decrypted : result.events) {
             texts.add(ChatCore.messageText(decrypted.event));
