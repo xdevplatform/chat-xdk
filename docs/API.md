@@ -241,6 +241,9 @@ from the session identity set via `set_identity`.
 | 22 | **set_cache_keys** | `set_cache_keys(enabled: bool)` | `setCacheKeys(enabled: boolean)` | `set_cache_keys(enabled: bool)` | `SetCacheKeys(enabled bool)` | `setCacheKeys(boolean)` | `SetCacheKeys(bool)` |
 | 23 | **set_signing_keys** | `set_signing_keys(&[SigningKeyEntry])` | `setSigningKeys(signingKeys: SigningKeyEntry[])` | `set_signing_keys(list[dict])` | `SetSigningKeys(keys []SigningKeyEntry) error` | `setSigningKeys(List<SigningKeyEntry>)` | `SetSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
 | 23a | **add_signing_keys** | `add_signing_keys(&[SigningKeyEntry])` | `addSigningKeys(signingKeys: SigningKeyEntry[])` | `add_signing_keys(list[dict])` | `AddSigningKeys(keys []SigningKeyEntry) error` | `addSigningKeys(List<SigningKeyEntry>)` | `AddSigningKeys(IReadOnlyList<SigningKeyEntry>)` |
+| 23b | **add_public_keys** | `add_public_keys(&HashMap<String, Vec<PublicKeyRecord>>)` | `addPublicKeys(records: PublicKeyRecords)` | `add_public_keys(dict[str, list[dict]])` | `AddPublicKeys(records map[string][]PublicKeyRecord) error` | `addPublicKeys(Map<String, List<PublicKeyRecord>>)` | `AddPublicKeys(IReadOnlyDictionary<string, IReadOnlyList<PublicKeyRecord>>)` |
+| 23c | **missing_public_keys** | `missing_public_keys(&DecryptEventsResult) → Vec<String>` | `missingPublicKeys(result) → string[]` | `missing_public_keys(result) → list[str]` | `MissingPublicKeys(*DecryptEventsResult) ([]string, error)` | `missingPublicKeys(DecryptEventsResult)` → `List<String>` | `MissingPublicKeys(DecryptEventsResult)` → `IReadOnlyList<string>` |
+| 23d | **set_resolve_public_keys** | `set_resolve_public_keys(Option<ResolvePublicKeys>)` | `createChat({ resolvePublicKeys })`, `setResolvePublicKeys(hook)` | `set_resolve_public_keys(hook)` | `SetResolvePublicKeys(hook)` | `setResolvePublicKeys(PublicKeyResolver)` | `ResolvePublicKeys` property |
 | 24 | **decrypt_events** | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `decryptEvents(params: DecryptEventsParams) → DecryptEventsResult` | `decrypt_events(DecryptEventsParams) → DecryptEventsResult` | `DecryptEvents(DecryptEventsParams) (*DecryptEventsResult, error)` | `decryptEvents(DecryptEventsParams)` → `DecryptEventsResult` | `DecryptEvents(DecryptEventsParams)` → `DecryptEventsResult` |
 | 25 | **decrypt_event** | `decrypt_event(DecryptEventParams) → Event` | `decryptEvent(params: DecryptEventParams) → Event` | `decrypt_event(DecryptEventParams) → dict` | `DecryptEvent(DecryptEventParams) (*Event, error)` | `decryptEvent(DecryptEventParams)` → `JsonNode` | `DecryptEvent(DecryptEventParams)` → `JsonElement` |
 
@@ -284,6 +287,11 @@ unset or empty key fields and fall back to two opt-in session stores:
   change again, or pass the key to encrypt with explicitly, until a newer
   key change verifies.
 
+- `add_public_keys(records)` adds other users' public keys to the stored
+  signing keys, in the shape the X API returns them, and
+  `set_resolve_public_keys(hook)` sets a hook that fetches them when a call
+  lacks them. See [Public keys and the hook](#public-keys-and-the-hook).
+
 An explicit non-empty value always wins over the stores. The stores do not
 change the two decrypt contracts: `decrypt_events` collects per-event errors
 in the result and throws only for invalid params, and `decrypt_event` throws
@@ -320,6 +328,11 @@ lifecycle action they sign:
 | Create a group | `prepareGroupCreate` | `/2/chat/conversations/group/initialize` (mints the `g…` id), then `/2/chat/conversations/group` |
 | Add members to a group | `prepareGroupMembersChange` | `/2/chat/conversations/{id}/members` |
 | Remove members from a group | `prepareGroupMembersRemove` — pass the public keys of every member who stays, yours included | `/2/chat/conversations/{id}/members/remove` |
+
+Each of these takes its members' public keys as `publicKeys`, or, with
+`publicKeys` left out, reads them from the keys the chat has stored and
+fetches the rest through the hook: see
+[Public keys and the hook](#public-keys-and-the-hook).
 
 The group methods are separate because they sign different events: a group
 create must carry a `GroupChangeEvent.GroupCreate` signature and a member
@@ -1011,7 +1024,7 @@ verified versions:
 The key cache (`set_cache_keys`) is per conversation, and keeps the key of
 every key change that verified, not only the newest.
 
-Three more fields say what the call could not use. Like `errors`, each is a
+Four more fields say what the call could not use. Like `errors`, each is a
 map keyed by an index, as a string in the bindings where `errors` is, and
 empty when it has nothing to report:
 
@@ -1021,6 +1034,7 @@ empty when it has nothing to report:
 | `unverified_key_changes` | event index | Key change whose key this identity decrypted but whose signature did not verify. |
 | `undecryptable_key_changes` | event index | Key change whose conversation key this identity could not decrypt. |
 | `rejected_signing_keys` | signing key index | Signing key the call left out because its identity binding does not verify. |
+| `missing_signing_keys` | event index | Event, of any signed type, whose sender's signing key was not among the signing keys the call verified with. |
 
 An entry of `unverified_key_changes` has:
 
@@ -1058,6 +1072,14 @@ returned, each in the right place; if it does, the key the API returned for
 that user is not bound to their identity key, and events signed with it must
 not be trusted.
 
+An entry of `missing_signing_keys` has the `user_id` of the event's sender
+and the `public_key_version` its signature names: the key to fetch. Under
+the default reject-unverified policy the event is also in `errors`;
+otherwise it is in `events`, unverified. A key change listed here is also in
+`unverified_key_changes`, with reason `MissingSigningKey`, when this chat
+decrypted its key. `missing_public_keys(result)` reads the users to fetch
+from this map (see [Public keys and the hook](#public-keys-and-the-hook)).
+
 JS spells the fields in camelCase and the reasons in camelCase too
 (`'missingSigningKey'`, `'notARecipient'`). Python, Go and the C ABI carry
 each reason as the string above (Go as constants named for it, such as
@@ -1083,28 +1105,26 @@ signature version 6, keep their key, so stored history stays readable, but an
 unverified one still never sets the version to encrypt with.
 
 To get the keys, fetch the member's public keys from the X API
-(`GET /2/users/{id}/public_keys`) and pass every entry it returns, as a
-`SigningKeyEntry` each. Either fetch them for every member of the
-conversation up front, or decrypt, read `unverified_key_changes`, fetch the
-keys of each `sender_id` whose `reason` is `MissingSigningKey`, and decrypt
-again:
+(`GET /2/users/{id}/public_keys`). The simplest way is a hook: set
+`resolve_public_keys` once and the SDK fetches what a batch lacks (see
+[Public keys and the hook](#public-keys-and-the-hook)):
 
 ```typescript
-let result = chat.decryptEvents({ events, signingKeys });
-const missing = Object.values(result.unverifiedKeyChanges).filter(
-  (change) => change.reason === "missingSigningKey",
-);
-if (missing.length > 0) {
-  for (const senderId of new Set(missing.map((change) => change.senderId))) {
-    signingKeys.push(...(await fetchSigningKeys(senderId)));  // GET /2/users/{id}/public_keys
-  }
-  result = chat.decryptEvents({ events, signingKeys });
-}
+const chat = await createChat({
+  // GET /2/users/{id}/public_keys for each user; return the records as they are
+  resolvePublicKeys: async (userIds) =>
+    Object.fromEntries(await Promise.all(userIds.map(async (id) => [id, await fetchPublicKeys(id)]))),
+});
+const result = await chat.decryptEventsAsync({ events });
 for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
   // rejectedSigningKey, invalidSignature or unverifiable: the same on a retry
   console.warn(`key change ${index} did not verify: ${change.reason}`);
 }
 ```
+
+Without a hook, either pass the keys of every member of the conversation as
+`signing_keys`, or decrypt, ask `missing_public_keys(result)` whose keys the
+batch lacked, add them with `add_public_keys`, and decrypt again.
 
 `RejectedSigningKey`, `InvalidSignature` and `Unverifiable` do not change on
 a retry with the same keys. `InvalidSignature` also results from passing the
@@ -1129,6 +1149,7 @@ interface DecryptEventsResult {
   unverifiedKeyChanges: { [index: string]: UnverifiedKeyChange };        // by event index
   undecryptableKeyChanges: { [index: string]: UndecryptableKeyChange };  // by event index
   rejectedSigningKeys: { [index: string]: RejectedSigningKey };          // by signing key index
+  missingSigningKeys: { [index: string]: MissingSigningKey };            // by event index
 }
 
 interface DecryptedEvent {
@@ -1192,6 +1213,9 @@ interface RejectedSigningKey {
     },
     "rejected_signing_keys": {
         "3": { "user_id": "222", "public_key_version": "1" },
+    },
+    "missing_signing_keys": {
+        "5": { "user_id": "333", "public_key_version": "2" },
     },
 }
 ```
@@ -1339,6 +1363,87 @@ var cachedKeys = result.ConversationKeys.Keys;
 ```
 
 In Python, `result["errors"]` maps **string** indices (e.g. `"2"`) to error messages — JSON object keys, consistent with other bindings.
+
+---
+
+#### Public keys and the hook
+
+The SDK needs other users' public keys in two places. A decrypt call
+verifies each event with its sender's signing key. A prepare call that makes
+a conversation key encrypts that key to each member's identity key. Both
+come from `GET /2/users/{id}/public_keys`, and one stored set serves both:
+the signing keys `set_signing_keys` and `add_signing_keys` fill.
+
+**`add_public_keys(records)`** adds to that set straight from the API's
+response. `records` maps a user id to the records in that user's `data`
+array, as the API returned them: `public_key_version`, `public_key`,
+`signing_public_key` and `identity_public_key_signature`, read under those
+names or their camelCase forms, with other fields ignored and the version a
+string or a number. A record that lacks its version, identity key or signing
+key is left out. Go, .NET and the JVM have a `PublicKeyRecord` type that
+unmarshals from the API's JSON.
+
+**`missing_public_keys(result)`** returns the users whose keys a
+`decrypt_events` result lacked: the sender of each entry of its
+`missing_signing_keys`, once each, in batch order. Fetch them, add them, and
+decrypt the batch again.
+
+**The hook** does those three steps for you. It takes user ids and returns
+each user's records, by user id; leave out a user it has nothing for.
+
+| | Set it | Calls that use it |
+|---|---|---|
+| JS | `createChat({ resolvePublicKeys })` or `chat.setResolvePublicKeys(hook)`; the hook may return a promise | `decryptEventsAsync`, `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`, `prepareGroupMembersChangeAsync`, `prepareGroupMembersRemoveAsync` |
+| .NET | `chat.ResolvePublicKeys = hook`; the hook returns a `Task` | `DecryptEventsAsync`, `PrepareConversationKeyChangeAsync`, `PrepareGroupCreateAsync`, `PrepareGroupMembersChangeAsync`, `PrepareGroupMembersRemoveAsync` |
+| Python | `chat.set_resolve_public_keys(hook)` | `decrypt_events` and the four prepare calls |
+| Go | `chat.SetResolvePublicKeys(hook)`; the hook returns `(records, error)` | `DecryptEvents` and the four prepare calls |
+| JVM | `chat.setResolvePublicKeys(resolver)`, a `PublicKeyResolver` | `decryptEvents` and the four prepare calls |
+| Rust | `chat.set_resolve_public_keys(Some(hook))` | `decrypt_events` and the four prepare calls |
+
+In JS and .NET the hook is asynchronous, so only the `Async` methods call
+it; the methods without `Async` never do. In the other languages the hook
+blocks, and the existing methods call it. The hook runs in your language:
+the SDK's Rust core never calls back into it.
+
+With a hook set:
+
+- A decrypt that is passed no signing keys decrypts the batch, calls the
+  hook once for `missing_public_keys` of the result, adds what it returns,
+  and decrypts the batch once more. A batch that lacks nothing does not call
+  it. A decrypt that is passed signing keys verifies with those, as before,
+  and does not call it.
+- A prepare call that is passed no public keys calls the hook for the
+  members it has no stored key for, then encrypts to the stored keys (see
+  below).
+- The key cache is on: setting a hook calls `set_cache_keys(true)`. Turn it
+  off afterwards to keep it off.
+- A lookup that did not bring the key it was made for is remembered for a
+  minute, per user and key version, and not repeated: the hook is not called
+  for a key it could not find with every batch. A key version that was not
+  asked for before is asked for at once.
+- What the hook throws reaches the caller of the method (a rejected promise,
+  an exception, a Go error); a Rust hook returns only records. The lookup is
+  remembered either way.
+
+Without a hook, nothing changes: the methods behave as they did.
+
+**Public keys for prepare calls.** `prepare_conversation_key_change`,
+`prepare_group_create`, `prepare_group_members_change` and
+`prepare_group_members_remove` take `public_keys` as optional. Left out or
+empty, the keys come from the stored set, for the members the params name:
+
+| Call | Members |
+|---|---|
+| `prepare_group_create` | `member_ids` and `admin_ids` |
+| `prepare_group_members_change` | `current_member_ids` and `new_member_ids` |
+| `prepare_group_members_remove` | `remaining_member_ids`, a new optional field: the members who stay, the sender included |
+| `prepare_conversation_key_change` | `member_ids`, a new optional field: every participant, the sender included; or, without it, the two users of a one-to-one `conversation_id` |
+
+Only a stored key whose identity binding verifies is encrypted to. A member
+with none fails the call with an invalid-input error that names the user
+(`public_keys is empty and no public keys are stored for user(s) …`). With
+`public_keys` passed, the call uses them as before and reads neither the
+store nor the hook.
 
 ---
 

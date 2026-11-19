@@ -1044,12 +1044,21 @@ key map is empty. Its guardrails:
   conversation.
 - Cached keys are held in zeroize-on-drop containers, redacted from `Debug`
   output, and cleared when the cache is disabled.
-- The signing-key store is populated only by `set_signing_keys` and
-  `add_signing_keys` — verification never trusts a key carried inside an event —
-  and the per-sender filtering plus identity-binding checks run against the
-  stored entries exactly as they do for caller-passed keys. A signing key
-  whose identity binding does not verify is left out of verification;
-  `decrypt_events` reports it in `rejected_signing_keys`.
+- The signing-key store is populated only by `set_signing_keys`,
+  `add_signing_keys` and `add_public_keys` — verification never trusts a key
+  carried inside an event — and the per-sender filtering plus
+  identity-binding checks run against the stored entries exactly as they do
+  for caller-passed keys. A signing key whose identity binding does not
+  verify is left out of verification; `decrypt_events` reports it in
+  `rejected_signing_keys`.
+- Public keys a `resolve_public_keys` hook returns enter that store through
+  `add_public_keys` and get the same checks. A prepare call that is passed
+  no public keys encrypts its conversation key only to a stored identity key
+  whose binding verifies. The binding ties an identity key to a signing key;
+  that the pair belongs to the user it was fetched for is the X API's word,
+  as it is for keys the caller passes. The hook runs in the host language:
+  the core calls no code but its own, and only asks which users' keys are
+  missing and takes the records back.
 
 ### Known Limitations
 

@@ -42,7 +42,10 @@ Python/Rust, PascalCase in .NET/Go):
    signing-key version to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
    per-call key plumbing; `addSigningKeys(signingKeys)` adds more users' keys
-   later without replacing the set.
+   later without replacing the set. Or set a `resolvePublicKeys` hook that
+   fetches `GET /2/users/{id}/public_keys`: the SDK then fetches the public
+   keys a call lacks itself, and the key cache is on (see
+   [Public keys and the hook](docs/API.md#public-keys-and-the-hook)).
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
    keys by user automatically. Per-event errors are collected in the result;

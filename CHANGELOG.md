@@ -65,6 +65,51 @@
     optional. Left out or empty, it signs the version of the conversation's
     newest cached key, and fails with an invalid-state error when the cache
     holds none.
+- A `resolve_public_keys` hook fetches other users' public keys when a call
+  lacks them. The hook takes user ids and returns each user's records from
+  `GET /2/users/{id}/public_keys`, as the API sent them, by user id. It
+  lives in each language's own code: the Rust core stays synchronous and
+  calls nothing back.
+  - JS: `createChat({ resolvePublicKeys })` or `setResolvePublicKeys`, and
+    new methods that call it: `decryptEventsAsync`,
+    `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+    `prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync`.
+    .NET: the `ResolvePublicKeys` property and the same five methods in
+    PascalCase. The existing methods of both never call the hook.
+  - Python (`set_resolve_public_keys`), Go (`SetResolvePublicKeys`), the JVM
+    (`setResolvePublicKeys`) and Rust (`set_resolve_public_keys`): a
+    blocking hook, called from the existing `decrypt_events` and prepare
+    methods.
+  - With a hook set, a decrypt that is passed no signing keys asks it for
+    the users whose keys the batch lacked, adds what it returns, and
+    decrypts the batch once more. Setting a hook turns the key cache on.
+  - A lookup that did not bring the key it was made for is not repeated for
+    a minute, per user and key version.
+
+  With no hook set, nothing changes.
+- The pieces the hook is built from are public, for a caller that fetches
+  keys itself:
+  - `missing_signing_keys` on the `decrypt_events` result
+    (`missingSigningKeys`, `MissingSigningKeys`), by event index: each
+    event, of any signed type, whose sender's signing key was not among the
+    keys the call verified with, with the `user_id` and `public_key_version`
+    to fetch. Empty when nothing is missing.
+  - `missing_public_keys(result)`: the users to fetch, once each.
+  - `add_public_keys(records)`: adds the API's records, by user id, to the
+    stored signing keys. Go, .NET and the JVM have a `PublicKeyRecord` type
+    that unmarshals from the API's JSON.
+  - C ABI: `chat_xdk_add_public_keys`, `chat_xdk_missing_public_keys`,
+    `chat_xdk_missing_public_keys_for`.
+- `prepare_conversation_key_change`, `prepare_group_create`,
+  `prepare_group_members_change` and `prepare_group_members_remove` take
+  `public_keys` as optional. Left out or empty, the call encrypts its key to
+  the stored public keys of the members its params name, fetched through the
+  hook first when one is set: `member_ids` and `admin_ids` for a create, the
+  current and new members for an add, the new optional
+  `remaining_member_ids` for a removal, and the new optional `member_ids`,
+  or the two users of a one-to-one id, for a key change. Only a stored key
+  whose identity binding verifies is used. Public keys that are passed are
+  used as before.
 
 ### Changed
 
@@ -88,6 +133,14 @@
     under an older cached key, which failed before.
 
   With the cache off, nothing changes.
+- A prepare call that makes a conversation key and is passed no public keys
+  no longer fails outright. Where its params name members, it reads their
+  stored keys, and a member with none fails it with `public_keys is empty
+  and no public keys are stored for user(s) <ids>: …`, an invalid-input
+  error as `public_keys must not be empty` was. Where they name none, the
+  errors are the ones it gave before. In JS and the C ABI, leaving
+  `publicKeys` out of the params was a missing-field error and now reaches
+  those errors.
 
 - `latest_version` is null for a batch whose events belong to more than one
   conversation, from `decrypt_events` and from `extract_conversation_keys`.
