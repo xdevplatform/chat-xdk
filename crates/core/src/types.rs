@@ -1903,7 +1903,7 @@ impl<'de> Deserialize<'de> for RecordValue {
             fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
                 // A JavaScript number arrives as a float; one that is not a
                 // whole number is no key version.
-                if value.fract() == 0.0 && value >= 0.0 && value < 9.0e15 {
+                if value.fract() == 0.0 && (0.0..9.0e15).contains(&value) {
                     Ok(RecordValue((value as u64).to_string()))
                 } else {
                     Ok(RecordValue(String::new()))
