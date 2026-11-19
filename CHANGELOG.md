@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-11-19
+
 ### Added
 
 - `decrypt_events` says what it could not use. Its result has three new maps,
@@ -31,14 +33,12 @@
     Such a key was dropped without a trace, and the events it signed then
     failed as if no key had been passed.
 - A key change is signed by the member who made it, who need not have written
-  any message in the batch. Pass that member's public keys
-  (`GET /2/users/{id}/public_keys`) with the other signing keys. A key change
-  sequenced since late June 2026 that does not verify has its key dropped, as
-  before; until now nothing in the result said so, and every message under
-  that key failed with an error that asked for the key change events the
-  batch already held. The example bots now fetch those keys: they decrypt a
-  batch, read `unverified_key_changes`, fetch the public keys of the signers
-  it reports missing, and decrypt again.
+  any message in the batch. The chat needs that member's public keys
+  (`GET /2/users/{id}/public_keys`): set a public-keys hook, below, or pass
+  them with the other signing keys. A key change sequenced since late June
+  2026 that does not verify has its key dropped, as before; until now nothing
+  in the result said so, and every message under that key failed with an
+  error that asked for the key change events the batch already held.
 - `decrypt_events` and `extract_conversation_keys` report keys and key
   versions per conversation. `conversation_keys` has two new maps keyed by
   conversation id, in the form events carry (a group's `g…` id; a
@@ -99,7 +99,8 @@
     stored signing keys. Go, .NET and the JVM have a `PublicKeyRecord` type
     that unmarshals from the API's JSON.
   - C ABI: `chat_xdk_add_public_keys`, `chat_xdk_missing_public_keys`,
-    `chat_xdk_missing_public_keys_for`.
+    `chat_xdk_missing_public_keys_for`. Rust: `missing_public_keys_for`
+    with a `KeyChangeCall`, for the members a prepare call has no key for.
 - `prepare_conversation_key_change`, `prepare_group_create`,
   `prepare_group_members_change` and `prepare_group_members_remove` take
   `public_keys` as optional. Left out or empty, the call encrypts its key to
@@ -110,6 +111,15 @@
   or the two users of a one-to-one id, for a key change. Only a stored key
   whose identity binding verifies is used. Public keys that are passed are
   used as before.
+- The docs say how to run the SDK for many signed-in users in many
+  conversations ([API.md](docs/API.md#many-users-many-conversations)): one
+  chat per signed-in user, never one per conversation, and one public-keys
+  hook function for every chat, over one cache of public keys for the
+  process. Each example has both as code with an offline test:
+  `SharedPublicKeys`, a hook that shares a lookup under way, retries a failed
+  one and fetches an answer again after a TTL, and `UserChats`, one chat per
+  user. The six example bots fetch public keys through the hook, and the
+  JavaScript example runs one bot per signed-in user (`multi-bot.mjs`).
 
 ### Changed
 
@@ -141,7 +151,6 @@
   errors are the ones it gave before. In JS and the C ABI, leaving
   `publicKeys` out of the params was a missing-field error and now reaches
   those errors.
-
 - `latest_version` is null for a batch whose events belong to more than one
   conversation, from `decrypt_events` and from `extract_conversation_keys`.
   It was the highest version across the batch: verified, from
@@ -160,6 +169,10 @@
   batch carry, because a lookup by version alone cannot say which
   conversation's key it wants. A batch of one conversation, and a batch whose
   conversations use different versions, get the same `keys` as before.
+- A one-to-one conversation is one conversation whichever way an event
+  writes its id. Events carry the two user ids ordered numerically and
+  colon-separated; an id in the other order or with a hyphen is read as that
+  one, so its keys and versions are cached and reported under one id.
 - Errors for an event whose signature could not be verified say why. `…
   signature could not be verified: signature missing or no matching signing
   key` is now one of `… the event carries no signature`, `… no signing key
@@ -1233,7 +1246,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
