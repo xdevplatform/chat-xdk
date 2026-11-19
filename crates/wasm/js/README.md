@@ -111,8 +111,10 @@ for (const dm of result.events) {
 // A key change verifies with the signing keys of the member who made it. One
 // that did not verify is here, by its index in the batch; when its key was
 // dropped, the messages under it are in result.errors. For
-// "missingSigningKey", add the public keys of change.senderId
-// (GET /2/users/{id}/public_keys) and decrypt again.
+// "missingSigningKey", fetch the public keys of change.senderId
+// (GET /2/users/{id}/public_keys), add them to the stored keys with
+// chat.addSigningKeys([...]), which keeps the keys already stored, and
+// decrypt again.
 for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
   console.warn(index, change.reason, change.senderId, change.keyDropped);
 }
@@ -126,8 +128,14 @@ for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
 
 // Individual events after the initial load: the empty key map resolves from
 // the cache and the unset signing keys from the store (pass either
-// explicitly to override).
+// explicitly to override). A key change that verifies here is cached as one
+// in a batch is.
 const event = chat.decryptEvent({ eventB64: webhookEventB64 });
+// The message's files decrypt from the cache too, with no key map.
+for (const { mediaHashKey } of event.mediaHashes ?? []) {
+  const encrypted = await download(mediaHashKey);
+  const file = chat.decryptFile({ encrypted, eventB64: webhookEventB64, mediaHashKey });
+}
 
 // Sending resolves the identity and conversation key from the session too.
 const payload = chat.encryptMessage({ conversationId: event.conversationId, text: "hi!" });
@@ -139,6 +147,18 @@ const reply = chat.encryptReply({
 });
 const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEventB64 });
 ```
+
+While the key cache is on, it keeps every key version of a conversation
+whose key change verified in `decryptEvents` or `decryptEvent`, and every key
+the chat made itself with `prepareConversationKeyChange`,
+`prepareGroupCreate`, `prepareGroupMembersChange` or
+`prepareGroupMembersRemove`. A call that omits its conversation key reads it
+from there: the encrypt calls and the group title, description and avatar
+changes use the conversation's newest key (`prepareGroupAvatarChange` needs
+no `conversationKeyVersion`), and `decryptEvent`, `decryptFile` and
+`fileDecryptor` the version the event names. A prepared key is cached before
+its request is sent: if the X API rejects the request, prepare the change
+again.
 
 ## API
 

@@ -34,6 +34,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_set_signing_keys(Pointer handle, Pointer signingKeysJson);
 
+    FfiResult.ByValue chat_xdk_add_signing_keys(Pointer handle, Pointer signingKeysJson);
+
     FfiResult.ByValue chat_xdk_lock(Pointer handle);
 
     FfiResult.ByValue chat_xdk_update_config(Pointer handle, Pointer configJson);

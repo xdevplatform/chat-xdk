@@ -12,6 +12,7 @@ import init, {
   encryptedFileSize,
 } from "../pkg/chat_xdk_wasm.js";
 import { featureServer, keepOffline, reading, v1Chat, waitForV1 } from "./feature_server.mjs";
+import { keyCacheTests } from "./key_cache.mjs";
 import { keyChangeSignerTests } from "./key_change_signers.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
@@ -1460,6 +1461,11 @@ async function main() {
   // 7. decryptEvents names the key changes whose signature did not verify,
   // and reports the version to encrypt with per conversation.
   await keyChangeSignerTests(() => new Chat());
+
+  // 8. The key cache is filled by every call that verifies or makes a key
+  // and read by every call that takes one, and addSigningKeys merges into
+  // the stored signing keys.
+  await keyCacheTests(() => new Chat());
 
   console.log("api.test.mjs: all assertions passed");
 }

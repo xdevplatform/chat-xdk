@@ -1341,8 +1341,8 @@ namespace ChatXdk
         public IReadOnlyDictionary<string, byte[]>? ConversationKeys { get; }
         /// <summary>
         /// Signing keys to verify the event with; null or empty uses the keys stored via
-        /// <see cref="Chat.SetSigningKeys"/>. The SDK picks the sender's key for the version the
-        /// event carries.
+        /// <see cref="Chat.SetSigningKeys"/> and <see cref="Chat.AddSigningKeys"/>. The SDK picks
+        /// the sender's key for the version the event carries.
         /// </summary>
         public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
     }
@@ -1364,7 +1364,7 @@ namespace ChatXdk
         public IReadOnlyList<string> Events { get; }
         /// <summary>
         /// Signing keys of all participants; null or empty uses the keys stored via
-        /// <see cref="Chat.SetSigningKeys"/>.
+        /// <see cref="Chat.SetSigningKeys"/> and <see cref="Chat.AddSigningKeys"/>.
         /// </summary>
         public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
     }
@@ -1440,14 +1440,15 @@ namespace ChatXdk
     /// <summary>Parameters for <see cref="Chat.DecryptFile"/>.</summary>
     public sealed class DecryptFileParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>Create params with the conversation's key map.</summary>
         /// <param name="encrypted">The encrypted file, as downloaded.</param>
         /// <param name="eventB64">
         /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
         /// </param>
         /// <param name="conversationKeys">
         /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
-        /// for the message's version.
+        /// for the message's version. Null or empty takes the conversation's keys from the opt-in
+        /// key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
         /// <param name="mediaHashKey">
         /// The file's media hash key from the decrypted message: a media attachment, a link card's
@@ -1456,20 +1457,40 @@ namespace ChatXdk
         public DecryptFileParams(
             byte[] encrypted,
             string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            IReadOnlyDictionary<string, byte[]>? conversationKeys,
             string mediaHashKey)
         {
             Encrypted = encrypted;
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
+            ConversationKeys = conversationKeys ?? new Dictionary<string, byte[]>();
             MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>
+        /// Create params without a key map: the conversation's keys come from the opt-in key
+        /// cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="encrypted">The encrypted file, as downloaded.</param>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public DecryptFileParams(byte[] encrypted, string eventB64, string mediaHashKey)
+            : this(encrypted, eventB64, null, mediaHashKey)
+        {
         }
 
         /// <summary>The encrypted file, as downloaded.</summary>
         public byte[] Encrypted { get; }
         /// <summary>The base64 event of the message that carries the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
+        /// <summary>
+        /// Version → raw 32-byte conversation key; empty when none were passed, which takes the
+        /// conversation's keys from the opt-in key cache.
+        /// </summary>
         public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The file's media hash key from the decrypted message.</summary>
         public string MediaHashKey { get; }
@@ -1481,13 +1502,14 @@ namespace ChatXdk
     /// </summary>
     public sealed class FileDecryptorParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>Create params with the conversation's key map.</summary>
         /// <param name="eventB64">
         /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
         /// </param>
         /// <param name="conversationKeys">
         /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
-        /// for the message's version.
+        /// for the message's version. Null or empty takes the conversation's keys from the opt-in
+        /// key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
         /// <param name="mediaHashKey">
         /// The file's media hash key from the decrypted message: a media attachment, a link card's
@@ -1495,17 +1517,36 @@ namespace ChatXdk
         /// </param>
         public FileDecryptorParams(
             string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            IReadOnlyDictionary<string, byte[]>? conversationKeys,
             string mediaHashKey)
         {
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
+            ConversationKeys = conversationKeys ?? new Dictionary<string, byte[]>();
             MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>
+        /// Create params without a key map: the conversation's keys come from the opt-in key
+        /// cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public FileDecryptorParams(string eventB64, string mediaHashKey)
+            : this(eventB64, null, mediaHashKey)
+        {
         }
 
         /// <summary>The base64 event of the message that carries the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
+        /// <summary>
+        /// Version → raw 32-byte conversation key; empty when none were passed, which takes the
+        /// conversation's keys from the opt-in key cache.
+        /// </summary>
         public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The file's media hash key from the decrypted message.</summary>
         public string MediaHashKey { get; }
@@ -1719,17 +1760,39 @@ namespace ChatXdk
     /// </summary>
     public sealed class GroupAvatarChangeParams
     {
-        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string conversationKeyVersion)
+        /// <summary>Create params with the version of the key the avatar image is encrypted under.</summary>
+        /// <param name="conversationId">The group's conversation id.</param>
+        /// <param name="newAvatarUrl">The media URL of the group's new avatar image.</param>
+        /// <param name="conversationKeyVersion">
+        /// Version of the conversation key the avatar image is encrypted under. Null or empty
+        /// signs the version of the conversation's newest key in the opt-in key cache
+        /// (<see cref="Chat.SetCacheKeys"/>).
+        /// </param>
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string? conversationKeyVersion)
         {
             ConversationId = conversationId;
             NewAvatarUrl = newAvatarUrl;
-            ConversationKeyVersion = conversationKeyVersion;
+            ConversationKeyVersion = conversationKeyVersion ?? "";
+        }
+
+        /// <summary>
+        /// Create params without a key version: the call signs the version of the conversation's
+        /// newest key in the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="conversationId">The group's conversation id.</param>
+        /// <param name="newAvatarUrl">The media URL of the group's new avatar image.</param>
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl)
+            : this(conversationId, newAvatarUrl, null)
+        {
         }
 
         public string ConversationId { get; }
         /// <summary>The media URL of the group's new avatar image, signed and sent as is.</summary>
         public string NewAvatarUrl { get; }
-        /// <summary>Version of the conversation key the avatar image is encrypted under.</summary>
+        /// <summary>
+        /// Version of the conversation key the avatar image is encrypted under; empty when none
+        /// was passed, which signs the version of the conversation's newest cached key.
+        /// </summary>
         public string ConversationKeyVersion { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }

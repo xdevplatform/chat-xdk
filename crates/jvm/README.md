@@ -43,10 +43,16 @@ import java.util.Map;
 try (Chat chat = new Chat()) {
     // Load a key blob + its registered version, then set the session once:
     // identity, the opt-in conversation-key cache, and the signing-key store.
+    // The cache keeps the key of every key change that verifies in
+    // decryptEvents or decryptEvent, and of every key change this chat
+    // prepares.
     chat.importKeys(new ImportKeysParams(exportedBytes, registeredKeyVersion));
     chat.setIdentity(new SetIdentityParams(myUserId, registeredKeyVersion));
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys);
+    // setSigningKeys replaces the stored keys; addSigningKeys adds to them,
+    // such as the keys of a member who joins later.
+    chat.addSigningKeys(newMemberSigningKeys);
 
     // Batch load — unset (null) signing keys fall back to the store; the
     // verified conversation keys populate the cache.
@@ -82,6 +88,14 @@ try (Chat chat = new Chat()) {
             chat.encryptAddReaction(new EncryptReactionParams(eventB64, "👍"));
 }
 ```
+
+With the key cache on, calls that omit their conversation key read it from
+the cache: the encrypt methods and the group title, description and avatar
+changes use the conversation's newest key, and `decryptEvent`, `decryptFile`
+and `fileDecryptor` the key at the version the event names. So
+`DecryptFileParams` and `FileDecryptorParams` can be created without a key
+map, and `GroupAvatarChangeParams` without a key version. A value that is
+passed is used as is.
 
 Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
 

@@ -578,14 +578,14 @@ class GroupTitleChangeParams:
 class GroupAvatarChangeParams:
     conversation_id: str
     new_avatar_url: str
-    conversation_key_version: str
+    conversation_key_version: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
         new_avatar_url: str,
-        conversation_key_version: str,
+        conversation_key_version: Optional[str] = None,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -834,25 +834,25 @@ class FileEncryptorParams:
 class DecryptFileParams:
     encrypted: bytes
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     media_hash_key: str
     def __init__(
         self,
         encrypted: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
+        conversation_keys: Optional[dict[str, bytes]] = None,
+        media_hash_key: str = ...,
     ) -> None: ...
 
 class FileDecryptorParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     media_hash_key: str
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
+        conversation_keys: Optional[dict[str, bytes]] = None,
+        media_hash_key: str = ...,
     ) -> None: ...
 
 class EncryptFileWithKeyParams:
@@ -876,6 +876,7 @@ class Chat:
     def set_identity(self, params: SetIdentityParams) -> None: ...
     def set_cache_keys(self, enabled: bool) -> None: ...
     def set_signing_keys(self, signing_keys: list[SigningKeyEntry]) -> None: ...
+    def add_signing_keys(self, signing_keys: list[SigningKeyEntry]) -> None: ...
 
     # Juicebox Key Storage
     def setup(self, pin: Union[str, bytes, bytearray]) -> PublicKeys: ...

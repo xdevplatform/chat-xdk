@@ -208,11 +208,22 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Enable or disable the conversation-key cache (off by default). While enabled,
-     * {@link #decryptEvents} caches, per conversation, the key whose key change
-     * carried a valid signature at the highest version seen, and the encrypt
-     * methods resolve a null {@code conversationKey}/{@code conversationKeyVersion}
-     * pair from it. Disabling clears the cache.
+     * Enable or disable the conversation-key cache (off by default).
+     *
+     * <p>While enabled, the cache keeps, per conversation, the key of every key change
+     * whose signature verified in {@link #decryptEvents} or {@link #decryptEvent}, and
+     * the key of every key change this chat prepared
+     * ({@link #prepareConversationKeyChange}, {@link #prepareGroupCreate},
+     * {@link #prepareGroupMembersChange} or {@link #prepareGroupMembersRemove}). A call
+     * that omits its conversation key reads it from there: the encrypt methods and the
+     * title, description and avatar changes use the conversation's newest key, and
+     * {@link #decryptEvent}, {@link #decryptFile} and {@link #fileDecryptor} the key at
+     * the version the event names. Disabling clears the cache.
+     *
+     * <p>A prepared key is cached when the prepare call returns, before its request is
+     * sent. If the X API rejects the request, no one else holds that key: prepare the
+     * change again, or pass the key to encrypt with explicitly, until a newer key change
+     * verifies.
      */
     public void setCacheKeys(boolean enabled) {
         throwIfDisposed();
@@ -246,14 +257,31 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Store signing keys to use when a decrypt call's params leave {@code signingKeys}
-     * null (or empty). Only this explicit call populates the store — a key carried inside
-     * an event is never trusted for verification. Each call replaces the previous set.
+     * null (or empty). Each call replaces the previous set; add to it with
+     * {@link #addSigningKeys}. Only these two calls populate the store — a key carried
+     * inside an event is never trusted for verification.
      */
     public void setSigningKeys(List<SigningKeyEntry> keys) throws Exception {
         throwIfDisposed();
         String json = ChatJson.MAPPER.writeValueAsString(keys);
         try (Memory j = FfiStrings.utf8(json)) {
             FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_signing_keys(handle, j));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Add signing keys to the set {@link #setSigningKeys} stores, keeping the keys it
+     * holds: an entry replaces the stored entry of the same
+     * {@link SigningKeyEntry#userId} and {@link SigningKeyEntry#publicKeyVersion}, and
+     * any other is added.
+     */
+    public void addSigningKeys(List<SigningKeyEntry> keys) throws Exception {
+        throwIfDisposed();
+        String json = ChatJson.MAPPER.writeValueAsString(keys);
+        try (Memory j = FfiStrings.utf8(json)) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_add_signing_keys(handle, j));
         } finally {
             Reference.reachabilityFence(this);
         }
@@ -520,10 +548,15 @@ public final class Chat implements AutoCloseable {
      * Decrypt a webhook event and return it as a {@link JsonNode}.
      *
      * <p>Under the default reject-unverified policy, a signed event with no usable signing key
-     * (passed or stored via {@link #setSigningKeys}) throws; only after
-     * {@link #setRejectUnverified}(false) are such events returned with {@code verified: false}.
+     * (passed or stored via {@link #setSigningKeys} and {@link #addSigningKeys}) throws; only
+     * after {@link #setRejectUnverified}(false) are such events returned with
+     * {@code verified: false}.
      * A member removal's title and description, re-encrypted under the new key, aren't changes:
      * they throw a {@link ChatXdkException} of kind {@code INVALID_INPUT} under either policy.
+     *
+     * <p>A key change that verifies is recorded as {@link #decryptEvents} records it: while the
+     * key cache is on ({@link #setCacheKeys}), its key is cached, so later calls that omit their
+     * conversation key resolve it.
      *
      * @return A {@link JsonNode} with a {@code "type"} field indicating the event kind
      *     ({@code "Message"}, {@code "KeyChange"}, {@code "GroupChange"}, etc.).
@@ -619,6 +652,9 @@ public final class Chat implements AutoCloseable {
      *
      * <p>Leave {@code conversationId} null on a one-to-one to derive the canonical
      * id from the two participants; pass the existing id for a group rotation.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareConversationKeyChange(ConversationKeyChangeParams parameters)
             throws Exception {
@@ -640,6 +676,9 @@ public final class Chat implements AutoCloseable {
      * new conversation key, signs the ciphertext, and returns it as
      * {@code encryptedTitle} and {@code encryptedDescription}. The current avatar URL is
      * signed as is.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupMembersChange(GroupMembersChangeParams parameters)
             throws Exception {
@@ -662,6 +701,9 @@ public final class Chat implements AutoCloseable {
      * signs the ciphertext, and returns it as {@code encryptedTitle}, the
      * {@code group_name} the create request sends. A create sets no avatar; set it
      * afterwards with {@link #prepareGroupAvatarChange}.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupCreate(GroupCreateParams parameters)
             throws Exception {
@@ -716,6 +758,9 @@ public final class Chat implements AutoCloseable {
      * who stay ({@code publicKeys}). The result carries the new key and the action
      * signatures: the removal, a title and a description change for each one the
      * params set, re-encrypted under the new key, and the conversation-key change.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupMembersRemove(GroupMembersRemoveParams parameters)
             throws Exception {
@@ -743,7 +788,13 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Sign a group avatar change: the avatar image's media URL, as is, and the version of
-     * the key the image is encrypted under.
+     * the key the image is encrypted under. With
+     * {@link GroupAvatarChangeParams#conversationKeyVersion} null or empty, the call signs
+     * the version of the conversation's newest key in the opt-in key cache
+     * ({@link #setCacheKeys}), the key the encrypt methods resolve.
+     *
+     * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_STATE} if the
+     *     key version is left out and no key of the conversation is cached.
      */
     public PreparedAction prepareGroupAvatarChange(GroupAvatarChangeParams parameters)
             throws Exception {
@@ -1014,7 +1065,9 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Decrypt an encrypted file (e.g. an image or video), as downloaded.
+     * Decrypt an encrypted file (e.g. an image or video), as downloaded. With
+     * {@link DecryptFileParams#conversationKeys} null or empty, the conversation's keys come
+     * from the opt-in key cache ({@link #setCacheKeys}).
      *
      * @return Decrypted bytes.
      * @throws ChatXdkException if the key version is missing, the event is not an encrypted
@@ -1455,7 +1508,10 @@ public final class Chat implements AutoCloseable {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
         n.put("new_avatar_url", p.newAvatarUrl);
-        n.put("conversation_key_version", p.conversationKeyVersion);
+        // A version left out is omitted, so the core signs the newest cached key's.
+        if (p.conversationKeyVersion != null && !p.conversationKeyVersion.isEmpty()) {
+            n.put("conversation_key_version", p.conversationKeyVersion);
+        }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

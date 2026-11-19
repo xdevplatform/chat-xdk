@@ -244,10 +244,19 @@ struct FfiResult chat_xdk_set_identity(const struct ChatHandle *handle, const ch
  * Enable (non-zero) or disable (0) the conversation-key cache (off by
  * default).
  *
- * While enabled, `chat_xdk_decrypt_events` caches each conversation's
- * verified latest key and the encrypt functions resolve an omitted
- * `conversation_key`/`conversation_key_version` pair from it. Disabling
- * clears the cache.
+ * While enabled, the cache keeps, per conversation, the key of every key
+ * change whose signature verified in `chat_xdk_decrypt_events` or
+ * `chat_xdk_decrypt_event`, and the key of every key change this chat
+ * prepared (a conversation-key change, a group create, a member add or a
+ * member removal). A call that omits its conversation key reads it from
+ * there: the encrypt functions and the title, description and avatar
+ * changes use the conversation's newest key, and the decrypt functions the
+ * key at the version the event names. Disabling clears the cache.
+ *
+ * A prepared key is cached when the prepare call returns, before its
+ * request is sent. If the X API rejects the request, no one else holds
+ * that key: prepare the change again, or pass the key to encrypt with
+ * explicitly, until a newer key change verifies.
  */
 struct FfiResult chat_xdk_set_cache_keys(const struct ChatHandle *handle, int32_t enabled);
 
@@ -285,10 +294,22 @@ struct FfiResult chat_xdk_set_feature_switches(const struct ChatHandle *handle,
  * `signing_keys` (or passes an empty array).
  *
  * `signing_keys_json` takes the same array shape as
- * `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
- * call populates the store — keys carried inside events are never trusted.
+ * `chat_xdk_decrypt_events`. Each call replaces the previous set; add to it
+ * with `chat_xdk_add_signing_keys`. Only these two calls populate the
+ * store — keys carried inside events are never trusted.
  */
 struct FfiResult chat_xdk_set_signing_keys(const struct ChatHandle *handle,
+                                           const char *signing_keys_json);
+
+/**
+ * Add signing keys to the set `chat_xdk_set_signing_keys` stores, keeping
+ * the keys it holds: an entry replaces the stored entry of the same
+ * `user_id` and `public_key_version`, and any other is added.
+ *
+ * `signing_keys_json` takes the same array shape as
+ * `chat_xdk_decrypt_events`.
+ */
+struct FfiResult chat_xdk_add_signing_keys(const struct ChatHandle *handle,
                                            const char *signing_keys_json);
 
 /**
@@ -535,8 +556,9 @@ struct FfiResult chat_xdk_encrypt_file(const struct ChatHandle *handle, const ch
  * `params_json` — single JSON document: `encrypted` (base64, as
  * downloaded), `event_b64` (the event of the message that carries the
  * file), `conversation_keys` (`{"version": "base64 raw 32-byte key"}`
- * holding the key for the message's version), and `media_hash_key` (the
- * file's media hash key from the decrypted message).
+ * holding the key for the message's version; absent, null or `{}` takes
+ * the conversation's keys from the opt-in key cache), and `media_hash_key`
+ * (the file's media hash key from the decrypted message).
  *
  * Returns the decrypted file, base64.
  */
@@ -743,10 +765,12 @@ struct FfiResult chat_xdk_prepare_group_title_change(const struct ChatHandle *ha
  * Sign a group avatar change.
  *
  * `params_json` — `conversation_id`, `new_avatar_url` (the media URL of
- * the avatar image, signed and sent as is), `conversation_key_version`
- * (the version of the key the image is encrypted under), plus optional
- * `sender_id` / `signing_key_version` (unset resolves from the session
- * identity).
+ * the avatar image, signed and sent as is), plus optional
+ * `conversation_key_version` (the version of the key the image is
+ * encrypted under; absent, null or empty signs the version of the
+ * conversation's newest key in the opt-in key cache, and fails with an
+ * `invalid_state` error when none is cached) and `sender_id` /
+ * `signing_key_version` (unset resolves from the session identity).
  *
  * Returns JSON `PreparedAction`: `action_signatures`, one entry.
  */

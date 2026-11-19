@@ -393,6 +393,7 @@ export class ChatWithJuicebox {
   }
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
+  addSigningKeys(signingKeys) { return this.#inner.addSigningKeys(signingKeys); }
   getPublicKeys() { return this.#inner.getPublicKeys(); }
   getPublicKeyFingerprint() { return this.#inner.getPublicKeyFingerprint(); }
   isUnlocked() { return this.#inner.isUnlocked(); }

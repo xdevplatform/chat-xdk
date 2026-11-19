@@ -202,12 +202,12 @@ fn catch_ffi_or<T>(fallback: T, body: impl FnOnce() -> T) -> T {
 /// Parse the signing-keys JSON passed across the FFI boundary.
 ///
 /// `null`, an empty string, or `[]` yields an empty list — the decrypt calls
-/// then fall back to the keys stored via `chat_xdk_set_signing_keys`, and
-/// with nothing stored either, signed events fail decryption under the
-/// default reject-unverified policy (they are returned with
-/// `verified: false` only after reject-unverified is disabled).
-/// A non-empty but malformed array is a caller error and is surfaced rather
-/// than silently dropped (which would weaken verification).
+/// then fall back to the keys stored via `chat_xdk_set_signing_keys` and
+/// `chat_xdk_add_signing_keys`, and with nothing stored either, signed
+/// events fail decryption under the default reject-unverified policy (they
+/// are returned with `verified: false` only after reject-unverified is
+/// disabled). A non-empty but malformed array is a caller error and is
+/// surfaced rather than silently dropped (which would weaken verification).
 fn parse_signing_keys(json: &str) -> Result<Vec<SigningKeyEntry>, String> {
     let trimmed = json.trim();
     if trimmed.is_empty() || trimmed == "null" {
@@ -589,10 +589,19 @@ pub extern "C" fn chat_xdk_set_identity(
 /// Enable (non-zero) or disable (0) the conversation-key cache (off by
 /// default).
 ///
-/// While enabled, `chat_xdk_decrypt_events` caches each conversation's
-/// verified latest key and the encrypt functions resolve an omitted
-/// `conversation_key`/`conversation_key_version` pair from it. Disabling
-/// clears the cache.
+/// While enabled, the cache keeps, per conversation, the key of every key
+/// change whose signature verified in `chat_xdk_decrypt_events` or
+/// `chat_xdk_decrypt_event`, and the key of every key change this chat
+/// prepared (a conversation-key change, a group create, a member add or a
+/// member removal). A call that omits its conversation key reads it from
+/// there: the encrypt functions and the title, description and avatar
+/// changes use the conversation's newest key, and the decrypt functions the
+/// key at the version the event names. Disabling clears the cache.
+///
+/// A prepared key is cached when the prepare call returns, before its
+/// request is sent. If the X API rejects the request, no one else holds
+/// that key: prepare the change again, or pass the key to encrypt with
+/// explicitly, until a newer key change verifies.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_cache_keys(handle: *const ChatHandle, enabled: i32) -> FfiResult {
     catch_ffi(|| {
@@ -753,8 +762,9 @@ pub extern "C" fn chat_xdk_internal_feature_set_default_endpoint(
 /// `signing_keys` (or passes an empty array).
 ///
 /// `signing_keys_json` takes the same array shape as
-/// `chat_xdk_decrypt_events`. Each call replaces the previous set; only this
-/// call populates the store — keys carried inside events are never trusted.
+/// `chat_xdk_decrypt_events`. Each call replaces the previous set; add to it
+/// with `chat_xdk_add_signing_keys`. Only these two calls populate the
+/// store — keys carried inside events are never trusted.
 #[no_mangle]
 pub extern "C" fn chat_xdk_set_signing_keys(
     handle: *const ChatHandle,
@@ -770,6 +780,31 @@ pub extern "C" fn chat_xdk_set_signing_keys(
             Err(e) => return err_result(&e),
         };
         h.inner.set_signing_keys(&signing_keys);
+        ok_void()
+    })
+}
+
+/// Add signing keys to the set `chat_xdk_set_signing_keys` stores, keeping
+/// the keys it holds: an entry replaces the stored entry of the same
+/// `user_id` and `public_key_version`, and any other is added.
+///
+/// `signing_keys_json` takes the same array shape as
+/// `chat_xdk_decrypt_events`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_add_signing_keys(
+    handle: *const ChatHandle,
+    signing_keys_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let signing_keys = match parse_signing_keys(try_str!(signing_keys_json)) {
+            Ok(keys) => keys,
+            Err(e) => return err_result(&e),
+        };
+        h.inner.add_signing_keys(&signing_keys);
         ok_void()
     })
 }

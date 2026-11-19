@@ -15,13 +15,13 @@ namespace ChatXdk.Tests
     {
         /// <summary>A sequence id past the cut-over, where a key change that does not verify
         /// has its key dropped.</summary>
-        private const string EnforcedSequence = "2100000000000000000";
+        internal const string EnforcedSequence = "2100000000000000000";
         /// <summary>A sequence id before the cut-over, where the key is kept.</summary>
         private const string UnenforcedSequence = "100";
-        private const string Group = "g900";
+        internal const string Group = "g900";
         private const string OtherGroup = "g901";
         private const string ThirdGroup = "g902";
-        private const string KeyVersion = "1";
+        internal const string KeyVersion = "1";
 
         /// <summary>A Thrift string field: its id, then the value's length and bytes.</summary>
         private static byte[] StringField(int id, string value)
@@ -68,7 +68,7 @@ namespace ChatXdk.Tests
         }
 
         /// <summary>A chat with fresh keys as a user, and the keys others hold for it.</summary>
-        private sealed class Party : IDisposable
+        internal sealed class Party : IDisposable
         {
             public Party(string userId)
             {
@@ -100,7 +100,7 @@ namespace ChatXdk.Tests
         }
 
         /// <summary>A key change as delivered, with its key.</summary>
-        private sealed record KeyChange(
+        internal sealed record KeyChange(
             ActionSignature Signed, string SignerId, string ConversationId, string EventB64, byte[] Key, string Version)
         {
             /// <summary>This key change as delivered before the cut-over with its key version
@@ -129,7 +129,7 @@ namespace ChatXdk.Tests
 
         /// <summary>The key change <paramref name="signer"/> makes in
         /// <paramref name="conversationId"/> for <paramref name="members"/>.</summary>
-        private static KeyChange NewKeyChange(Party signer, IEnumerable<Party> members, string conversationId)
+        internal static KeyChange NewKeyChange(Party signer, IEnumerable<Party> members, string conversationId)
         {
             var prepared = signer.Chat.PrepareConversationKeyChange(
                 new ConversationKeyChangeParams(members.Select(member => member.PublicKey).ToList())
@@ -151,7 +151,7 @@ namespace ChatXdk.Tests
         /// <summary>The message <paramref name="author"/> sends in
         /// <paramref name="conversationId"/> under the key of <paramref name="change"/>, as
         /// delivered.</summary>
-        private static string SentMessage(Party author, string conversationId, KeyChange change, string text)
+        internal static string SentMessage(Party author, string conversationId, KeyChange change, string text)
         {
             var payload = author.Chat.EncryptMessage(new EncryptMessageParams(conversationId, text)
             {

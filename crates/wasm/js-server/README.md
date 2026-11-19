@@ -83,20 +83,29 @@ key is loaded, and `importKeys` one of kind `invalidInput` for bytes that
 aren't keys. The SDK zeroizes its own copy of the bytes `importKeys` takes;
 zero yours with `fill(0)`.
 
+`conversationKeys` is the conversation's key map from `decryptEvents`. A
+process that stays up can turn on the key cache instead
+(`chat.setCacheKeys(true)`): it keeps the key of each key change that
+verifies in `decryptEvents` or `decryptEvent`, and of each key change the
+chat prepares, and `decryptEvent`, `decryptFile`, `fileDecryptor` and the
+encrypt calls then need no key passed.
+
 ## Signing keys for key changes
 
-The signing keys a chat verifies with (`setSigningKeys`, or `signingKeys` on
-a decrypt call) must include those of every member who made a key change in
-the events you decrypt, not only of the members whose messages you read. A
-group's key changes are signed by whoever created the group, changed its
-members or rotated its key, and a recent key change that does not verify has
-its key dropped: every message under it then lands in `errors`.
+The signing keys a chat verifies with (`setSigningKeys` and
+`addSigningKeys`, or `signingKeys` on a decrypt call) must include those of
+every member who made a key change in the events you decrypt, not only of
+the members whose messages you read. A group's key changes are signed by
+whoever created the group, changed its members or rotated its key, and a
+recent key change that does not verify has its key dropped: every message
+under it then lands in `errors`.
 
 `decryptEvents` reports each key change whose signature did not verify in
 `unverifiedKeyChanges`, keyed by the key change's index in the batch as
 `errors` is, with the `senderId` and `publicKeyVersion` of the signing key it
-needs. Fetch that member's public keys from `GET /2/users/{id}/public_keys`
-and decrypt again:
+needs. Fetch that member's public keys from `GET /2/users/{id}/public_keys`,
+add them to the stored keys with `addSigningKeys`, which keeps the keys
+already stored (`setSigningKeys` replaces them), and decrypt again:
 
 ```typescript
 let result = chat.decryptEvents({ events });
@@ -104,8 +113,7 @@ const missing = Object.values(result.unverifiedKeyChanges)
   .filter((change) => change.reason === "missingSigningKey")
   .map((change) => change.senderId);
 if (missing.length > 0) {
-  signingKeys.push(...(await fetchSigningKeys(missing))); // GET /2/users/{id}/public_keys
-  chat.setSigningKeys(signingKeys);
+  chat.addSigningKeys(await fetchSigningKeys(missing)); // GET /2/users/{id}/public_keys
   result = chat.decryptEvents({ events });
 }
 ```

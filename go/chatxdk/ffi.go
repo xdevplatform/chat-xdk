@@ -212,6 +212,13 @@ func ffiSetSigningKeys(h handle, signingKeysJSON string) error {
 	return err
 }
 
+func ffiAddSigningKeys(h handle, signingKeysJSON string) error {
+	c := C.CString(signingKeysJSON)
+	defer C.free(unsafe.Pointer(c))
+	_, err := ffiResult(C.chat_xdk_add_signing_keys(h, c))
+	return err
+}
+
 func ffiLock(h handle) error {
 	_, err := ffiResult(C.chat_xdk_lock(h))
 	return err

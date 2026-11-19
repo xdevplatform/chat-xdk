@@ -207,7 +207,10 @@ public final class Types {
         public List<ActionSignature> actionSignatures = Collections.emptyList();
     }
 
-    /** A signing key entry for {@link Chat#decryptEvent} and {@link Chat#decryptEvents}. */
+    /**
+     * A signing key entry for {@link Chat#decryptEvent}, {@link Chat#decryptEvents},
+     * {@link Chat#setSigningKeys} and {@link Chat#addSigningKeys}.
+     */
     public static final class SigningKeyEntry {
         /** ID of the user this signing key belongs to. */
         @JsonProperty("user_id")
@@ -1463,8 +1466,8 @@ public final class Types {
 
         /**
          * Signing keys to verify the event with; null or empty uses the keys stored via
-         * {@link Chat#setSigningKeys}. The SDK picks the sender's key for the version the event
-         * carries.
+         * {@link Chat#setSigningKeys} and {@link Chat#addSigningKeys}. The SDK picks the sender's
+         * key for the version the event carries.
          */
         public List<SigningKeyEntry> signingKeys;
 
@@ -1500,7 +1503,7 @@ public final class Types {
 
         /**
          * Signing keys of all participants; null or empty uses the keys stored via
-         * {@link Chat#setSigningKeys}.
+         * {@link Chat#setSigningKeys} and {@link Chat#addSigningKeys}.
          */
         public List<SigningKeyEntry> signingKeys;
 
@@ -1591,7 +1594,8 @@ public final class Types {
 
         /**
          * The conversation's key map, as passed to {@link Chat#decryptEvent}; it must hold the key
-         * for the message's version.
+         * for the message's version. Null or empty takes the conversation's keys from the opt-in
+         * key cache ({@link Chat#setCacheKeys}).
          */
         public final Map<String, byte[]> conversationKeys;
 
@@ -1602,11 +1606,12 @@ public final class Types {
         public final String mediaHashKey;
 
         /**
-         * Create params with the required fields.
+         * Create params with the conversation's key map.
          *
          * @param encrypted The encrypted file, as downloaded.
          * @param eventB64 The base64 event of the message that carries the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key; null or empty
+         *     takes the conversation's keys from the opt-in key cache.
          * @param mediaHashKey The file's media hash key from the decrypted message.
          */
         public DecryptFileParams(
@@ -1615,6 +1620,18 @@ public final class Types {
             this.eventB64 = eventB64;
             this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
+        }
+
+        /**
+         * Create params without a key map: the conversation's keys come from the opt-in key
+         * cache ({@link Chat#setCacheKeys}).
+         *
+         * @param encrypted The encrypted file, as downloaded.
+         * @param eventB64 The base64 event of the message that carries the file.
+         * @param mediaHashKey The file's media hash key from the decrypted message.
+         */
+        public DecryptFileParams(byte[] encrypted, String eventB64, String mediaHashKey) {
+            this(encrypted, eventB64, null, mediaHashKey);
         }
     }
 
@@ -1628,7 +1645,8 @@ public final class Types {
 
         /**
          * The conversation's key map, as passed to {@link Chat#decryptEvent}; it must hold the key
-         * for the message's version.
+         * for the message's version. Null or empty takes the conversation's keys from the opt-in
+         * key cache ({@link Chat#setCacheKeys}).
          */
         public final Map<String, byte[]> conversationKeys;
 
@@ -1639,16 +1657,28 @@ public final class Types {
         public final String mediaHashKey;
 
         /**
-         * Create params with the required fields.
+         * Create params with the conversation's key map.
          *
          * @param eventB64 The base64 event of the message that carries the file.
-         * @param conversationKeys Version &#8594; raw 32-byte conversation key.
+         * @param conversationKeys Version &#8594; raw 32-byte conversation key; null or empty
+         *     takes the conversation's keys from the opt-in key cache.
          * @param mediaHashKey The file's media hash key from the decrypted message.
          */
         public FileDecryptorParams(String eventB64, Map<String, byte[]> conversationKeys, String mediaHashKey) {
             this.eventB64 = eventB64;
             this.conversationKeys = conversationKeys;
             this.mediaHashKey = mediaHashKey;
+        }
+
+        /**
+         * Create params without a key map: the conversation's keys come from the opt-in key
+         * cache ({@link Chat#setCacheKeys}).
+         *
+         * @param eventB64 The base64 event of the message that carries the file.
+         * @param mediaHashKey The file's media hash key from the decrypted message.
+         */
+        public FileDecryptorParams(String eventB64, String mediaHashKey) {
+            this(eventB64, null, mediaHashKey);
         }
     }
 
@@ -1874,18 +1904,42 @@ public final class Types {
         public final String conversationId;
         /** The media URL of the group's new avatar image, signed and sent as is. */
         public final String newAvatarUrl;
-        /** Version of the conversation key the avatar image is encrypted under. */
+        /**
+         * Version of the conversation key the avatar image is encrypted under. Null or empty
+         * signs the version of the conversation's newest key in the opt-in key cache
+         * ({@link Chat#setCacheKeys}).
+         */
         public final String conversationKeyVersion;
         /** User ID of the sender; resolves from the session identity when null. */
         public String senderId;
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
+        /**
+         * Create params with the version of the key the avatar image is encrypted under.
+         *
+         * @param conversationId ID of the group conversation.
+         * @param newAvatarUrl The media URL of the group's new avatar image.
+         * @param conversationKeyVersion Version of the conversation key the avatar image is
+         *     encrypted under; null or empty signs the version of the conversation's newest
+         *     cached key.
+         */
         public GroupAvatarChangeParams(
                 String conversationId, String newAvatarUrl, String conversationKeyVersion) {
             this.conversationId = conversationId;
             this.newAvatarUrl = newAvatarUrl;
             this.conversationKeyVersion = conversationKeyVersion;
+        }
+
+        /**
+         * Create params without a key version: the call signs the version of the conversation's
+         * newest key in the opt-in key cache ({@link Chat#setCacheKeys}).
+         *
+         * @param conversationId ID of the group conversation.
+         * @param newAvatarUrl The media URL of the group's new avatar image.
+         */
+        public GroupAvatarChangeParams(String conversationId, String newAvatarUrl) {
+            this(conversationId, newAvatarUrl, null);
         }
     }
 
