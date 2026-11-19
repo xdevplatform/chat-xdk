@@ -2816,7 +2816,7 @@ mod tests {
             "publicKeyVersion": null,
             "public_key_version": "7",
             "public_key": "identity",
-            "publicKey": "other",
+            "publicKey": "",
             "signing_public_key": "signing",
             "identity_public_key_signature": "binding",
         }))
