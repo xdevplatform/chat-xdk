@@ -22,6 +22,10 @@ public sealed class Bot
         // Session identity, once: every encrypt below signs as the bot without
         // passing a sender id per call.
         _core.SetIdentity(botUserId);
+        // The SDK fetches the public keys it lacks through the API client:
+        // the signing keys of whoever signed a page's events, the members
+        // who made its key changes included.
+        _core.FetchPublicKeysWith(_api.GetPublicKeysAsync);
     }
 
     /// <summary>Turn an incoming message into a reply (simple echo by default).</summary>
@@ -64,57 +68,32 @@ public sealed class Bot
                 .ToList()
             : new List<string>();
 
-    /// <summary>The signing keys of the senders of <paramref name="events"/>.</summary>
-    private Task<List<SigningKeyEntry>> SigningKeysForAsync(IEnumerable<JsonElement> events)
+    /// <summary>
+    /// Batch-decrypt one GET events <paramref name="page"/>: its key events,
+    /// which carry the conversation keys its messages decrypt under, and its
+    /// data events, in one batch. The SDK fetches the public keys the page
+    /// lacks and caches the keys of the key changes that verify. Logs what
+    /// the page still could not use.
+    /// </summary>
+    private async Task<DecryptEventsResult> DecryptPageAsync(string conversationId, JsonElement page)
     {
-        var senders = events
-            .Select(e => e.TryGetProperty("sender_id", out var s) ? s.GetString() : null)
-            .OfType<string>()
-            .Where(id => id.Length > 0 && id != _botUserId)
-            .Distinct()
-            .ToList();
-        return SigningKeysOfAsync(senders);
-    }
-
-    /// <summary>The signing keys of <paramref name="userIds"/>, fetched from the X API.</summary>
-    private async Task<List<SigningKeyEntry>> SigningKeysOfAsync(IEnumerable<string> userIds)
-    {
-        var keys = new List<SigningKeyEntry>();
-        foreach (var userId in userIds)
+        var eventsB64 = KeyEvents(page);
+        if (page.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
         {
-            try
+            foreach (var item in data.EnumerateArray())
             {
-                foreach (var pk in await _api.GetPublicKeysAsync(userId))
-                {
-                    keys.Add(new SigningKeyEntry
-                    {
-                        UserId = userId,
-                        PublicKeyVersion = pk.TryGetProperty("public_key_version", out var v) ? v.GetString() ?? "" : "",
-                        PublicKey = pk.TryGetProperty("signing_public_key", out var sp) ? sp.GetString() ?? "" : "",
-                        IdentityPublicKey = pk.TryGetProperty("public_key", out var p) ? p.GetString() ?? "" : "",
-                        IdentityPublicKeySignature = pk.TryGetProperty("identity_public_key_signature", out var sig) ? sig.GetString() ?? "" : "",
-                    });
-                }
-            }
-            catch
-            {
-                Console.Error.WriteLine($"public_keys_fetch_failed user={userId}");
+                if (item.TryGetProperty("encoded_event", out var ev)
+                    && ev.ValueKind == JsonValueKind.String
+                    && ev.GetString() is { Length: > 0 } eventB64)
+                    eventsB64.Add(eventB64);
             }
         }
-        return keys;
-    }
 
-    /// <summary>
-    /// Batch-decrypt <paramref name="eventsB64"/>, adding to
-    /// <paramref name="signingKeys"/> the keys of the members who made their
-    /// key changes: they sign them, and may have sent none of the page's
-    /// messages. Logs what the batch still could not use.
-    /// </summary>
-    private async Task<DecryptEventsResult> DecryptBatchAsync(
-        string conversationId, IReadOnlyList<string> eventsB64, List<SigningKeyEntry> signingKeys)
-    {
-        var result = await _core.DecryptBatchWithSignersAsync(
-            eventsB64, signingKeys, userIds => SigningKeysOfAsync(userIds));
+        var result = await _core.DecryptBatchAsync(eventsB64);
+        foreach (var (index, key) in result.MissingSigningKeys)
+            Console.Error.WriteLine(
+                $"signing_key_missing conv={conversationId} event={index} user={key.UserId} "
+                + $"version={key.PublicKeyVersion}");
         foreach (var (index, change) in result.UnverifiedKeyChanges)
             Console.Error.WriteLine(
                 $"key_change_unverified conv={conversationId} event={index} reason={change.Reason} "
@@ -129,71 +108,35 @@ public sealed class Bot
     }
 
     /// <summary>
-    /// Initial load: batch-decrypt the backlog (DecryptEvents path), filling
-    /// the SDK's conversation-key cache from the key changes.
+    /// Initial load: batch-decrypt the backlog (DecryptEventsAsync path),
+    /// filling the SDK's conversation-key cache from the key changes.
     /// </summary>
     public async Task LoadBacklogAsync(string conversationId)
     {
         var st = State(conversationId);
         var page = await _api.GetEventsAsync(conversationId, 100);
-        var raw = page.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array
-            ? d.EnumerateArray().ToList()
-            : new List<JsonElement>();
-        var eventsB64 = KeyEvents(page);
-        eventsB64.AddRange(raw
-            .Select(e => e.TryGetProperty("encoded_event", out var ev) ? ev.GetString() : null)
-            .Where(s => !string.IsNullOrEmpty(s))
-            .Select(s => s!));
-
-        var signingKeys = await SigningKeysForAsync(raw);
-        var result = await DecryptBatchAsync(conversationId, eventsB64, signingKeys);
+        var result = await DecryptPageAsync(conversationId, page);
         st.PaginationToken = NextToken(page);
         Console.WriteLine($"backlog_loaded conv={conversationId} messages={result.Events.Count} keys={result.ConversationKeys.Keys.Count}");
     }
 
-    /// <summary>Poll for new events; reply to each new message (DecryptEvent path).</summary>
+    /// <summary>
+    /// Poll for a page of new events, batch-decrypt it (DecryptEventsAsync
+    /// path), and reply to each new incoming message it holds.
+    /// </summary>
     public async Task PollOnceAsync(string conversationId)
     {
         var st = State(conversationId);
         var page = await _api.GetEventsAsync(conversationId, 50, st.PaginationToken);
-        var raw = page.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Array
-            ? d.EnumerateArray().ToList()
-            : new List<JsonElement>();
-        var signingKeys = await SigningKeysForAsync(raw);
+        var result = await DecryptPageAsync(conversationId, page);
+        foreach (var (index, error) in result.Errors)
+            Console.Error.WriteLine($"decrypt_failed conv={conversationId} event={index} err={error}");
 
-        // Key changes for this page arrive in meta, not data; only the batch
-        // path feeds the key cache, so route them through it before
-        // decrypting the messages that need them. The batch fetches the keys
-        // of the members who made them.
-        var pageKeyEvents = KeyEvents(page);
-        if (pageKeyEvents.Count > 0)
-            await DecryptBatchAsync(conversationId, pageKeyEvents, signingKeys);
-
-        foreach (var item in raw)
+        foreach (var decrypted in result.Events)
         {
-            if (!item.TryGetProperty("encoded_event", out var ev) || ev.GetString() is not { } eventB64)
-                continue;
-            // An empty key map: the conversation keys come from the cache.
-            JsonElement decrypted;
-            try
-            {
-                decrypted = _core.DecryptOne(eventB64, new Dictionary<string, byte[]>(), signingKeys);
-            }
-            catch (ChatXdkException e)
-            {
-                Console.Error.WriteLine($"decrypt_failed conv={conversationId} err={e.Message}");
-                continue;
-            }
-
-            if (decrypted.TryGetProperty("type", out var t) && t.GetString() == "KeyChange")
-            {
-                // Only the batch path adopts keys into the cache; replay the
-                // key change through it so the rotated key becomes the
-                // sending key.
-                await DecryptBatchAsync(conversationId, new[] { eventB64 }, signingKeys);
-                continue;
-            }
-            await MaybeReplyAsync(conversationId, decrypted, eventB64);
+            // A reply is threaded under the raw event of its message.
+            if (decrypted.OriginalB64 is { Length: > 0 } eventB64)
+                await MaybeReplyAsync(conversationId, decrypted.Event, eventB64);
         }
         // Advance the pagination token so the next poll fetches only new events.
         if (NextToken(page) is { Length: > 0 } next)

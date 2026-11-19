@@ -7,14 +7,15 @@
  * test/chat-core.test.mjs). The four core feature touchpoints are all here:
  *
  *   - key management     -> loadKeys / generateAndRegister / setIdentity
- *   - conversation keys  -> prepareConversationKeyChange / setCacheKeys
+ *   - conversation keys  -> prepareConversationKeyChangeAsync / setCacheKeys
  *   - message encryption -> encryptReply / encryptReaction, then encryptMedia for files
- *   - event decryption   -> decryptBatch / decryptBatchWithSigners (decryptEvents)
- *                           and decryptOne (decryptEvent)
+ *   - event decryption   -> decryptBatchAsync (decryptEventsAsync), decryptBatch
+ *                           (decryptEvents) and decryptOne (decryptEvent)
  *
- * The session model: identity (setIdentity), signing keys (setSigningKeys),
- * and the conversation-key cache (setCacheKeys) are set once, so the
- * per-message calls need only the conversation id and text.
+ * The session model: identity (setIdentity), the fetch of other users'
+ * public keys (fetchPublicKeysWith), and the conversation-key cache
+ * (setCacheKeys) are set once, so the per-message calls need only the
+ * conversation id and text.
  */
 import {
   base64ToBytes,
@@ -96,15 +97,46 @@ export class ChatCore {
   }
 
   /**
-   * Store the participants' signing keys; decrypt calls that omit their
-   * signingKeys argument verify against this store.
+   * Have the SDK fetch the public keys it lacks with `getPublicKeys`, which
+   * resolves to one user's records as GET /2/users/{id}/public_keys returns
+   * them.
+   *
+   * This sets the SDK's public-keys hook. `decryptBatchAsync` then fetches
+   * the signing keys a page's events name and the SDK does not hold, those
+   * of the members who made its key changes as well as those of the senders
+   * of its messages, and decrypts the page once more. The prepare calls that
+   * make a conversation key fetch their members' identity keys when they are
+   * passed no public keys. The SDK stores what arrives, and waits a minute
+   * before it asks again for a key a lookup did not bring. Setting the hook
+   * also turns the conversation-key cache on.
+   *
+   * A user whose fetch fails is logged and left out, so the keys of the
+   * other users still arrive.
+   */
+  fetchPublicKeysWith(getPublicKeys) {
+    this.#chat.setResolvePublicKeys(async (userIds) => {
+      const records = {};
+      for (const userId of userIds) {
+        try {
+          records[userId] = await getPublicKeys(userId);
+        } catch (err) {
+          console.warn(`public_keys_fetch_failed user=${userId} err=${err?.message ?? err}`);
+        }
+      }
+      return records;
+    });
+  }
+
+  /**
+   * Store the participants' signing keys by hand; decrypt calls that omit
+   * their signingKeys argument verify against this store.
    */
   setSigningKeys(signingKeys) {
     this.#chat.setSigningKeys(signingKeys);
   }
 
   /**
-   * Opt in to the conversation-key cache: decryptBatch caches each
+   * Opt in to the conversation-key cache: the decrypt calls cache each
    * conversation's verified key, and encrypt calls that omit the key pair
    * resolve it from the cache.
    */
@@ -115,13 +147,20 @@ export class ChatCore {
   // -- Conversation keys ----------------------------------------------------
 
   /**
-   * Generate, encrypt, and sign a conversation-key change.
+   * Generate, encrypt, and sign a conversation-key change. Resolves to the
+   * prepared change.
    *
-   * `publicKeys` is `[{ userId, identityPublicKey, publicKeyVersion }, ...]`. Omit
-   * `conversationId` for a one-to-one to derive it; pass it for a group.
+   * `publicKeys` is `[{ userId, identityPublicKey, publicKeyVersion }, ...]`.
+   * With them, omit `conversationId` for a one-to-one to derive it; pass it
+   * for a group.
+   *
+   * Without `publicKeys` the SDK encrypts the key to the public keys it
+   * holds, fetching the ones it lacks: those of the two users of a
+   * one-to-one, which `conversationId` names (the other user's id is
+   * enough), or those of `memberIds` for a group.
    */
-  prepareConversationKeyChange({ publicKeys, conversationId }) {
-    return this.#chat.prepareConversationKeyChange({ publicKeys, conversationId });
+  prepareConversationKeyChangeAsync({ publicKeys, conversationId, memberIds }) {
+    return this.#chat.prepareConversationKeyChangeAsync({ publicKeys, conversationId, memberIds });
   }
 
   /** ECIES-decrypt one conversation key -> raw 32-byte Uint8Array. */
@@ -129,36 +168,34 @@ export class ChatCore {
     return this.#chat.decryptConversationKey(encryptedKeyB64);
   }
 
-  // -- Decryption: the two paths -------------------------------------------
+  // -- Decryption -----------------------------------------------------------
 
-  /** Batch path — used on initial conversation load (also feeds the key cache). */
+  /**
+   * Batch path for a page of events from the X API, its key changes and its
+   * data events together. Resolves to the batch result.
+   *
+   * The SDK verifies with the public keys it holds. When the page names
+   * signing keys it lacks, it fetches those users' keys through
+   * `fetchPublicKeysWith`, stores them, and decrypts the page once more.
+   * Each verified key change feeds the key cache, and each decrypted event
+   * comes with the raw event it was decrypted from (`originalB64`).
+   */
+  decryptBatchAsync(eventsB64) {
+    return this.#chat.decryptEventsAsync({ events: eventsB64 });
+  }
+
+  /**
+   * Batch path without the fetch: verifies with `signingKeys`, or with the
+   * stored keys when they are omitted.
+   */
   decryptBatch(eventsB64, signingKeys) {
     return this.#chat.decryptEvents({ events: eventsB64, signingKeys });
   }
 
   /**
-   * Batch path that also gets the signing keys its key changes need.
-   *
-   * A key change is signed by the member who made it, who may have written
-   * none of the page's messages, so the keys of the messages' senders do not
-   * verify it. Unverified, a recent key change loses its key and the
-   * messages under it do not decrypt. When the batch reports key changes
-   * whose signer's keys were missing, this calls
-   * `storeSigningKeysOf(userIds)` with those signers, which fetches their
-   * public keys, stores them (setSigningKeys) and resolves to whether it
-   * stored any, and then decrypts the batch again.
-   */
-  async decryptBatchWithSigners(eventsB64, storeSigningKeysOf) {
-    const batch = this.decryptBatch(eventsB64);
-    const signers = missingKeyChangeSigners(batch);
-    if (signers.length === 0 || !(await storeSigningKeysOf(signers))) return batch;
-    return this.decryptBatch(eventsB64);
-  }
-
-  /**
-   * Single-event path — used for each new event after the initial load.
-   * With the session set up, both key arguments can be omitted: an empty
-   * key map resolves from the cache and signing keys from the store.
+   * Single-event path. With the session set up, both key arguments can be
+   * omitted: an empty key map resolves from the cache and signing keys from
+   * the store.
    */
   decryptOne(eventB64, conversationKeys = {}, signingKeys) {
     return this.#chat.decryptEvent({ eventB64, conversationKeys, signingKeys });
@@ -269,10 +306,12 @@ export class ChatCore {
   /**
    * Prepare a group creation: fresh key + the two required signatures. A
    * plaintext `title` is encrypted under the new key; send the result's
-   * `encryptedTitle` as the request's group_name.
+   * `encryptedTitle` as the request's group_name. Without `publicKeys` the
+   * SDK encrypts the key to the public keys it holds for the members and
+   * admins, fetching the ones it lacks.
    */
-  prepareGroupCreate({ publicKeys, conversationId, memberIds, adminIds, title }) {
-    return this.#chat.prepareGroupCreate({
+  prepareGroupCreateAsync({ publicKeys, conversationId, memberIds, adminIds, title }) {
+    return this.#chat.prepareGroupCreateAsync({
       publicKeys,
       conversationId,
       memberIds,
@@ -281,15 +320,19 @@ export class ChatCore {
     });
   }
 
-  /** Prepare a member add: rotated key + the two required signatures. */
-  prepareGroupMembersChange({
+  /**
+   * Prepare a member add: rotated key + the two required signatures. Without
+   * `publicKeys` the SDK encrypts the key to the public keys it holds for
+   * the current and the new members, fetching the ones it lacks.
+   */
+  prepareGroupMembersChangeAsync({
     publicKeys,
     conversationId,
     newMemberIds,
     currentMemberIds,
     currentAdminIds,
   }) {
-    return this.#chat.prepareGroupMembersChange({
+    return this.#chat.prepareGroupMembersChangeAsync({
       publicKeys,
       conversationId,
       newMemberIds,
@@ -301,13 +344,16 @@ export class ChatCore {
 
   /**
    * Prepare a member removal that rotates the key for who stays.
-   * `publicKeys` are the identity keys of the members who remain.
+   * `publicKeys` are the identity keys of the members who remain. Without
+   * them, name those members in `remainingMemberIds`: the SDK encrypts the
+   * key to the public keys it holds for them, fetching the ones it lacks.
    */
-  prepareGroupMembersRemove({ publicKeys, conversationId, userIds }) {
-    return this.#chat.prepareGroupMembersRemove({
+  prepareGroupMembersRemoveAsync({ publicKeys, conversationId, userIds, remainingMemberIds }) {
+    return this.#chat.prepareGroupMembersRemoveAsync({
       publicKeys,
       conversationId,
       userIds,
+      remainingMemberIds,
     });
   }
 
@@ -392,17 +438,6 @@ export class ChatCore {
   decrypt(ciphertextB64, conversationKey) {
     return this.#chat.decrypt(ciphertextB64, conversationKey);
   }
-}
-
-/**
- * The users whose signing keys a decryptBatch result lacked to verify a key
- * change, each once: fetch their public keys and decrypt again.
- */
-export function missingKeyChangeSigners(batch) {
-  const signers = Object.values(batch.unverifiedKeyChanges)
-    .filter((change) => change.reason === "missingSigningKey" && change.senderId)
-    .map((change) => change.senderId);
-  return [...new Set(signers)];
 }
 
 /** Pull the plain text out of a decrypted Message event, or null. */

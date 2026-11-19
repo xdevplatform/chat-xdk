@@ -12,9 +12,9 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 
 /**
  * Crypto core for the JVM chat-xdk example bot.
@@ -27,9 +27,12 @@ import java.util.TreeSet;
  *   <li>key management     -&gt; loadKeys / setIdentity / generateAndRegister</li>
  *   <li>conversation keys  -&gt; prepareConversationKeyChange / decryptConversationKey</li>
  *   <li>message encryption -&gt; encryptReply, then encryptMedia for its files</li>
- *   <li>event decryption   -&gt; decryptBatch / decryptBatchWithSigners (decryptEvents) and
- *       decryptOne (decryptEvent)</li>
+ *   <li>event decryption   -&gt; decryptBatch (decryptEvents) and decryptOne (decryptEvent)</li>
  * </ul>
+ *
+ * <p>Other users' public keys reach the SDK through one hook,
+ * {@link #fetchPublicKeysWith}: the SDK calls it for the keys a decrypt or a key
+ * change lacks, and stores what it returns.
  */
 public final class ChatCore implements AutoCloseable {
 
@@ -39,9 +42,9 @@ public final class ChatCore implements AutoCloseable {
     private String signingKeyVersion;
 
     /**
-     * A chat whose conversation-key cache is on: {@link #decryptBatch} fills it
-     * from verified key changes, and the encrypt calls take the newest key from
-     * it.
+     * A chat whose conversation-key cache is on: {@link #decryptBatch(List)}
+     * fills it from verified key changes, and the encrypt calls take the newest
+     * key from it.
      */
     public ChatCore() {
         chat.setCacheKeys(true);
@@ -87,8 +90,60 @@ public final class ChatCore implements AutoCloseable {
         return chat.getPublicKeys();
     }
 
+    // -- Other users' public keys -------------------------------------------
+
+    /**
+     * Fetches one user's public keys: the records in the {@code data} array of
+     * {@code GET /2/users/{id}/public_keys}.
+     */
+    @FunctionalInterface
+    public interface PublicKeyFetcher {
+        List<JsonNode> fetch(String userId) throws Exception;
+    }
+
+    /**
+     * Have the SDK fetch the public keys it lacks with {@code fetcher}.
+     *
+     * <p>This sets the SDK's public-key resolver. {@link #decryptBatch(List)}
+     * then fetches the signing keys a page's events name and the SDK does not
+     * hold, those of the members who made its key changes as well as those of
+     * the senders of its messages, and decrypts the page once more. The prepare
+     * calls that make a conversation key fetch their members' identity keys
+     * when they are passed no public keys. The SDK stores what arrives, and
+     * waits a minute before it asks again for a key a lookup did not bring.
+     *
+     * <p>A user whose fetch fails is logged and left out, so the keys of the
+     * other users still arrive.
+     */
+    public void fetchPublicKeysWith(PublicKeyFetcher fetcher) {
+        chat.setResolvePublicKeys(userIds -> {
+            Map<String, List<PublicKeyRecord>> records = new LinkedHashMap<>();
+            for (String userId : userIds) {
+                try {
+                    List<PublicKeyRecord> found = new ArrayList<>();
+                    for (JsonNode node : fetcher.fetch(userId)) {
+                        found.add(MAPPER.treeToValue(node, PublicKeyRecord.class));
+                    }
+                    records.put(userId, found);
+                } catch (Exception e) {
+                    System.err.println("public_keys_fetch_failed user=" + userId + " " + e.getMessage());
+                }
+            }
+            return records;
+        });
+    }
+
     // -- Conversation keys --------------------------------------------------
 
+    /**
+     * Prepare a conversation-key change: a fresh key encrypted to every
+     * participant, and the signature the X API takes with it.
+     *
+     * <p>{@code publicKeys} are the participants' identity keys. Pass none for
+     * a one-to-one that {@code conversationId} names, by its id or by the other
+     * user's id alone: the SDK reads both users' keys from the public keys it
+     * holds, fetching the ones it lacks through {@link #fetchPublicKeysWith}.
+     */
     public PreparedConversationChange prepareConversationKeyChange(
             List<PublicKeyInput> publicKeys, String conversationId) throws Exception {
         ConversationKeyChangeParams params = new ConversationKeyChangeParams(publicKeys);
@@ -103,61 +158,38 @@ public final class ChatCore implements AutoCloseable {
 
     // -- Decryption: the two paths -----------------------------------------
 
-    /** Batch path — used on initial conversation load. */
+    /**
+     * Batch path — every page of events goes through it, the key changes and
+     * the data events together: it extracts the conversation keys from the
+     * KeyChange events, caches those of the key changes that verify, then
+     * decrypts every event.
+     *
+     * <p>Signatures verify with the public keys the SDK holds. The ones the
+     * page lacks are fetched through {@link #fetchPublicKeysWith}; the result's
+     * {@code missingSigningKeys} lists those that did not arrive.
+     */
+    public DecryptEventsResult decryptBatch(List<String> eventsB64) throws Exception {
+        return chat.decryptEvents(new DecryptEventsParams(eventsB64));
+    }
+
+    /**
+     * Batch path with the signing keys to verify with passed in the call: the
+     * SDK verifies with these keys alone and fetches none. An empty list is
+     * read as no keys passed, like {@link #decryptBatch(List)}.
+     */
     public DecryptEventsResult decryptBatch(List<String> eventsB64, List<SigningKeyEntry> signingKeys) throws Exception {
         DecryptEventsParams params = new DecryptEventsParams(eventsB64);
         params.signingKeys = signingKeys;
         return chat.decryptEvents(params);
     }
 
-    /** Fetches the signing keys of users: the public keys the X API returns for each. */
-    @FunctionalInterface
-    public interface SigningKeyFetcher {
-        List<SigningKeyEntry> fetch(List<String> userIds) throws Exception;
-    }
-
     /**
-     * Batch path that also gets the signing keys its key changes need.
-     *
-     * <p>A key change is signed by the member who made it, who may have written
-     * none of the page's messages, so the keys of the messages' senders do not
-     * verify it. Unverified, a recent key change loses its key and the messages
-     * under it do not decrypt. When the batch reports key changes whose signer's
-     * keys were missing, this calls {@code fetchSigningKeys} with those signers,
-     * adds the keys it returns to {@code signingKeys}, and decrypts the batch
-     * again.
+     * Single-event path — decrypt one event. An empty {@code conversationKeys}
+     * takes the keys from the SDK's cache, and no {@code signingKeys} verifies
+     * with the public keys the SDK holds. This path fetches none: an event
+     * whose sender's keys the SDK may lack goes through
+     * {@link #decryptBatch(List)}.
      */
-    public DecryptEventsResult decryptBatchWithSigners(
-            List<String> eventsB64, List<SigningKeyEntry> signingKeys, SigningKeyFetcher fetchSigningKeys)
-            throws Exception {
-        DecryptEventsResult result = decryptBatch(eventsB64, signingKeys);
-        List<String> signers = missingKeyChangeSigners(result);
-        if (signers.isEmpty()) {
-            return result;
-        }
-        List<SigningKeyEntry> fetched = fetchSigningKeys.fetch(signers);
-        if (fetched.isEmpty()) {
-            return result;
-        }
-        signingKeys.addAll(fetched);
-        return decryptBatch(eventsB64, signingKeys);
-    }
-
-    /**
-     * The users whose signing keys a {@link #decryptBatch} result lacked to
-     * verify a key change, each once: fetch their public keys and decrypt again.
-     */
-    public static List<String> missingKeyChangeSigners(DecryptEventsResult result) {
-        TreeSet<String> signers = new TreeSet<>();
-        for (UnverifiedKeyChange change : result.unverifiedKeyChanges.values()) {
-            if (change.reason == UnverifiedKeyChangeReason.MissingSigningKey && change.senderId != null) {
-                signers.add(change.senderId);
-            }
-        }
-        return new ArrayList<>(signers);
-    }
-
-    /** Single-event path — used for each new event after the initial load. */
     public JsonNode decryptOne(String eventB64, Map<String, byte[]> conversationKeys, List<SigningKeyEntry> signingKeys) throws Exception {
         DecryptEventParams params = new DecryptEventParams(eventB64, conversationKeys);
         params.signingKeys = signingKeys;
@@ -291,6 +323,10 @@ public final class ChatCore implements AutoCloseable {
      * Prepare a group creation: fresh key + the two required signatures. A plaintext
      * {@code title} (or {@code null}) is encrypted under the new key; send the
      * result's {@code encryptedTitle} as the request's {@code group_name}.
+     *
+     * <p>Pass no {@code publicKeys} to have the SDK read the identity keys of
+     * {@code memberIds} and {@code adminIds} from the public keys it holds,
+     * fetching the ones it lacks through {@link #fetchPublicKeysWith}.
      */
     public PreparedConversationChange prepareGroupCreate(
             List<PublicKeyInput> publicKeys,
@@ -304,7 +340,13 @@ public final class ChatCore implements AutoCloseable {
         return chat.prepareGroupCreate(params);
     }
 
-    /** Prepare a member add: rotated key + the two required signatures. */
+    /**
+     * Prepare a member add: rotated key + the two required signatures.
+     *
+     * <p>Pass no {@code publicKeys} to have the SDK read the identity keys of
+     * {@code currentMemberIds} and {@code newMemberIds} from the public keys it
+     * holds, fetching the ones it lacks through {@link #fetchPublicKeysWith}.
+     */
     public PreparedConversationChange prepareGroupMembersChange(
             List<PublicKeyInput> publicKeys,
             String conversationId,

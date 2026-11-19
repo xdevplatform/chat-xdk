@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -175,6 +176,9 @@ class ChatCoreTest {
         final SigningKeyEntry signingKey;
         final PublicKeyInput publicKey;
 
+        /** The user's keys as the X API returns them: a record of {@code GET /2/users/{id}/public_keys}. */
+        final ObjectNode publicKeyRecord = new ObjectMapper().createObjectNode();
+
         Party(String userId) throws Exception {
             this.userId = userId;
             ChatCore.Generated generated = core.generateAndRegister();
@@ -188,6 +192,11 @@ class ChatCoreTest {
                     registration.publicKey,
                     registration.identityPublicKeySignature);
             publicKey = new PublicKeyInput(userId, registration.publicKey, "1");
+            publicKeyRecord.put("public_key_version", "1");
+            publicKeyRecord.put("public_key", registration.publicKey);
+            publicKeyRecord.put("signing_public_key", registration.signingPublicKey);
+            publicKeyRecord.put("identity_public_key_signature", registration.identityPublicKeySignature);
+            publicKeyRecord.putObject("juicebox_config").put("max_guess_count", 20);
         }
 
         @Override
@@ -196,48 +205,130 @@ class ChatCoreTest {
         }
     }
 
+    /**
+     * A page as the bot receives it: the key change {@code admin} makes in a group for itself,
+     * {@code member} and {@code bot}, then a message {@code member} sends under the new key.
+     * The admin sends no message.
+     */
+    private static List<String> keyChangePage(Party admin, Party member, Party bot) throws Exception {
+        PreparedConversationChange prepared = admin.core.prepareConversationKeyChange(
+                List.of(admin.publicKey, member.publicKey, bot.publicKey), "g900");
+        String keyChange =
+                deliveredAction(prepared.actionSignatures.get(0), admin.userId, "g900", "2100000000000000000");
+        ChatCore.SendBody body = member.core.encryptReply(
+                "g900", "hello group", prepared.conversationKey, prepared.conversationKeyVersion);
+        return List.of(keyChange, delivered(body.eventB64(), "2100000000000000001"));
+    }
+
+    /** The text of each event of a result, null for an event that is not a message. */
+    private static List<String> texts(DecryptEventsResult result) {
+        List<String> texts = new ArrayList<>();
+        for (DecryptedEvent decrypted : result.events) {
+            texts.add(ChatCore.messageText(decrypted.event));
+        }
+        return texts;
+    }
+
+    /** The users a prepared change encrypted its key to, sorted. */
+    private static List<String> recipients(PreparedConversationChange prepared) {
+        List<String> userIds = new ArrayList<>();
+        prepared.conversationParticipantKeys.forEach(key -> userIds.add(key.userId));
+        Collections.sort(userIds);
+        return userIds;
+    }
+
     @Test
-    void decryptBatchWithSignersGetsTheKeysOfTheMemberWhoMadeAKeyChange() throws Exception {
+    void decryptBatchFetchesTheKeysOfTheMemberWhoMadeAKeyChange() throws Exception {
         // An admin rotates a group's key and a member sends a message under
-        // it. The bot holds the member's signing keys: the member is the only
-        // sender on the page.
+        // it. The admin signed the key change and sent no message.
         try (Party admin = new Party("5001");
                 Party member = new Party("5002");
                 Party bot = new Party("5003")) {
-            PreparedConversationChange prepared = admin.core.prepareConversationKeyChange(
-                    List.of(admin.publicKey, member.publicKey, bot.publicKey), "g900");
-            String keyChange =
-                    deliveredAction(prepared.actionSignatures.get(0), admin.userId, "g900", "2100000000000000000");
-            ChatCore.SendBody body = member.core.encryptReply(
-                    "g900", "hello group", prepared.conversationKey, prepared.conversationKeyVersion);
-            List<String> events = List.of(keyChange, delivered(body.eventB64(), "2100000000000000001"));
+            List<String> events = keyChangePage(admin, member, bot);
 
-            // Without the admin's keys the key change does not verify: its key
-            // is dropped and the message does not decrypt.
+            // Signing keys passed in the call are what it verifies with. With
+            // the member's alone the key change does not verify: its key is
+            // dropped, the message does not decrypt, and the result names the
+            // admin's key as missing.
             DecryptEventsResult unverified = bot.core.decryptBatch(events, List.of(member.signingKey));
             assertTrue(unverified.events.isEmpty());
-            assertEquals(List.of("5001"), ChatCore.missingKeyChangeSigners(unverified));
+            assertEquals(Set.of("0"), unverified.missingSigningKeys.keySet());
+            assertEquals("5001", unverified.missingSigningKeys.get("0").userId);
+            assertEquals("1", unverified.missingSigningKeys.get("0").publicKeyVersion);
 
-            List<SigningKeyEntry> signingKeys = new ArrayList<>(List.of(member.signingKey));
+            // With no keys passed, the SDK fetches the ones the page lacks: the
+            // admin's for the key change and the member's for the message.
             List<String> asked = new ArrayList<>();
-            DecryptEventsResult result = bot.core.decryptBatchWithSigners(events, signingKeys, userIds -> {
-                asked.addAll(userIds);
-                return List.of(admin.signingKey);
+            bot.core.fetchPublicKeysWith(userId -> {
+                asked.add(userId);
+                return List.of(userId.equals(admin.userId) ? admin.publicKeyRecord : member.publicKeyRecord);
             });
-            assertEquals(List.of("5001"), asked);
+            DecryptEventsResult result = bot.core.decryptBatch(events);
+            assertEquals(List.of("5001", "5002"), asked);
             assertTrue(result.errors.isEmpty(), result.errors.toString());
-            assertTrue(ChatCore.missingKeyChangeSigners(result).isEmpty());
-            List<String> texts = new ArrayList<>();
-            for (DecryptedEvent decrypted : result.events) {
-                texts.add(ChatCore.messageText(decrypted.event));
-            }
-            assertEquals(Arrays.asList(null, "hello group"), texts);
-            assertEquals(2, signingKeys.size());
+            assertTrue(result.missingSigningKeys.isEmpty());
+            assertTrue(result.unverifiedKeyChanges.isEmpty());
+            assertEquals(Arrays.asList(null, "hello group"), texts(result));
 
-            // With every signer's keys there is nothing to fetch.
-            bot.core.decryptBatchWithSigners(events, signingKeys, userIds -> {
-                throw new AssertionError("asked for the keys of " + userIds);
+            // The SDK holds the keys it fetched: the next page fetches none.
+            result = bot.core.decryptBatch(events);
+            assertEquals(Arrays.asList(null, "hello group"), texts(result));
+            assertEquals(2, asked.size());
+        }
+    }
+
+    @Test
+    void decryptBatchLeavesOutAUserWhosePublicKeysCannotBeFetched() throws Exception {
+        try (Party admin = new Party("5001");
+                Party member = new Party("5002");
+                Party bot = new Party("5003")) {
+            List<String> events = keyChangePage(admin, member, bot);
+            List<String> asked = new ArrayList<>();
+            bot.core.fetchPublicKeysWith(userId -> {
+                asked.add(userId);
+                if (userId.equals(member.userId)) {
+                    throw new IllegalStateException("x api GET public_keys: 503");
+                }
+                return List.of(admin.publicKeyRecord);
             });
+
+            // The admin's keys arrive, so the key change verifies. The member's
+            // do not: the message stays unverified, and the result names the
+            // member's key as missing.
+            DecryptEventsResult result = bot.core.decryptBatch(events);
+            assertEquals(List.of("5001", "5002"), asked);
+            assertTrue(result.unverifiedKeyChanges.isEmpty());
+            assertEquals(Set.of("1"), result.errors.keySet());
+            assertEquals(Set.of("1"), result.missingSigningKeys.keySet());
+            assertEquals("5002", result.missingSigningKeys.get("1").userId);
+
+            // The SDK does not ask again at once for a key the fetch did not bring.
+            bot.core.decryptBatch(events);
+            assertEquals(2, asked.size());
+        }
+    }
+
+    @Test
+    void prepareCallsFetchThePublicKeysTheyAreNotPassed() throws Exception {
+        try (Party admin = new Party("5001");
+                Party member = new Party("5002")) {
+            List<String> asked = new ArrayList<>();
+            admin.core.fetchPublicKeysWith(userId -> {
+                asked.add(userId);
+                return List.of(userId.equals(admin.userId) ? admin.publicKeyRecord : member.publicKeyRecord);
+            });
+
+            PreparedConversationChange created = admin.core.prepareGroupCreate(
+                    List.of(), "g900", List.of("5001", "5002"), List.of("5001"), "a group");
+            assertEquals(List.of("5001", "5002"), asked);
+            assertEquals(List.of("5001", "5002"), recipients(created));
+
+            // A one-to-one names its two users by its id, here the other
+            // user's id alone. The SDK holds both users' keys: it fetches none.
+            PreparedConversationChange direct = admin.core.prepareConversationKeyChange(List.of(), "5002");
+            assertEquals("5001:5002", direct.conversationId);
+            assertEquals(List.of("5001", "5002"), recipients(direct));
+            assertEquals(2, asked.size());
         }
     }
 

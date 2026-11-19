@@ -14,7 +14,7 @@ first run); conversation state is in memory.
 | [`src/bot.rs`](src/bot.rs) | The receive → decrypt → reply → encrypt → send loop. |
 | [`src/main.rs`](src/main.rs) | Entrypoint: config, key load/generate, run. |
 | [`src/bin/register.rs`](src/bin/register.rs) | One-time public-key registration (`cargo run --bin register`). |
-| [`tests/chat_core.rs`](tests/chat_core.rs) | Offline test driving the real binding (no mocks). |
+| [`tests/chat_core.rs`](tests/chat_core.rs) | Offline tests driving the real binding (no mocks), the bot loop over a fake X API included. |
 
 ## Prerequisites
 
@@ -36,6 +36,14 @@ cargo run
 
 The bot echoes messages back (`pong` for `ping`, otherwise `You said: …`).
 Customize `generate_reply` in [`src/bot.rs`](src/bot.rs) to change the reply logic.
+
+The bot keeps no list of other users' public keys. `Bot::new` gives the SDK a
+hook (`ChatCore::fetch_public_keys_with`) that reads
+`GET /2/users/{id}/public_keys` for one user. Every page of events goes through
+`ChatCore::decrypt_batch`, key changes and messages together, and the SDK calls
+the hook for the signing keys the page needs and does not hold, those of a
+member who changed a group's key and sent no message included. It stores what
+arrives, and the result's `missing_signing_keys` lists what did not.
 
 The HTTP client is behind the default `http` feature. To build only the crypto
 core (no network stack), use `cargo build --no-default-features`.
@@ -66,9 +74,12 @@ gitignored — never commit key blobs.
 cargo test
 ```
 
-The test imports the fixture private keys, checks the binding reproduces the
-committed public-key/signature vectors, and runs a real encrypt → decrypt
-round-trip plus a conversation-key ECIES round-trip.
+The tests import the fixture private keys, check the binding reproduces the
+committed public-key/signature vectors, and run a real encrypt → decrypt
+round-trip plus a conversation-key ECIES round-trip. They also run the bot over
+a fake X API: a page whose key change was signed by a member who sent no
+message decrypts once the SDK has fetched that member's keys, and the bot
+replies.
 
 ## License
 

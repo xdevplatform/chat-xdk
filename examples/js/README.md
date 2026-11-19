@@ -45,6 +45,20 @@ current, and sends v1 while they turn `v1_send` on. The browser app drives
 the lower-level WASM `Chat` from `crates/wasm/pkg/`, which doesn't read the
 switches, so its messages go out in the v0 format.
 
+## Other users' public keys
+
+The SDK verifies each event with its sender's public keys, and encrypts a new
+conversation key to its members' public keys. The bot does not fetch them
+itself. `ChatCore.fetchPublicKeysWith` sets the chat's `resolvePublicKeys`
+hook to the X API client's `getPublicKeys`, and the SDK calls the hook for the
+users whose keys it lacks, from `decryptEventsAsync` and the `prepare…Async`
+calls. A user whose fetch fails is logged and left out.
+
+The browser app's lower-level `Chat` has no hook, so
+[`public/app.js`](public/app.js) does the same steps by hand: after a batch
+decrypt it asks `missingPublicKeys` which users to fetch, stores their records
+with `addPublicKeys`, and decrypts the page again.
+
 ## Test it (offline, no credentials)
 
 ```bash
@@ -54,7 +68,9 @@ node --test
 
 The test imports the fixture private keys, checks the binding reproduces the
 committed public-key/signature vectors, and runs a real encrypt → decrypt
-round-trip plus a conversation-key ECIES round-trip.
+round-trip plus a conversation-key ECIES round-trip. It also decrypts a page
+whose key change was signed by a member who sent no message, with that
+member's keys fetched through the hook.
 
 ## Run the browser app
 

@@ -42,6 +42,14 @@ python run.py
 The bot echoes messages back (`pong` for `ping`, otherwise `You said: …`).
 Customize `generate_reply` in [`bot.py`](bot.py) to change the reply logic.
 
+The bot keeps no list of other users' public keys. `ChatBot` gives the SDK a
+hook (`ChatCore.fetch_public_keys_with`) that reads
+`GET /2/users/{id}/public_keys` for one user. Every page of events goes through
+`ChatCore.decrypt_batch`, key changes and messages together, and the SDK calls
+the hook for the signing keys the page needs and does not hold, those of a
+member who changed a group's key and sent no message included. It stores what
+arrives, and the result's `missing_signing_keys` lists what did not.
+
 ## Registering your key (one-time)
 
 Before a bot can send or receive, its public key must be registered on the
@@ -70,7 +78,9 @@ PYTHONPATH=../../crates/pyo3/python:. python3 -m unittest discover -s tests -v
 
 The test imports the fixture private keys, checks the binding reproduces the
 committed public-key/signature vectors, and runs a real encrypt → decrypt
-round-trip plus a conversation-key ECIES round-trip.
+round-trip plus a conversation-key ECIES round-trip. It also decrypts a page
+whose key change was signed by a member who sent no message, once the SDK has
+fetched that member's keys through the hook.
 
 ## License
 

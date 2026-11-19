@@ -8,11 +8,15 @@
 //! - conversation keys  -> [`ChatCore::prepare_conversation_key_change`] / [`ChatCore::decrypt_conversation_key`]
 //! - message encryption -> [`ChatCore::encrypt_reply`], then
 //!   [`ChatCore::encrypt_media`] for its files
-//! - event decryption   -> [`ChatCore::decrypt_batch`] /
-//!   [`ChatCore::decrypt_batch_with_signers`] (decrypt_events) and
+//! - event decryption   -> [`ChatCore::decrypt_batch`] (decrypt_events) and
 //!   [`ChatCore::decrypt_one`] (decrypt_event)
+//!
+//! Other users' public keys reach the SDK through one hook,
+//! [`ChatCore::fetch_public_keys_with`]: the SDK calls it for the keys a
+//! decrypt or a key change lacks, and stores what it returns.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
@@ -22,9 +26,8 @@ use chat_xdk_core::{
     DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
     GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
-    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, SigningKeyEntry,
-    UnverifiedKeyChangeReason,
+    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -176,8 +179,53 @@ impl ChatCore {
         ))
     }
 
+    // -- Other users' public keys -------------------------------------------
+
+    /// Have the SDK fetch the public keys it lacks with `fetch`, which
+    /// returns one user's records from `GET /2/users/{id}/public_keys`.
+    ///
+    /// This sets the SDK's public-key hook. [`ChatCore::decrypt_batch`] then
+    /// fetches the signing keys a page's events name and the SDK does not
+    /// hold, those of the members who made its key changes as well as those
+    /// of the senders of its messages, and decrypts the page once more. The
+    /// prepare calls that make a conversation key fetch their members'
+    /// identity keys when they are passed no public keys. The SDK stores
+    /// what arrives, and waits a minute before it asks again for a key a
+    /// lookup did not bring.
+    ///
+    /// A user whose fetch fails is logged and left out, so the keys of the
+    /// other users still arrive.
+    pub fn fetch_public_keys_with<F>(&self, fetch: F)
+    where
+        F: Fn(&str) -> Result<Vec<PublicKeyRecord>, String> + Send + Sync + 'static,
+    {
+        let resolve: ResolvePublicKeys = Arc::new(
+            move |user_ids: &[String]| -> HashMap<String, Vec<PublicKeyRecord>> {
+                let mut records = HashMap::new();
+                for user_id in user_ids {
+                    match fetch(user_id.as_str()) {
+                        Ok(found) => {
+                            records.insert(user_id.clone(), found);
+                        }
+                        Err(err) => eprintln!("public_keys_fetch_failed user={user_id} err={err}"),
+                    }
+                }
+                records
+            },
+        );
+        self.inner.set_resolve_public_keys(Some(resolve));
+    }
+
     // -- Conversation keys --------------------------------------------------
 
+    /// Prepare a conversation-key change: a fresh key encrypted to every
+    /// participant, and the signature the X API takes with it.
+    ///
+    /// `public_keys` are the participants' identity keys. Pass none for a
+    /// one-to-one that `conversation_id` names, by its id or by the other
+    /// user's id alone: the SDK reads both users' keys from the public keys
+    /// it holds, fetching the ones it lacks through
+    /// [`ChatCore::fetch_public_keys_with`].
     pub fn prepare_conversation_key_change(
         &self,
         public_keys: &[PublicKeyInput],
@@ -197,58 +245,34 @@ impl ChatCore {
 
     // -- Decryption: the two paths -----------------------------------------
 
-    /// Batch path — used on initial conversation load (extracts conversation
-    /// keys from KeyChange events, then decrypts every message).
-    pub fn decrypt_batch(
-        &self,
-        events: &[&str],
-        signing_keys: &[SigningKeyEntry],
-    ) -> DecryptEventsResult {
-        self.inner.decrypt_events(
-            &DecryptEventsParams::new(events.iter().map(|e| e.to_string()).collect())
-                .with_signing_keys(signing_keys.to_vec()),
-        )
-    }
-
-    /// Batch path that also gets the signing keys its key changes need.
+    /// Batch path — every page of events goes through it, the key changes
+    /// and the data events together: it extracts the conversation keys from
+    /// the KeyChange events, caches those of the key changes that verify,
+    /// then decrypts every event.
     ///
-    /// A key change is signed by the member who made it, who may have written
-    /// none of the page's messages, so the keys of the messages' senders do
-    /// not verify it. Unverified, a recent key change loses its key and the
-    /// messages under it do not decrypt. When the batch reports key changes
-    /// whose signer's keys were missing, this calls `fetch_signing_keys`
-    /// with those signers, adds the keys it returns to `signing_keys`, and
-    /// decrypts the batch again.
-    pub fn decrypt_batch_with_signers(
-        &self,
-        events: &[&str],
-        signing_keys: &mut Vec<SigningKeyEntry>,
-        fetch_signing_keys: impl FnOnce(&[String]) -> Vec<SigningKeyEntry>,
-    ) -> DecryptEventsResult {
-        let result = self.decrypt_batch(events, signing_keys);
-        let signers = missing_key_change_signers(&result);
-        if signers.is_empty() {
-            return result;
-        }
-        let fetched = fetch_signing_keys(&signers);
-        if fetched.is_empty() {
-            return result;
-        }
-        signing_keys.extend(fetched);
-        self.decrypt_batch(events, signing_keys)
+    /// Signatures verify with the public keys the SDK holds. The ones the
+    /// page lacks are fetched through [`ChatCore::fetch_public_keys_with`];
+    /// the result's `missing_signing_keys` lists those that did not arrive.
+    pub fn decrypt_batch(&self, events: &[&str]) -> DecryptEventsResult {
+        self.inner.decrypt_events(&DecryptEventsParams::new(
+            events.iter().map(|e| e.to_string()).collect(),
+        ))
     }
 
-    /// Single-event path — used for each new event after the initial load.
+    /// Single-event path — decrypt one event. An empty `conversation_keys`
+    /// takes the keys from the SDK's cache, and the signature verifies with
+    /// the public keys the SDK holds. This path fetches none: an event whose
+    /// sender's keys the SDK may lack goes through
+    /// [`ChatCore::decrypt_batch`].
     pub fn decrypt_one(
         &self,
         event_b64: &str,
         conversation_keys: &HashMap<String, XChatConversationKey>,
-        signing_keys: &[SigningKeyEntry],
     ) -> Result<Event, SdkError> {
-        self.inner.decrypt_event(
-            &DecryptEventParams::new(event_b64, conversation_keys.clone())
-                .with_signing_keys(signing_keys.to_vec()),
-        )
+        self.inner.decrypt_event(&DecryptEventParams::new(
+            event_b64,
+            conversation_keys.clone(),
+        ))
     }
 
     // -- Message encryption -------------------------------------------------
@@ -342,6 +366,10 @@ impl ChatCore {
     /// Prepare a group creation: fresh key + the two required signatures.
     /// A plaintext `title` is encrypted under the new key; send the result's
     /// `encrypted_title` as the request's `group_name`.
+    ///
+    /// Pass no `public_keys` to have the SDK read the identity keys of
+    /// `member_ids` and `admin_ids` from the public keys it holds, fetching
+    /// the ones it lacks through [`ChatCore::fetch_public_keys_with`].
     pub fn prepare_group_create(
         &self,
         public_keys: &[PublicKeyInput],
@@ -363,6 +391,10 @@ impl ChatCore {
     }
 
     /// Prepare a member add: rotated key + the two required signatures.
+    ///
+    /// Pass no `public_keys` to have the SDK read the identity keys of
+    /// `current_member_ids` and `new_member_ids` from the public keys it
+    /// holds, fetching the ones it lacks.
     pub fn prepare_group_members_change(
         &self,
         public_keys: &[PublicKeyInput],
@@ -384,19 +416,26 @@ impl ChatCore {
 
     /// Prepare a member removal that rotates the key for who stays.
     ///
-    /// `public_keys` are the identity keys of the members who remain.
+    /// `public_keys` are the identity keys of the members who remain. Pass
+    /// none, and name those members in `remaining_member_ids`, to have the
+    /// SDK read their keys from the public keys it holds, fetching the ones
+    /// it lacks; with `public_keys` passed, `remaining_member_ids` is not
+    /// read.
     pub fn prepare_group_members_remove(
         &self,
         public_keys: &[PublicKeyInput],
         conversation_id: &str,
         user_ids: &[String],
+        remaining_member_ids: &[String],
     ) -> Result<PreparedConversationChange, SdkError> {
-        self.inner
-            .prepare_group_members_remove(&GroupMembersRemoveParams::new(
+        self.inner.prepare_group_members_remove(
+            &GroupMembersRemoveParams::new(
                 public_keys.to_vec(),
                 conversation_id,
                 user_ids.to_vec(),
-            ))
+            )
+            .with_remaining_member_ids(remaining_member_ids.to_vec()),
+        )
     }
 
     // -- Media files -----------------------------------------------------------
@@ -496,21 +535,6 @@ impl Default for ChatCore {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// The users whose signing keys a [`ChatCore::decrypt_batch`] result lacked
-/// to verify a key change, each once: fetch their public keys and decrypt
-/// again.
-pub fn missing_key_change_signers(result: &DecryptEventsResult) -> Vec<String> {
-    let mut signers: Vec<String> = result
-        .unverified_key_changes
-        .values()
-        .filter(|change| change.reason == UnverifiedKeyChangeReason::MissingSigningKey)
-        .filter_map(|change| change.sender_id.clone())
-        .collect();
-    signers.sort();
-    signers.dedup();
-    signers
 }
 
 /// Pull the plain text out of a decrypted Message event, or `None`.

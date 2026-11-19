@@ -1,9 +1,9 @@
 /**
  * Headless auto-responder (Node).
  *
- * Flow: load keys -> batch-decrypt the backlog (decryptEvents) -> poll for new
- * events -> decrypt each (decryptEvent) -> reply -> encrypt + sign -> send.
- * Conversation state is in memory. The browser app (public/) is the
+ * Flow: load keys -> batch-decrypt the backlog -> poll for new events ->
+ * batch-decrypt each page (decryptEventsAsync) -> reply -> encrypt + sign ->
+ * send. Conversation state is in memory. The browser app (public/) is the
  * interactive counterpart; both share the same crypto core.
  */
 import { ChatCore, messageText } from "./chat-core.mjs";
@@ -23,11 +23,11 @@ export class ChatBot {
     this.botUserId = botUserId;
     this.state = new Map();
     // One-time session setup: the identity signs every outgoing message, the
-    // key cache resolves conversation keys for encryption, and the signing
-    // key store backs decrypt calls that omit their signingKeys argument.
+    // key cache resolves conversation keys for encryption, and the SDK
+    // fetches the public keys a page of events lacks from the X API.
     this.core.setIdentity(botUserId);
     this.core.setCacheKeys(true);
-    this.signingKeys = new Map(); // userId -> entries from the X API
+    this.core.fetchPublicKeysWith((userId) => this.api.getPublicKeys(userId));
   }
 
   #state(conversationId) {
@@ -40,51 +40,32 @@ export class ChatBot {
     return this.state.get(conversationId);
   }
 
-  /** Fetch signing keys for the unseen senders of `events` and refresh the SDK's store. */
-  async #storeSigningKeysFor(events) {
-    const senders = events
-      .map((e) => String(e.senderId ?? e.sender_id ?? ""))
-      .filter((id) => id && id !== this.botUserId);
-    await this.#storeSigningKeysOf(senders);
-  }
-
   /**
-   * Fetch the signing keys of the users among `userIds` not fetched yet and
-   * refresh the SDK's store. Resolves to whether it stored any.
+   * Batch-decrypt a page of events from the X API, and log what the batch
+   * could not use.
+   *
+   * Key changes arrive in meta.conversation_key_events, separate from data.
+   * They go into the same batch as the data events: they carry the
+   * conversation keys the messages decrypt under. The verified keys land in
+   * the SDK's key cache, so the bot keeps no key state.
    */
-  async #storeSigningKeysOf(userIds) {
-    let changed = false;
-    for (const userId of new Set(userIds)) {
-      if (this.signingKeys.has(userId)) continue;
-      try {
-        const entries = (await this.api.getPublicKeys(userId)).map((pk) => ({
-          userId,
-          publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
-          publicKey: pk.signingPublicKey ?? pk.signing_public_key ?? "",
-          identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
-          identityPublicKeySignature:
-            pk.identityPublicKeySignature ?? pk.identity_public_key_signature ?? "",
-        }));
-        this.signingKeys.set(userId, entries);
-        changed = true;
-      } catch {
-        console.warn(`public_keys_fetch_failed user=${userId}`);
-      }
+  async #decryptPage(conversationId, page) {
+    const keyEventsB64 =
+      page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
+    const eventsB64 = [
+      ...keyEventsB64,
+      ...(page.data ?? []).map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+    ];
+    const batch = await this.core.decryptBatchAsync(eventsB64);
+    for (const [index, error] of Object.entries(batch.errors)) {
+      console.warn(`decrypt_failed conv=${conversationId} event=${index} err=${error}`);
     }
-    // setSigningKeys replaces the previous set, so pass every known entry.
-    if (changed) this.core.setSigningKeys([...this.signingKeys.values()].flat());
-    return changed;
-  }
-
-  /**
-   * Batch-decrypt `eventsB64`, fetching the signing keys of the members who
-   * made its key changes: they sign them, and may have sent none of the
-   * page's messages. Logs what the batch still could not use.
-   */
-  async #decryptBatch(conversationId, eventsB64) {
-    const batch = await this.core.decryptBatchWithSigners(eventsB64, (userIds) =>
-      this.#storeSigningKeysOf(userIds),
-    );
+    for (const [index, key] of Object.entries(batch.missingSigningKeys)) {
+      console.warn(
+        `signing_key_missing conv=${conversationId} event=${index} user=${key.userId} ` +
+          `version=${key.publicKeyVersion}`,
+      );
+    }
     for (const [index, change] of Object.entries(batch.unverifiedKeyChanges)) {
       console.warn(
         `key_change_unverified conv=${conversationId} event=${index} reason=${change.reason} ` +
@@ -100,25 +81,11 @@ export class ChatBot {
     return batch;
   }
 
-  /** Initial load: batch-decrypt the backlog (decryptEvents path). */
+  /** Initial load: batch-decrypt the backlog, which fills the key cache. */
   async loadBacklog(conversationId) {
     const st = this.#state(conversationId);
     const page = await this.api.getEvents(conversationId, { maxResults: 100 });
-    const raw = page.data ?? [];
-    // KeyChange events arrive in meta.conversation_key_events, separate from
-    // data. They must go into the same decryptEvents batch — without them no
-    // conversation key is extracted and every message lands in errors.
-    const keyEventsB64 =
-      page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
-    const eventsB64 = [
-      ...keyEventsB64,
-      ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
-    ];
-    await this.#storeSigningKeysFor(raw);
-
-    // Signing keys come from the store; the verified conversation keys land
-    // in the SDK's key cache, so no key state is kept in the bot.
-    const batch = await this.#decryptBatch(conversationId, eventsB64);
+    const batch = await this.#decryptPage(conversationId, page);
     // The XDK response model may expose either casing for the token.
     st.paginationToken = page.meta?.nextToken ?? page.meta?.next_token;
     console.log(
@@ -128,44 +95,18 @@ export class ChatBot {
     );
   }
 
-  /** Poll for new events; reply to each new message (decryptEvent path). */
+  /** Poll for new events; batch-decrypt the page and reply to each new message. */
   async pollOnce(conversationId) {
     const st = this.#state(conversationId);
     const page = await this.api.getEvents(conversationId, {
       maxResults: 50,
       paginationToken: st.paginationToken,
     });
-    const raw = page.data ?? [];
-    await this.#storeSigningKeysFor(raw);
-    // Key changes for this page arrive in meta, not data; only the batch
-    // path feeds the key cache, so route them through it before decrypting.
-    // The batch fetches the keys of the members who made them: a key change
-    // whose signer is missing from the store would fail verification and
-    // never be cached.
-    const keyEventsB64 =
-      page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
-    if (keyEventsB64.length) await this.#decryptBatch(conversationId, keyEventsB64);
-
-    for (const item of raw) {
-      const eventB64 = item.encodedEvent ?? item.encoded_event;
-      if (!eventB64) continue;
-      // Both key arguments omitted: conversation keys resolve from the cache
-      // and signing keys from the store.
-      let event;
-      try {
-        event = this.core.decryptOne(eventB64);
-      } catch (err) {
-        console.warn(`decrypt_failed conv=${conversationId} err=${err.message}`);
-        continue;
-      }
-
-      if (event.type === "keyChange") {
-        // Only the batch path feeds the key cache, so route key changes back
-        // through it to adopt the rotated key.
-        await this.#decryptBatch(conversationId, [eventB64]);
-        continue;
-      }
-      await this.#maybeReply(conversationId, event, eventB64);
+    const batch = await this.#decryptPage(conversationId, page);
+    // Each decrypted event comes with the raw event it was decrypted from,
+    // which a threaded reply needs.
+    for (const { event, originalB64 } of batch.events) {
+      await this.#maybeReply(conversationId, event, originalB64);
     }
     st.paginationToken = page.meta?.nextToken ?? page.meta?.next_token ?? st.paginationToken;
   }

@@ -16,6 +16,10 @@ namespace ChatBot.Tests;
 /// CHAT_CONVERSATION_ID=... dotnet test
 /// </code>
 ///
+/// The SDK fetches the public keys it lacks through the hook
+/// <see cref="ChatCore.FetchPublicKeysWith"/> sets: the test fetches and
+/// passes none.
+///
 /// Flow (each numbered step asserts against the live API):
 ///   1. batch-decrypt inbound history (pagination when a second page exists)
 ///   2. rotate the conversation key (prepare -> POST /keys -> decrypt own CKCE)
@@ -56,7 +60,7 @@ public class E2ELiveTests
 
     // KeyChange events arrive in meta.conversation_key_events, separate from
     // data; they carry the conversation keys and must go into the same
-    // DecryptBatch call as the data events.
+    // DecryptBatchAsync call as the data events.
     private static List<string> KeyEvents(JsonElement page) =>
         page.TryGetProperty("meta", out var meta)
         && meta.ValueKind == JsonValueKind.Object
@@ -68,28 +72,12 @@ public class E2ELiveTests
                 .ToList()
             : new List<string>();
 
-    private static SigningKeyEntry SigningFrom(JsonElement pk, string userId) => new()
-    {
-        UserId = userId,
-        PublicKeyVersion = Str(pk, "public_key_version") ?? "",
-        PublicKey = Str(pk, "signing_public_key") ?? "",
-        IdentityPublicKey = Str(pk, "public_key") ?? "",
-        IdentityPublicKeySignature = Str(pk, "identity_public_key_signature") ?? "",
-    };
-
-    /// <summary>Public-keys response -> the flat entries the prepare methods take.</summary>
-    private static List<PublicKeyInput> KeyEntries(IEnumerable<JsonElement> pks, string userId) =>
-        pks.Select(pk => new PublicKeyInput
-        {
-            UserId = userId,
-            IdentityPublicKey = Str(pk, "public_key") ?? "",
-            PublicKeyVersion = Str(pk, "public_key_version") ?? "",
-        }).ToList();
-
     /// <summary>
     /// Poll the conversation until the event for <paramref name="messageId"/> lands,
     /// and return it decrypted via the single-event path (<see cref="ChatCore.DecryptOne"/>),
     /// plus the raw base64 envelope (the reply/reaction target for the by-event API).
+    /// The single-event path fetches no public keys: the event is one this
+    /// account sent, and the SDK holds this account's keys from the key rotation.
     ///
     /// The target envelope is matched by its raw event id before decrypting, so a
     /// decrypt failure on our own event (e.g. a broken sign->verify loop) surfaces
@@ -100,7 +88,6 @@ public class E2ELiveTests
         ChatCore core,
         string conversationId,
         Dictionary<string, byte[]> convKeys,
-        List<SigningKeyEntry> signing,
         string messageId,
         int tries = 10)
     {
@@ -116,7 +103,7 @@ public class E2ELiveTests
                 JsonElement one;
                 try
                 {
-                    one = core.DecryptOne(b64, convKeys, signing);
+                    one = core.DecryptOne(b64, convKeys);
                 }
                 catch (Exception ex)
                 {
@@ -149,6 +136,8 @@ public class E2ELiveTests
         core.LoadKeys(blob, ver);
         var myId = await api.GetMyUserIdAsync();
         core.SetIdentity(myId); // session identity, once
+        // The SDK fetches the public keys it lacks through the API client.
+        core.FetchPublicKeysWith(api.GetPublicKeysAsync);
 
         // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
         var page = await api.GetEventsAsync(conv, 10);
@@ -167,28 +156,8 @@ public class E2ELiveTests
             Console.WriteLine($"pagination: fetched second page with {raw2.Count} events");
         }
 
-        var ids = new HashSet<string> { myId };
-        foreach (var e in raw)
-            if (Str(e, "sender_id") is { Length: > 0 } sid)
-                ids.Add(sid);
-
-        var signing = new List<SigningKeyEntry>();
-        var pksByUser = new Dictionary<string, List<JsonElement>>();
-        foreach (var id in ids)
-        {
-            try
-            {
-                var pks = await api.GetPublicKeysAsync(id);
-                pksByUser[id] = pks;
-                signing.AddRange(pks.Select(pk => SigningFrom(pk, id)));
-            }
-            catch
-            {
-                // users without registered keys contribute nothing to verify against
-            }
-        }
-
-        var batch = core.DecryptBatch(keyEventsB64.Concat(EventsB64(raw)).ToList(), signing);
+        // The SDK fetches the signing keys of whoever signed the events.
+        var batch = await core.DecryptBatchAsync(keyEventsB64.Concat(EventsB64(raw)).ToList());
         var decrypted = batch.Events.Count(m => !string.IsNullOrEmpty(EventHelpers.MessageText(m.Event)));
         var convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
         Console.WriteLine($"live inbound messages decrypted: {decrypted}; conversation keys: {convKeys.Count}");
@@ -205,14 +174,16 @@ public class E2ELiveTests
             if (Str(ev, "type") == "Message" && Str(ev, "sender_id") != myId)
                 lastInboundEventB64 = m.OriginalB64 ?? lastInboundEventB64;
         }
-        var partnerId = ids.FirstOrDefault(id => id != myId);
+        var partnerId = raw
+            .Select(e => Str(e, "sender_id"))
+            .FirstOrDefault(id => !string.IsNullOrEmpty(id) && id != myId);
         Assert.True(partnerId is not null, "expected a conversation partner among the senders");
 
         // -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE ---------
-        var bothKeys = KeyEntries(pksByUser.GetValueOrDefault(myId) ?? new(), myId)
-            .Concat(KeyEntries(pksByUser.GetValueOrDefault(partnerId!) ?? new(), partnerId!))
-            .ToList();
-        var prep = core.PrepareConversationKeyChange(bothKeys);
+        // The one-to-one is named by the partner's id and no public keys are
+        // passed: the SDK reads both users' identity keys from the public
+        // keys it holds, fetching the ones it lacks.
+        var prep = await core.PrepareConversationKeyChangeAsync(null, partnerId);
         var resp = await api.AddConversationKeysAsync(conv, EventHelpers.PrepToRequest(prep));
         var data = resp.ValueKind == JsonValueKind.Object && resp.TryGetProperty("data", out var dEl) ? dEl : default;
         Assert.True(
@@ -230,7 +201,7 @@ public class E2ELiveTests
         for (var i = 0; i < 5; i++)
         {
             page = await api.GetEventsAsync(conv, 10);
-            batch = core.DecryptBatch(KeyEvents(page).Concat(EventsB64(Data(page))).ToList(), signing);
+            batch = await core.DecryptBatchAsync(KeyEvents(page).Concat(EventsB64(Data(page))).ToList());
             convKeys = new Dictionary<string, byte[]>(batch.ConversationKeys.Keys);
             if (convKeys.ContainsKey(kv)) break;
             await Task.Delay(1500);
@@ -258,7 +229,7 @@ public class E2ELiveTests
         await api.SendMessageAsync(canonicalConv, body);
         Console.WriteLine($"sent live encrypted message: \"{marker}\"");
 
-        var (one, sentRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, body.MessageId);
+        var (one, sentRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, body.MessageId);
         Assert.True(EventHelpers.MessageText(one) == $"@user {marker}", $"round-trip text mismatch: {one}");
         Assert.True(one.TryGetProperty("verified", out var v3) && v3.GetBoolean(),
             "own sent message failed signature verification");
@@ -273,7 +244,7 @@ public class E2ELiveTests
             conversationKey: key,
             conversationKeyVersion: kv);
         await api.SendMessageAsync(canonicalConv, add);
-        var (reaction, _) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, add.MessageId);
+        var (reaction, _) = await AwaitDecryptedAsync(api, core, conv, convKeys, add.MessageId);
         var content = reaction.TryGetProperty("content", out var cEl) ? cEl : default;
         Assert.True(Str(content, "content_type") == "Reaction" && Str(content, "emoji") == "\U0001F44D",
             $"expected a Reaction event, got {content}");
@@ -314,7 +285,7 @@ public class E2ELiveTests
             await api.FinishMediaUploadAsync(canonicalConv, sessionId, mediaHashKey, ciphertext);
             Console.WriteLine($"encrypted media uploaded: {mediaHashKey} ({ciphertext.Length} bytes)");
             await api.SendMessageAsync(canonicalConv, mediaMsg);
-            var (mediaOne, mediaRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, signing, mediaMsg.MessageId);
+            var (mediaOne, mediaRawB64) = await AwaitDecryptedAsync(api, core, conv, convKeys, mediaMsg.MessageId);
             Assert.True(mediaOne.TryGetProperty("verified", out var v5) && v5.GetBoolean(),
                 "media message failed signature verification");
             var atts = mediaOne.TryGetProperty("content", out var mContent)
@@ -339,27 +310,23 @@ public class E2ELiveTests
 
         // -- 6. Optional: group create + message + member add --------------------
         if (Env("CHATXDK_E2E_GROUPS") == "1")
-            await GroupsFlowAsync(api, core, myId, partnerId!, bothKeys, signing);
+            await GroupsFlowAsync(api, core, myId, partnerId!);
 
         Console.WriteLine("E2E DOTNET: PASS");
     }
 
-    private static async Task GroupsFlowAsync(
-        XChatClient api,
-        ChatCore core,
-        string myId,
-        string partnerId,
-        List<PublicKeyInput> bothKeys,
-        List<SigningKeyEntry> signing)
+    /// <summary>
+    /// The group calls pass no public keys: the SDK reads the identity keys
+    /// of the members each call names from the public keys it holds.
+    /// </summary>
+    private static async Task GroupsFlowAsync(XChatClient api, ChatCore core, string myId, string partnerId)
     {
-        var myKeys = bothKeys.Where(k => k.UserId == myId).ToList();
-
         var groupId = await api.InitializeGroupAsync();
         Assert.True(groupId.StartsWith("g"), $"unexpected group id: \"{groupId}\"");
 
         // Create with the caller as sole member/admin so the member add below
-        // exercises PrepareGroupMembersChange with the partner.
-        var prep = core.PrepareGroupCreate(myKeys, groupId, new[] { myId }, new[] { myId }, "chat-xdk e2e");
+        // exercises PrepareGroupMembersChangeAsync with the partner.
+        var prep = await core.PrepareGroupCreateAsync(null, groupId, new[] { myId }, new[] { myId }, "chat-xdk e2e");
         var members = new List<string> { myId };
         var body = EventHelpers.PrepToRequest(prep);
         body["conversation_id"] = groupId;
@@ -374,7 +341,8 @@ public class E2ELiveTests
         {
             // Some deployments reject single-member groups; fall back to creating
             // with both participants (skipping the member-add below).
-            prep = core.PrepareGroupCreate(bothKeys, groupId, new[] { myId, partnerId }, new[] { myId }, "chat-xdk e2e");
+            prep = await core.PrepareGroupCreateAsync(
+                null, groupId, new[] { myId, partnerId }, new[] { myId }, "chat-xdk e2e");
             members = new List<string> { myId, partnerId };
             body = EventHelpers.PrepToRequest(prep);
             body["conversation_id"] = groupId;
@@ -391,7 +359,7 @@ public class E2ELiveTests
         var msg = core.EncryptReply(groupId, marker, key, kv);
         await api.SendMessageAsync(groupId, msg);
         var convKeys = new Dictionary<string, byte[]> { [kv] = key };
-        var (one, _) = await AwaitDecryptedAsync(api, core, groupId, convKeys, signing, msg.MessageId);
+        var (one, _) = await AwaitDecryptedAsync(api, core, groupId, convKeys, msg.MessageId);
         Assert.True(
             EventHelpers.MessageText(one) == marker
             && one.TryGetProperty("verified", out var v) && v.GetBoolean(),
@@ -400,15 +368,16 @@ public class E2ELiveTests
 
         if (!members.Contains(partnerId))
         {
-            var mPrep = core.PrepareGroupMembersChange(
-                bothKeys, groupId, new[] { partnerId }, members, new[] { myId });
+            var mPrep = await core.PrepareGroupMembersChangeAsync(
+                null, groupId, new[] { partnerId }, members, new[] { myId });
             var mBody = EventHelpers.PrepToRequest(mPrep);
             mBody["user_ids"] = new[] { partnerId };
             await api.AddGroupMembersAsync(groupId, mBody);
             Console.WriteLine($"group member add: {partnerId} added (key rotated to {mPrep.ConversationKeyVersion})");
         }
 
-        var rPrep = core.PrepareGroupMembersRemove(myKeys, groupId, new[] { partnerId });
+        // The caller is the one member who stays.
+        var rPrep = await core.PrepareGroupMembersRemoveAsync(null, groupId, new[] { partnerId }, new[] { myId });
         await api.RemoveGroupMembersAsync(groupId, EventHelpers.RemovalToRequest(new[] { partnerId }, rPrep));
         Console.WriteLine(
             $"group member remove: {partnerId} removed (key rotated to {rPrep.ConversationKeyVersion})");

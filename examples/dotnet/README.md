@@ -14,7 +14,7 @@ are generated + registered on first run); conversation state is in memory.
 | [`ChatBot/Bot.cs`](ChatBot/Bot.cs) | The receive → decrypt → reply → encrypt → send loop. |
 | [`ChatBot/Program.cs`](ChatBot/Program.cs) | Entrypoint: config, key load/generate, run (and the `register` dispatch). |
 | [`ChatBot/Register.cs`](ChatBot/Register.cs) | One-time public-key registration (`dotnet run --project ChatBot register`). |
-| [`ChatBot.Tests/ChatCoreTests.cs`](ChatBot.Tests/ChatCoreTests.cs) | Offline test driving the real binding (no mocks). |
+| [`ChatBot.Tests/ChatCoreTests.cs`](ChatBot.Tests/ChatCoreTests.cs) | Offline tests driving the real binding (no mocks). |
 
 ## Prerequisites
 
@@ -43,6 +43,14 @@ dotnet run --project ChatBot
 The bot echoes messages back (`pong` for `ping`, otherwise `You said: …`).
 Customize `Bot.GenerateReply` in [`ChatBot/Bot.cs`](ChatBot/Bot.cs) to change the reply logic.
 
+The bot keeps no list of other users' public keys. Its constructor gives the
+SDK a hook (`ChatCore.FetchPublicKeysWith`) that reads
+`GET /2/users/{id}/public_keys` for one user. Every page of events goes through
+`ChatCore.DecryptBatchAsync`, key changes and messages together, and the SDK
+calls the hook for the signing keys the page needs and does not hold, those of
+a member who changed a group's key and sent no message included. It stores what
+arrives, and the result's `MissingSigningKeys` lists what did not.
+
 ## Registering your key (one-time)
 
 Before a bot can send or receive, its public key must be registered on the
@@ -70,9 +78,11 @@ cargo build -p chat-xdk-ffi --release   # build the native lib first
 dotnet test
 ```
 
-The test imports the fixture private keys, checks the binding reproduces the
-committed public-key/signature vectors, and runs a real encrypt → decrypt
-round-trip plus a conversation-key ECIES round-trip.
+The tests import the fixture private keys, check the binding reproduces the
+committed public-key/signature vectors, and run a real encrypt → decrypt
+round-trip plus a conversation-key ECIES round-trip. They also decrypt a page
+whose key change was signed by a member who sent no message: it decrypts once
+the SDK has fetched that member's keys through the hook.
 
 ## License
 

@@ -7,8 +7,9 @@ API over HTTP, and showcases the messaging core:
 - **Key management** — import existing private keys (or generate + register new ones)
 - **Conversation keys** — prepare/decrypt the symmetric key shared by participants
 - **Encryption** — turn a reply into an encrypted, signed message for the X API
-- **Decryption** — both paths: batch (`decryptEvents`) on initial load and
-  single-event (`decryptEvent`) for each new event
+- **Decryption** — every page of events through the batch path
+  (`decryptEvents`), which fetches the public keys it lacks through a hook;
+  each crypto core also wraps the single-event path (`decryptEvent`)
 
 Every example is a small bot: it reads incoming DMs, decrypts them, generates a
 reply (a simple echo), encrypts the reply, and sends it back.
@@ -50,8 +51,10 @@ Each example separates two layers so the crypto is easy to read and test:
 
 1. **A crypto core** — a thin wrapper around the chat-xdk binding that does
    key unlock/import, conversation-key handling, message encryption, and the
-   two decryption paths. This layer never touches the network, so it can be
-   unit-tested directly.
+   two decryption paths. This layer makes no network calls of its own, so it
+   can be unit-tested directly. The one thing it needs from the network,
+   other users' public keys, comes through a fetch function the I/O layer
+   hands it.
 2. **A thin I/O layer** — config from environment variables, local/in-memory
    conversation state, and X Chat API calls over plain HTTP.
 
@@ -74,21 +77,49 @@ the network.
 
 ### Signing keys for key changes
 
-A bot verifies each event against the signing keys of the user who sent it,
-which it fetches from the X API (`GET /2/users/{id}/public_keys`). A key
-change is signed by the member who made it, who may have sent none of the
-messages on the page, so fetching keys for the senders of the messages is not
-enough: without its signer's keys a recent key change does not verify, its key
-is dropped, and the messages under it do not decrypt.
+A bot verifies each event with the signing keys of the user who sent it, which
+come from the X API (`GET /2/users/{id}/public_keys`). A key change is signed
+by the member who made it, who may have sent none of the messages on the page.
+Without that member's keys a recent key change does not verify, its key is
+dropped, and the messages under it do not decrypt.
 
-Each bot therefore decrypts a batch through its crypto core's
-`decryptBatchWithSigners` (`decrypt_batch_with_signers`,
-`DecryptBatchWithSigners`). It decrypts the batch, reads the result's
-`unverifiedKeyChanges` for the key changes whose reason is a missing signing
-key, fetches the public keys of those signers, and decrypts the batch again.
-The bots log what the second pass still reports: key changes that did not
-verify, key changes whose key the bot could not decrypt, and signing keys that
-were rejected.
+The SDK fetches those keys itself, through a hook. Each example's crypto core
+sets the hook once, in `fetchPublicKeysWith` (`fetch_public_keys_with`,
+`FetchPublicKeysWith`). The hook is given user ids. It fetches each user's
+public keys with the example's X API client and returns the records as the API
+sent them, by user id. A user whose fetch fails is logged and left out, so one
+user's failure does not fail the page.
+
+Each bot sends every page of events, key changes and messages together,
+through the batch decrypt. When the page names signing keys the SDK does not
+hold, the SDK calls the hook for those users, stores what it returns, and
+decrypts the page once more. The bot replies to the messages in the result,
+and logs what the result still reports: `missingSigningKeys`,
+`unverifiedKeyChanges`, `undecryptableKeyChanges` and `rejectedSigningKeys`.
+
+| Language | Set the hook | Batch decrypt that calls it |
+|----------|--------------|-----------------------------|
+| JavaScript | `createChat({ resolvePublicKeys })` or `chat.setResolvePublicKeys(hook)` | `await chat.decryptEventsAsync(...)` |
+| .NET | `chat.ResolvePublicKeys = hook` | `await chat.DecryptEventsAsync(...)` |
+| Python | `chat.set_resolve_public_keys(hook)` | `chat.decrypt_events(...)` |
+| Go | `chat.SetResolvePublicKeys(hook)` | `chat.DecryptEvents(...)` |
+| JVM | `chat.setResolvePublicKeys(resolver)` | `chat.decryptEvents(...)` |
+| Rust | `chat.set_resolve_public_keys(Some(hook))` | `chat.decrypt_events(...)` |
+
+In JavaScript and .NET the hook returns a promise or a task, so only the
+`Async` methods call it. In the other four languages the hook blocks, and the
+usual methods call it.
+
+The hook also serves the calls that make a conversation key:
+`prepareConversationKeyChange`, `prepareGroupCreate`,
+`prepareGroupMembersChange` and `prepareGroupMembersRemove` (their `Async`
+forms in JavaScript and .NET). A call that passes no public keys encrypts the
+key to the public keys the SDK holds for its members, and fetches the ones it
+lacks.
+
+The browser app in [`js/public/`](js/public) drives the lower-level WASM
+`Chat`, which has no hook. It does the same steps by hand: `missingPublicKeys`
+names the users to fetch, and `addPublicKeys` stores their records.
 
 ## Running an example
 

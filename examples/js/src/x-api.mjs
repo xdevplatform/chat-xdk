@@ -168,7 +168,7 @@ export class XChatClient {
   /**
    * Create a group conversation. `body` carries `conversationId`,
    * `groupMembers`, `groupAdmins`, and the two-signature key change from
-   * `ChatCore.prepareGroupCreate`.
+   * `ChatCore.prepareGroupCreateAsync`.
    */
   async createConversation(body) {
     return this.client.chat.createConversation(body);
@@ -176,7 +176,7 @@ export class XChatClient {
 
   /**
    * Add members to a group. `body` carries `userIds` plus the rotated key
-   * change from `ChatCore.prepareGroupMembersChange`.
+   * change from `ChatCore.prepareGroupMembersChangeAsync`.
    */
   async addGroupMembers(conversationId, body) {
     return this.client.chat.addGroupMembers(conversationId, body);

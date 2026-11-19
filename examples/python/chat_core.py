@@ -10,13 +10,18 @@ The four core feature touchpoints of the chat-xdk flow are all here:
 * key management        -> ``load_keys`` / ``generate_and_register``
 * conversation keys     -> ``prepare_conversation_key_change`` / ``decrypt_conversation_key``
 * message encryption    -> ``encrypt_reply``, then ``encrypt_media`` for its files
-* event decryption      -> ``decrypt_batch`` / ``decrypt_batch_with_signers``
-                           (decrypt_events) and ``decrypt_one`` (decrypt_event)
+* event decryption      -> ``decrypt_batch`` (decrypt_events) and
+                           ``decrypt_one`` (decrypt_event)
+
+Other users' public keys reach the SDK through one hook,
+``fetch_public_keys_with``: the SDK calls it for the keys a decrypt or a key
+change lacks, and stores what it returns.
 """
 
 from __future__ import annotations
 
 import base64
+import logging
 from typing import Any, Callable
 
 from chat_xdk import (
@@ -37,6 +42,8 @@ from chat_xdk import (
     ImportKeysParams,
     SetIdentityParams,
 )
+
+logger = logging.getLogger("chatbot")
 
 
 def _b64decode(data: str) -> bytes:
@@ -107,12 +114,34 @@ class ChatCore:
             )
         self.chat.set_identity(SetIdentityParams(user_id, self.signing_key_version))
 
-    def set_signing_keys(self, signing_keys: list[dict[str, str]]) -> None:
-        """Store participants' signing keys for decrypt calls that omit them.
+    def fetch_public_keys_with(self, fetch: Callable[[str], list[dict[str, Any]]]) -> None:
+        """Have the SDK fetch the public keys it lacks with ``fetch``, which
+        returns one user's records from ``GET /2/users/{id}/public_keys``.
 
-        Each call replaces the previous set, so pass the full known roster.
+        This sets the SDK's public-key hook. ``decrypt_batch`` then fetches
+        the signing keys a page's events name and the SDK does not hold,
+        those of the members who made its key changes as well as those of
+        the senders of its messages, and decrypts the page once more. The
+        prepare calls that make a conversation key fetch their members'
+        identity keys when they are passed no public keys. The SDK stores
+        what arrives, and waits a minute before it asks again for a key a
+        lookup did not bring. Setting the hook also turns the SDK's key
+        cache on.
+
+        A user whose fetch fails is logged and left out, so the keys of the
+        other users still arrive.
         """
-        self.chat.set_signing_keys(signing_keys)
+
+        def resolve(user_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+            records = {}
+            for user_id in user_ids:
+                try:
+                    records[user_id] = fetch(user_id)
+                except Exception as err:
+                    logger.warning("public_keys_fetch_failed user=%s err=%s", user_id, err)
+            return records
+
+        self.chat.set_resolve_public_keys(resolve)
 
     def set_cache_keys(self, enabled: bool) -> None:
         """Opt in to the SDK's verified conversation-key cache.
@@ -167,7 +196,7 @@ class ChatCore:
 
     def prepare_conversation_key_change(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[dict[str, str]] | None = None,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
         """Generate, encrypt, and sign a conversation-key change.
@@ -175,6 +204,10 @@ class ChatCore:
         ``public_keys`` is the flat list returned by the X API's public-keys
         endpoint: ``[{"user_id", "identity_public_key", "public_key_version"}, ...]``. Omit
         ``conversation_id`` for a one-to-one to derive it; pass it for a group.
+        Pass no ``public_keys`` for a one-to-one that ``conversation_id``
+        names, by its id or by the other user's id alone: the SDK reads both
+        users' keys from the public keys it holds, fetching the ones it lacks
+        through ``fetch_public_keys_with``.
         The change is signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_conversation_key_change(
@@ -192,12 +225,18 @@ class ChatCore:
         events_b64: list[str],
         signing_keys: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        """Batch path — used on initial conversation load.
+        """Batch path — every page of events goes through it, the key changes
+        and the data events together.
 
         ``decrypt_events`` extracts conversation keys from any KeyChange events
-        in the batch, then decrypts every event. Returns the decrypted events
-        plus the conversation-key cache to reuse for single events. Omit
-        ``signing_keys`` to verify with the ``set_signing_keys`` store.
+        in the batch, caches those of the key changes that verify, then
+        decrypts every event. Returns the decrypted events, the conversation
+        keys it extracted, and what it could not use.
+
+        Omit ``signing_keys`` to verify with the public keys the SDK holds.
+        The ones the page lacks are then fetched through
+        ``fetch_public_keys_with``; the result's ``missing_signing_keys``
+        lists those that did not arrive.
         """
         result = self.chat.decrypt_events(DecryptEventsParams(events_b64, signing_keys=signing_keys))
         events = [
@@ -211,29 +250,8 @@ class ChatCore:
             "unverified_key_changes": result.get("unverified_key_changes", {}),
             "undecryptable_key_changes": result.get("undecryptable_key_changes", {}),
             "rejected_signing_keys": result.get("rejected_signing_keys", {}),
+            "missing_signing_keys": result.get("missing_signing_keys", {}),
         }
-
-    def decrypt_batch_with_signers(
-        self,
-        events_b64: list[str],
-        store_signing_keys_of: Callable[[list[str]], bool],
-    ) -> dict[str, Any]:
-        """Batch path that also gets the signing keys its key changes need.
-
-        A key change is signed by the member who made it, who may have written
-        none of the page's messages, so the keys of the messages' senders do
-        not verify it. Unverified, a recent key change loses its key and the
-        messages under it do not decrypt. When the batch reports key changes
-        whose signer's keys were missing, this calls
-        ``store_signing_keys_of(user_ids)`` with those signers, which fetches
-        their public keys, stores them (``set_signing_keys``) and returns
-        whether it stored any, and then decrypts the batch again.
-        """
-        batch = self.decrypt_batch(events_b64)
-        signers = missing_key_change_signers(batch)
-        if not signers or not store_signing_keys_of(signers):
-            return batch
-        return self.decrypt_batch(events_b64)
 
     def decrypt_one(
         self,
@@ -241,9 +259,13 @@ class ChatCore:
         conversation_keys: dict[str, bytes],
         signing_keys: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        """Single-event path. ``conversation_keys`` is the cache from ``decrypt_batch``.
+        """Single-event path. ``conversation_keys`` is the key map from
+        ``decrypt_batch``; with the key cache on, a version it lacks comes
+        from the cache.
 
-        Omit ``signing_keys`` to verify with the ``set_signing_keys`` store.
+        Omit ``signing_keys`` to verify with the public keys the SDK holds.
+        This path fetches none: an event whose sender's keys the SDK may lack
+        goes through ``decrypt_batch``.
         """
         return _as_dict(
             self.chat.decrypt_event(
@@ -367,7 +389,7 @@ class ChatCore:
 
     def prepare_group_create(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[dict[str, str]] | None,
         conversation_id: str,
         member_ids: list[str],
         admin_ids: list[str],
@@ -378,6 +400,10 @@ class ChatCore:
         Signed with the ``set_identity`` session identity. A plaintext
         ``title`` is encrypted under the new key; send the result's
         ``encrypted_title`` as the request's ``group_name``.
+
+        Pass ``None`` as ``public_keys`` to have the SDK read the identity
+        keys of ``member_ids`` and ``admin_ids`` from the public keys it
+        holds, fetching the ones it lacks through ``fetch_public_keys_with``.
         """
         return self.chat.prepare_group_create(
             GroupCreateParams(public_keys, conversation_id, member_ids, admin_ids, title=title)
@@ -385,7 +411,7 @@ class ChatCore:
 
     def prepare_group_members_change(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[dict[str, str]] | None,
         conversation_id: str,
         new_member_ids: list[str],
         current_member_ids: list[str],
@@ -394,6 +420,10 @@ class ChatCore:
         """Prepare a member add: rotated key + the two required signatures.
 
         Signed with the ``set_identity`` session identity.
+
+        Pass ``None`` as ``public_keys`` to have the SDK read the identity
+        keys of ``current_member_ids`` and ``new_member_ids`` from the public
+        keys it holds, fetching the ones it lacks.
         """
         return self.chat.prepare_group_members_change(
             GroupMembersChangeParams(
@@ -408,17 +438,27 @@ class ChatCore:
 
     def prepare_group_members_remove(
         self,
-        public_keys: list[dict[str, str]],
+        public_keys: list[dict[str, str]] | None,
         conversation_id: str,
         user_ids: list[str],
+        remaining_member_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Prepare a member removal that rotates the key for who stays.
 
         ``public_keys`` are the identity keys of the members who remain.
+        Pass ``None``, and name those members in ``remaining_member_ids``, to
+        have the SDK read their keys from the public keys it holds, fetching
+        the ones it lacks; with ``public_keys`` passed,
+        ``remaining_member_ids`` is not read.
         Signed with the ``set_identity`` session identity.
         """
         return self.chat.prepare_group_members_remove(
-            GroupMembersRemoveParams(public_keys, conversation_id, user_ids)
+            GroupMembersRemoveParams(
+                public_keys,
+                conversation_id,
+                user_ids,
+                remaining_member_ids=remaining_member_ids,
+            )
         )
 
     # -- Media files ----------------------------------------------------------
@@ -510,18 +550,6 @@ class ChatCore:
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
         """Decrypt a group title or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
-
-
-def missing_key_change_signers(batch: dict[str, Any]) -> list[str]:
-    """The users whose signing keys a ``decrypt_batch`` result lacked to
-    verify a key change, each once: fetch their public keys and decrypt
-    again."""
-    signers = [
-        change["sender_id"]
-        for change in batch["unverified_key_changes"].values()
-        if change["reason"] == "MissingSigningKey" and change["sender_id"]
-    ]
-    return list(dict.fromkeys(signers))
 
 
 def message_text(event: dict[str, Any]) -> str | None:

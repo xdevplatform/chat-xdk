@@ -4,17 +4,21 @@
 // Everything that touches the SDK lives here so it can be unit-tested directly
 // (see chatcore_test.go). The four core feature touchpoints are all here:
 //
-//   - key management     -> LoadKeys / GenerateAndRegister / SetIdentity / SetSigningKeys
+//   - key management     -> LoadKeys / GenerateAndRegister / SetIdentity
 //   - conversation keys  -> PrepareConversationKeyChange / DecryptConversationKey
 //     (plus the SDK's opt-in key cache, enabled in NewChatCore)
 //   - message encryption -> EncryptReply, then EncryptMedia for its files
 //   - event decryption   -> DecryptBatch (DecryptEvents) and DecryptOne (DecryptEvent)
+//
+// Other users' public keys reach the SDK through one hook,
+// FetchPublicKeysWith: the SDK calls it for the keys a decrypt or a key
+// change lacks, and stores what it returns.
 package main
 
 import (
 	"encoding/base64"
 	"errors"
-	"sort"
+	"log"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
@@ -64,10 +68,32 @@ func (c *ChatCore) SetIdentity(userID string) error {
 	return c.chat.SetIdentity(chatxdk.SetIdentityParams{UserID: userID, SigningKeyVersion: c.SigningKeyVersion})
 }
 
-// SetSigningKeys stores the senders' signing keys for decrypt calls that
-// pass nil signing keys. Each call replaces the previous set.
-func (c *ChatCore) SetSigningKeys(keys []chatxdk.SigningKeyEntry) error {
-	return c.chat.SetSigningKeys(keys)
+// FetchPublicKeysWith has the SDK fetch the public keys it lacks with fetch,
+// which returns one user's records from GET /2/users/{id}/public_keys.
+//
+// This sets the SDK's public-key hook. DecryptBatch then fetches the signing
+// keys a page's events name and the SDK does not hold, those of the members
+// who made its key changes as well as those of the senders of its messages,
+// and decrypts the page once more. The prepare calls that make a
+// conversation key fetch their members' identity keys when they are passed
+// no public keys. The SDK stores what arrives, and waits a minute before it
+// asks again for a key a lookup did not bring.
+//
+// A user whose fetch fails is logged and left out, so the keys of the other
+// users still arrive.
+func (c *ChatCore) FetchPublicKeysWith(fetch func(userID string) ([]chatxdk.PublicKeyRecord, error)) {
+	c.chat.SetResolvePublicKeys(func(userIDs []string) (map[string][]chatxdk.PublicKeyRecord, error) {
+		records := make(map[string][]chatxdk.PublicKeyRecord, len(userIDs))
+		for _, userID := range userIDs {
+			found, err := fetch(userID)
+			if err != nil {
+				log.Printf("public_keys_fetch_failed user=%s err=%v", userID, err)
+				continue
+			}
+			records[userID] = found
+		}
+		return records, nil
+	})
 }
 
 // GenerateAndRegister creates a fresh identity. Returns the registration
@@ -95,6 +121,11 @@ func (c *ChatCore) PublicKeys() (*chatxdk.PublicKeys, error) {
 // PrepareConversationKeyChange generates, encrypts, and signs a conversation-key
 // change under the session identity. Leave conversationID empty for a
 // one-to-one to derive it; pass it for a group.
+//
+// publicKeys are the participants' identity keys. Pass nil for a one-to-one
+// that conversationID names, by its id or by the other user's id alone: the
+// SDK reads both users' keys from the public keys it holds, fetching the
+// ones it lacks through FetchPublicKeysWith.
 func (c *ChatCore) PrepareConversationKeyChange(publicKeys []chatxdk.PublicKeyInput, conversationID string) (*chatxdk.PreparedConversationChange, error) {
 	return c.chat.PrepareConversationKeyChange(chatxdk.ConversationKeyChangeParams{
 		PublicKeys:     publicKeys,
@@ -109,67 +140,27 @@ func (c *ChatCore) DecryptConversationKey(encryptedKeyB64 string) ([]byte, error
 
 // -- Decryption: the two paths ---------------------------------------------
 
-// DecryptBatch is the batch path used on initial conversation load. It
-// extracts conversation keys from KeyChange events (caching them for the
-// encrypt calls), and decrypts every message. Passing nil signingKeys uses
-// the set stored via SetSigningKeys.
-func (c *ChatCore) DecryptBatch(eventsB64 []string, signingKeys []chatxdk.SigningKeyEntry) (*chatxdk.DecryptEventsResult, error) {
-	return c.chat.DecryptEvents(chatxdk.DecryptEventsParams{
-		Events:      eventsB64,
-		SigningKeys: signingKeys,
-	})
-}
-
-// DecryptBatchWithSigners is DecryptBatch with the stored signing keys, and
-// it also gets the signing keys its key changes need.
+// DecryptBatch is the batch path: every page of events goes through it, the
+// key changes and the data events together. It extracts the conversation
+// keys from the KeyChange events, caches those of the key changes that
+// verify (for the encrypt calls), and decrypts every event.
 //
-// A key change is signed by the member who made it, who may have written
-// none of the page's messages, so the keys of the messages' senders do not
-// verify it. Unverified, a recent key change loses its key and the messages
-// under it do not decrypt. When the batch reports key changes whose signer's
-// keys were missing, this calls storeSigningKeysOf with those signers, which
-// fetches their public keys, stores them (SetSigningKeys) and reports whether
-// it stored any, and then decrypts the batch again.
-func (c *ChatCore) DecryptBatchWithSigners(eventsB64 []string, storeSigningKeysOf func(userIDs []string) bool) (*chatxdk.DecryptEventsResult, error) {
-	result, err := c.DecryptBatch(eventsB64, nil)
-	if err != nil {
-		return nil, err
-	}
-	signers := MissingKeyChangeSigners(result)
-	if len(signers) == 0 || !storeSigningKeysOf(signers) {
-		return result, nil
-	}
-	return c.DecryptBatch(eventsB64, nil)
+// Signatures verify with the public keys the SDK holds. The ones the page
+// lacks are fetched through FetchPublicKeysWith; the result's
+// MissingSigningKeys lists those that did not arrive.
+func (c *ChatCore) DecryptBatch(eventsB64 []string) (*chatxdk.DecryptEventsResult, error) {
+	return c.chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: eventsB64})
 }
 
-// MissingKeyChangeSigners returns the users whose signing keys a DecryptBatch
-// result lacked to verify a key change, each once: fetch their public keys
-// and decrypt again.
-func MissingKeyChangeSigners(result *chatxdk.DecryptEventsResult) []string {
-	seen := map[string]bool{}
-	var signers []string
-	for _, change := range result.UnverifiedKeyChanges {
-		if change.Reason != chatxdk.UnverifiedKeyChangeMissingSigningKey || change.SenderID == nil {
-			continue
-		}
-		if !seen[*change.SenderID] {
-			seen[*change.SenderID] = true
-			signers = append(signers, *change.SenderID)
-		}
-	}
-	sort.Strings(signers)
-	return signers
-}
-
-// DecryptOne is the single-event path used for each new event after the
-// initial load. Passing nil maps resolves conversation keys from the SDK's
-// key cache and signing keys from the set stored via SetSigningKeys;
-// explicit maps override both.
-func (c *ChatCore) DecryptOne(eventB64 string, conversationKeys map[string][]byte, signingKeys []chatxdk.SigningKeyEntry) (*chatxdk.Event, error) {
+// DecryptOne is the single-event path: it decrypts one event. A nil
+// conversationKeys takes the keys from the SDK's key cache, and the
+// signature verifies with the public keys the SDK holds. This path fetches
+// none: an event whose sender's keys the SDK may lack goes through
+// DecryptBatch.
+func (c *ChatCore) DecryptOne(eventB64 string, conversationKeys map[string][]byte) (*chatxdk.Event, error) {
 	return c.chat.DecryptEvent(chatxdk.DecryptEventParams{
 		EventB64:         eventB64,
 		ConversationKeys: conversationKeys,
-		SigningKeys:      signingKeys,
 	})
 }
 
@@ -312,6 +303,10 @@ func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conve
 // fresh key + the two required signatures. A plaintext title (empty for
 // none) is encrypted under the new key; send the result's EncryptedTitle as
 // the request's group_name.
+//
+// publicKeys are the members' identity keys. Pass nil to have the SDK read
+// the keys of memberIDs and adminIDs from the public keys it holds, fetching
+// the ones it lacks through FetchPublicKeysWith.
 func (c *ChatCore) PrepareGroupCreate(publicKeys []chatxdk.PublicKeyInput, conversationID string, memberIDs, adminIDs []string, title string) (*chatxdk.PreparedConversationChange, error) {
 	return c.chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
 		PublicKeys:     publicKeys,
@@ -324,6 +319,11 @@ func (c *ChatCore) PrepareGroupCreate(publicKeys []chatxdk.PublicKeyInput, conve
 
 // PrepareGroupMembersChange prepares a member add under the session
 // identity: rotated key + the two required signatures.
+//
+// publicKeys are the identity keys of the current and the new members. Pass
+// nil to have the SDK read the keys of currentMemberIDs and newMemberIDs
+// from the public keys it holds, fetching the ones it lacks through
+// FetchPublicKeysWith.
 func (c *ChatCore) PrepareGroupMembersChange(publicKeys []chatxdk.PublicKeyInput, conversationID string, newMemberIDs, currentMemberIDs, currentAdminIDs []string) (*chatxdk.PreparedConversationChange, error) {
 	return c.chat.PrepareGroupMembersChange(chatxdk.GroupMembersChangeParams{
 		PublicKeys:              publicKeys,
@@ -335,14 +335,19 @@ func (c *ChatCore) PrepareGroupMembersChange(publicKeys []chatxdk.PublicKeyInput
 	})
 }
 
-// PrepareGroupMembersRemove prepares a member removal under the session
-// identity and rotates the key for the members who stay. publicKeys are
-// those members' identity keys.
-func (c *ChatCore) PrepareGroupMembersRemove(publicKeys []chatxdk.PublicKeyInput, conversationID string, userIDs []string) (*chatxdk.PreparedConversationChange, error) {
+// PrepareGroupMembersRemove prepares a removal of userIDs under the session
+// identity and rotates the key for the members who stay.
+//
+// publicKeys are the identity keys of the members who stay. Pass nil and
+// name those members in remainingMemberIDs to have the SDK read their keys
+// from the public keys it holds, fetching the ones it lacks through
+// FetchPublicKeysWith.
+func (c *ChatCore) PrepareGroupMembersRemove(publicKeys []chatxdk.PublicKeyInput, conversationID string, userIDs, remainingMemberIDs []string) (*chatxdk.PreparedConversationChange, error) {
 	return c.chat.PrepareGroupMembersRemove(chatxdk.GroupMembersRemoveParams{
-		PublicKeys:     publicKeys,
-		ConversationID: conversationID,
-		UserIDs:        userIDs,
+		PublicKeys:         publicKeys,
+		ConversationID:     conversationID,
+		UserIDs:            userIDs,
+		RemainingMemberIDs: remainingMemberIDs,
 	})
 }
 
