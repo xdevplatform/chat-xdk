@@ -23,6 +23,7 @@ use crate::crypto::keys::XChatConversationKey;
 use crate::error::{JuiceboxError, SdkError};
 use crate::features::shared;
 use crate::keys::juicebox::JuiceboxConfig;
+use crate::types::MissingSigningKey;
 
 /// The error document the C ABI returns for `error`: the kind, the message
 /// and, for an invalid PIN that Juicebox reported a count for, the attempts
@@ -106,6 +107,26 @@ pub fn juicebox_error(operation: &str, reason: &str, guesses_remaining: Option<u
         (_, reason) => JuiceboxError::Other(reason.to_string()),
     };
     SdkError::Juicebox(error)
+}
+
+/// A batch result's `missing_signing_keys` as a binding holds it, each
+/// event's index a string, in batch order: what
+/// [`crate::ChatCore::missing_public_keys_among`] takes.
+pub fn missing_signing_keys_in_order<K: Into<MissingSigningKey>>(
+    by_index: HashMap<String, K>,
+) -> Vec<MissingSigningKey> {
+    let mut entries: Vec<(usize, MissingSigningKey)> = by_index
+        .into_iter()
+        .map(|(index, key)| (index.parse().unwrap_or(usize::MAX), key.into()))
+        .collect();
+    entries.sort_by(|(index, key), (other_index, other_key)| {
+        (index, &key.user_id, &key.public_key_version).cmp(&(
+            other_index,
+            &other_key.user_id,
+            &other_key.public_key_version,
+        ))
+    });
+    entries.into_iter().map(|(_, key)| key).collect()
 }
 
 /// Register the millisecond clock the core times GETs by. Only WebAssembly
