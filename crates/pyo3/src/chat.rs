@@ -166,8 +166,9 @@ impl Chat {
     /// Args:
     ///     signing_keys: Same list of dicts ``DecryptEventsParams`` takes.
     ///         Each call replaces the previous set; ``add_signing_keys``
-    ///         keeps it. Only these two calls populate the store — keys
-    ///         carried inside events are never trusted.
+    ///         and ``add_public_keys`` keep it. Only these three calls
+    ///         populate the store — keys carried inside events are never
+    ///         trusted.
     pub(crate) fn set_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
         let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
         self.inner.set_signing_keys(&entries);
@@ -185,6 +186,117 @@ impl Chat {
         let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
         self.inner.add_signing_keys(&entries);
         Ok(())
+    }
+
+    /// Add users' public keys to the stored signing keys, as
+    /// ``add_signing_keys`` adds entries.
+    ///
+    /// The decrypt calls verify with the stored keys when their
+    /// ``signing_keys`` is ``None`` or empty, and the four prepare calls
+    /// that encrypt a new conversation key (a conversation-key change, a
+    /// group create, a member add and a member removal) read their members'
+    /// identity keys from them when their ``public_keys`` is ``None`` or
+    /// empty.
+    ///
+    /// Args:
+    ///     records: Dict from user id to the list of records
+    ///         ``GET /2/users/{id}/public_keys`` returns in ``data`` for
+    ///         that user, each a dict with ``public_key_version``,
+    ///         ``public_key``, ``signing_public_key`` and
+    ///         ``identity_public_key_signature``. A record is read as the X
+    ///         API sends it: ``public_key_version`` may be a ``str`` or an
+    ///         ``int``, and any other key, such as ``juicebox_config``, is
+    ///         ignored. A record without a key version, an identity key or
+    ///         a signing key is left out. ``None`` adds nothing.
+    pub(crate) fn add_public_keys(&self, py: Python<'_>, records: Py<PyAny>) -> PyResult<()> {
+        let records: Option<HashMap<String, Vec<chat_xdk_core::PublicKeyRecord>>> =
+            json_field(py, &records, "records")?;
+        if let Some(records) = records {
+            self.inner.add_public_keys(&records);
+        }
+        Ok(())
+    }
+
+    /// The users whose public keys a ``decrypt_events`` result was missing.
+    ///
+    /// Fetch their keys (``GET /2/users/{id}/public_keys``), add them with
+    /// ``add_public_keys``, and decrypt the batch again.
+    ///
+    /// A key this call returned a user for is not asked for again for a
+    /// minute, so a lookup that brought no key is not repeated with every
+    /// batch. A key that arrives is no longer missing, and a key version
+    /// not asked for before is asked for at once.
+    ///
+    /// Args:
+    ///     result: The dict ``decrypt_events`` returned, or its
+    ///         ``missing_signing_keys`` dict.
+    ///
+    /// Returns:
+    ///     list[str]: The user ids, each once, in batch order.
+    pub(crate) fn missing_public_keys(
+        &self,
+        py: Python<'_>,
+        result: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<String>> {
+        // Only the result's missing keys cross into the core: a result also
+        // holds conversation keys as bytes, which JSON cannot carry.
+        let from_result = match result.cast::<pyo3::types::PyDict>() {
+            Ok(result) => result.get_item("missing_signing_keys")?,
+            Err(_) => None,
+        };
+        let missing = from_result.unwrap_or_else(|| result.clone()).unbind();
+        let missing: Option<HashMap<String, chat_xdk_core::MissingSigningKey>> =
+            json_field(py, &missing, "missing_signing_keys")?;
+        let missing = bindings::missing_signing_keys_in_order(missing.unwrap_or_default());
+        Ok(self.inner.missing_public_keys_among(&missing))
+    }
+
+    /// The users whose public keys the prepare call ``call`` would be
+    /// missing with ``params``: the members it encrypts its key to who have
+    /// no stored public key. Empty when ``params`` passes ``public_keys``.
+    ///
+    /// The prepare methods of ``chat_xdk.Chat`` call this before they run
+    /// the hook ``set_resolve_public_keys`` set. ``call`` is the prepare
+    /// method's name without ``prepare_``.
+    #[pyo3(name = "_missing_public_keys_for")]
+    pub(crate) fn missing_public_keys_for(
+        &self,
+        py: Python<'_>,
+        call: &str,
+        params: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<String>> {
+        Ok(match call {
+            "conversation_key_change" => {
+                let params: PyRef<'_, ConversationKeyChangeParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::ConversationKeyChange(&params))
+            }
+            "group_create" => {
+                let params: PyRef<'_, GroupCreateParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupCreate(&params))
+            }
+            "group_members_change" => {
+                let params: PyRef<'_, GroupMembersChangeParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersChange(&params))
+            }
+            "group_members_remove" => {
+                let params: PyRef<'_, GroupMembersRemoveParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersRemove(&params))
+            }
+            other => {
+                return Err(invalid_input(format!(
+                    "Unknown prepare call {other:?}: expected conversation_key_change, \
+                     group_create, group_members_change or group_members_remove"
+                )))
+            }
+        })
     }
 
     /// Lock the SDK, clearing keys from memory.
@@ -332,7 +444,16 @@ impl Chat {
     ///     params: A ``DecryptEventsParams``: the events, and the signing keys of
     ///         all participants, the members who signed the batch's key
     ///         changes included. The SDK matches keys by user_id and version
-    ///         and verifies each key's identity binding.
+    ///         and verifies each key's identity binding. With
+    ///         ``signing_keys`` ``None`` or empty, the stored keys
+    ///         (``set_signing_keys``, ``add_signing_keys``,
+    ///         ``add_public_keys``) are used.
+    ///
+    /// With a hook set (``set_resolve_public_keys``) and no signing keys
+    /// passed, ``chat_xdk.Chat.decrypt_events`` calls the hook for
+    /// ``missing_public_keys`` of the result, adds the records it returns
+    /// with ``add_public_keys``, and returns the result of decrypting the
+    /// batch once more. An exception the hook raises reaches the caller.
     ///
     /// Returns:
     ///     A dict with:
@@ -368,6 +489,13 @@ impl Chat {
     ///       (string) to the signing key there, for each one left out
     ///       because its identity binding does not verify: a dict with
     ///       ``user_id`` and ``public_key_version``
+    ///     - ``missing_signing_keys``: Dict mapping event index (string) to
+    ///       the signing key the event there names, for each signed event
+    ///       whose sender's signing key was not among the keys the call
+    ///       verified with: a dict with ``user_id``, the sender, and
+    ///       ``public_key_version``, the key version the event's signature
+    ///       names. ``missing_public_keys`` reads the users to fetch keys
+    ///       for from it
     pub(crate) fn decrypt_events(
         &self,
         py: Python<'_>,
@@ -419,6 +547,10 @@ impl Chat {
             (
                 "rejected_signing_keys",
                 serde_json::to_string(&result.rejected_signing_keys),
+            ),
+            (
+                "missing_signing_keys",
+                serde_json::to_string(&result.missing_signing_keys),
             ),
         ] {
             let json = json.map_err(internal_err)?;
@@ -777,6 +909,14 @@ impl Chat {
     /// new key as the conversation's newest key, as every prepare call that
     /// makes a conversation key does.
     ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``member_ids``, or, without ``member_ids``, of the two users of the
+    /// one-to-one conversation ``conversation_id`` names. A user with no
+    /// stored key raises ``InvalidInputError`` naming the user. With a hook
+    /// set (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches
+    /// the keys of the users who have none through it.
+    ///
     /// Args:
     ///     params: A ``ConversationKeyChangeParams``.
     ///
@@ -802,6 +942,13 @@ impl Chat {
     /// ``prepare_conversation_key_change``. While the key cache is on
     /// (``set_cache_keys``) the call caches the new key as the conversation's
     /// newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``current_member_ids`` and ``new_member_ids``. A user with no stored
+    /// key raises ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     ///
     /// Args:
     ///     params: A ``GroupMembersChangeParams``.
@@ -835,6 +982,13 @@ impl Chat {
     /// ``prepare_group_members_change``. While the key cache is on
     /// (``set_cache_keys``) the call caches the new key as the conversation's
     /// newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``member_ids`` and ``admin_ids``. A user with no stored key raises
+    /// ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     ///
     /// Args:
     ///     params: A ``GroupCreateParams``.
@@ -923,6 +1077,13 @@ impl Chat {
     /// set, re-encrypted under the new key, and the key change. While the
     /// key cache is on (``set_cache_keys``) the call caches the new key as
     /// the conversation's newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``remaining_member_ids``. A user with no stored key raises
+    /// ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     pub(crate) fn prepare_group_members_remove(
         &self,
         py: Python<'_>,

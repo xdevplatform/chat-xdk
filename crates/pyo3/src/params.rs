@@ -427,11 +427,17 @@ impl EncryptEditParams {
 }
 
 /// Parameters for ``Chat.prepare_conversation_key_change``.
+///
+/// With ``public_keys`` ``None`` or empty, the new key is encrypted to the
+/// stored public keys (``Chat.add_public_keys``) of ``member_ids``, or,
+/// without ``member_ids``, of the two users of the one-to-one conversation
+/// ``conversation_id`` names.
 #[pyclass(get_all, set_all)]
 pub struct ConversationKeyChangeParams {
     /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for every
-    /// participant the new key is encrypted for.
-    pub(crate) public_keys: Py<PyAny>,
+    /// participant the new key is encrypted for; ``None`` or empty takes
+    /// them from the stored public keys.
+    pub(crate) public_keys: Option<Py<PyAny>>,
     /// Your user ID; defaults to the ``set_identity`` value.
     pub(crate) sender_id: Option<String>,
     /// Your registered signing public key version; defaults to the
@@ -440,23 +446,28 @@ pub struct ConversationKeyChangeParams {
     /// Conversation the change applies to; ``None`` derives the one-to-one
     /// id from the two participants.
     pub(crate) conversation_id: Option<String>,
+    /// IDs of every participant the new key is encrypted for, yours
+    /// included; read only when ``public_keys`` is ``None`` or empty.
+    pub(crate) member_ids: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl ConversationKeyChangeParams {
     #[new]
-    #[pyo3(signature = (public_keys, *, sender_id=None, signing_key_version=None, conversation_id=None))]
+    #[pyo3(signature = (public_keys=None, *, sender_id=None, signing_key_version=None, conversation_id=None, member_ids=None))]
     pub(crate) fn new(
-        public_keys: Py<PyAny>,
+        public_keys: Option<Py<PyAny>>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         conversation_id: Option<String>,
+        member_ids: Option<Py<PyAny>>,
     ) -> Self {
         Self {
             public_keys,
             sender_id,
             signing_key_version,
             conversation_id,
+            member_ids,
         }
     }
 }
@@ -473,6 +484,7 @@ impl ConversationKeyChangeParams {
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
         params.conversation_id = self.conversation_id.clone();
+        params.member_ids = optional_user_ids_field(py, &self.member_ids, "member_ids")?;
         Ok(params)
     }
 }
@@ -482,11 +494,17 @@ impl ConversationKeyChangeParams {
 /// ``current_title`` and ``current_description`` are plaintext: the call
 /// encrypts each under the new conversation key it generates.
 /// ``current_avatar_url`` is the avatar's media URL, signed as is.
+///
+/// With ``public_keys`` ``None`` or empty, the new key is encrypted to the
+/// stored public keys (``Chat.add_public_keys``) of ``current_member_ids``
+/// and ``new_member_ids``. The fields after ``public_keys`` up to
+/// ``current_pending_member_ids`` are required; pass them by keyword when
+/// ``public_keys`` is left out.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersChangeParams {
     /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for the updated
-    /// roster.
-    pub(crate) public_keys: Py<PyAny>,
+    /// roster; ``None`` or empty takes them from the stored public keys.
+    pub(crate) public_keys: Option<Py<PyAny>>,
     /// ID of the group conversation.
     pub(crate) conversation_id: String,
     /// IDs of the members being added.
@@ -519,14 +537,14 @@ pub struct GroupMembersChangeParams {
 impl GroupMembersChangeParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (public_keys, conversation_id, new_member_ids, current_member_ids, current_admin_ids, current_pending_member_ids, *, sender_id=None, signing_key_version=None, current_title=None, current_avatar_url=None, current_description=None, current_ttl_msec=None, current_screen_capture_blocking_enabled=None))]
+    #[pyo3(signature = (public_keys=None, conversation_id=None, new_member_ids=None, current_member_ids=None, current_admin_ids=None, current_pending_member_ids=None, *, sender_id=None, signing_key_version=None, current_title=None, current_avatar_url=None, current_description=None, current_ttl_msec=None, current_screen_capture_blocking_enabled=None))]
     pub(crate) fn new(
-        public_keys: Py<PyAny>,
-        conversation_id: String,
-        new_member_ids: Py<PyAny>,
-        current_member_ids: Py<PyAny>,
-        current_admin_ids: Py<PyAny>,
-        current_pending_member_ids: Py<PyAny>,
+        public_keys: Option<Py<PyAny>>,
+        conversation_id: Option<String>,
+        new_member_ids: Option<Py<PyAny>>,
+        current_member_ids: Option<Py<PyAny>>,
+        current_admin_ids: Option<Py<PyAny>>,
+        current_pending_member_ids: Option<Py<PyAny>>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         current_title: Option<String>,
@@ -534,14 +552,17 @@ impl GroupMembersChangeParams {
         current_description: Option<String>,
         current_ttl_msec: Option<i64>,
         current_screen_capture_blocking_enabled: Option<bool>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             public_keys,
-            conversation_id,
-            new_member_ids,
-            current_member_ids,
-            current_admin_ids,
-            current_pending_member_ids,
+            conversation_id: required(conversation_id, "conversation_id")?,
+            new_member_ids: required(new_member_ids, "new_member_ids")?,
+            current_member_ids: required(current_member_ids, "current_member_ids")?,
+            current_admin_ids: required(current_admin_ids, "current_admin_ids")?,
+            current_pending_member_ids: required(
+                current_pending_member_ids,
+                "current_pending_member_ids",
+            )?,
             sender_id,
             signing_key_version,
             current_title,
@@ -549,7 +570,7 @@ impl GroupMembersChangeParams {
             current_description,
             current_ttl_msec,
             current_screen_capture_blocking_enabled,
-        }
+        })
     }
 }
 
@@ -583,10 +604,16 @@ impl GroupMembersChangeParams {
 }
 
 /// Parameters for ``Chat.prepare_group_create``.
+///
+/// With ``public_keys`` ``None`` or empty, the new key is encrypted to the
+/// stored public keys (``Chat.add_public_keys``) of ``member_ids`` and
+/// ``admin_ids``. ``conversation_id``, ``member_ids`` and ``admin_ids`` are
+/// required; pass them by keyword when ``public_keys`` is left out.
 #[pyclass(get_all, set_all)]
 pub struct GroupCreateParams {
-    /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for the new roster.
-    pub(crate) public_keys: Py<PyAny>,
+    /// ``{"user_id", "identity_public_key", "public_key_version"}`` dicts for the new roster;
+    /// ``None`` or empty takes them from the stored public keys.
+    pub(crate) public_keys: Option<Py<PyAny>>,
     /// ID of the group conversation, as the initialize endpoint minted it.
     pub(crate) conversation_id: String,
     /// IDs of the initial members.
@@ -608,27 +635,27 @@ pub struct GroupCreateParams {
 impl GroupCreateParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (public_keys, conversation_id, member_ids, admin_ids, *, sender_id=None, signing_key_version=None, title=None, ttl_msec=None))]
+    #[pyo3(signature = (public_keys=None, conversation_id=None, member_ids=None, admin_ids=None, *, sender_id=None, signing_key_version=None, title=None, ttl_msec=None))]
     pub(crate) fn new(
-        public_keys: Py<PyAny>,
-        conversation_id: String,
-        member_ids: Py<PyAny>,
-        admin_ids: Py<PyAny>,
+        public_keys: Option<Py<PyAny>>,
+        conversation_id: Option<String>,
+        member_ids: Option<Py<PyAny>>,
+        admin_ids: Option<Py<PyAny>>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
         title: Option<String>,
         ttl_msec: Option<i64>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             public_keys,
-            conversation_id,
-            member_ids,
-            admin_ids,
+            conversation_id: required(conversation_id, "conversation_id")?,
+            member_ids: required(member_ids, "member_ids")?,
+            admin_ids: required(admin_ids, "admin_ids")?,
             sender_id,
             signing_key_version,
             title,
             ttl_msec,
-        }
+        })
     }
 }
 
@@ -721,40 +748,49 @@ pub(crate) fn apply_identity(
 /// the group has. Each one set is encrypted under the new key and signed with
 /// the removal as a key-rotation re-encryption, which recipients' decrypt
 /// drops rather than show as a change.
+///
+/// With ``public_keys`` ``None`` or empty, the members who stay are
+/// ``remaining_member_ids``, yours included, and the new key is encrypted to
+/// their stored public keys (``Chat.add_public_keys``). ``conversation_id``
+/// and ``user_ids`` are required; pass them by keyword when ``public_keys``
+/// is left out.
 #[pyclass(get_all, set_all)]
 pub struct GroupMembersRemoveParams {
-    pub(crate) public_keys: Py<PyAny>,
+    pub(crate) public_keys: Option<Py<PyAny>>,
     pub(crate) conversation_id: String,
     pub(crate) user_ids: Py<PyAny>,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) sender_id: Option<String>,
     pub(crate) signing_key_version: Option<String>,
+    pub(crate) remaining_member_ids: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl GroupMembersRemoveParams {
     #[new]
-    #[pyo3(signature = (public_keys, conversation_id, user_ids, *, title=None, description=None, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (public_keys=None, conversation_id=None, user_ids=None, *, title=None, description=None, sender_id=None, signing_key_version=None, remaining_member_ids=None))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        public_keys: Py<PyAny>,
-        conversation_id: String,
-        user_ids: Py<PyAny>,
+        public_keys: Option<Py<PyAny>>,
+        conversation_id: Option<String>,
+        user_ids: Option<Py<PyAny>>,
         title: Option<String>,
         description: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
-    ) -> Self {
-        Self {
+        remaining_member_ids: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
             public_keys,
-            conversation_id,
-            user_ids,
+            conversation_id: required(conversation_id, "conversation_id")?,
+            user_ids: required(user_ids, "user_ids")?,
             title,
             description,
             sender_id,
             signing_key_version,
-        }
+            remaining_member_ids,
+        })
     }
 }
 
@@ -776,6 +812,8 @@ impl GroupMembersRemoveParams {
             self.sender_id.clone(),
             self.signing_key_version.clone(),
         );
+        params.remaining_member_ids =
+            optional_user_ids_field(py, &self.remaining_member_ids, "remaining_member_ids")?;
         Ok(params)
     }
 }

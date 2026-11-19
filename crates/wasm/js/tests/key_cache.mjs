@@ -20,7 +20,7 @@ async function caching(newChat, userId) {
 }
 
 /** The key version `sender` encrypts under in `conversationId` when the call passes no key. */
-function sendVersion(sender, conversationId) {
+export function sendVersion(sender, conversationId) {
   return sender.chat.encryptMessage({ conversationId, text: "hello" }).conversationKeyVersion;
 }
 
@@ -63,7 +63,7 @@ function avatarSigns(signer, prepared, version) {
   );
 }
 
-function free(...parties) {
+export function free(...parties) {
   for (const { chat } of parties) chat.free();
 }
 

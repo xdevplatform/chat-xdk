@@ -306,7 +306,6 @@ class TestParams(unittest.TestCase):
             lambda: EncryptReplyParams("conv-1"),
             lambda: EncryptReactionParams(None),
             lambda: EncryptEditParams(None),
-            lambda: ConversationKeyChangeParams(),
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),

@@ -100,6 +100,62 @@ and `FileDecryptor` the key at the version the event names. So
 map, and `GroupAvatarChangeParams` without a key version. A value that is
 passed is used as is.
 
+## Other users' public keys
+
+`DecryptEvents` verifies each event with its sender's signing key, and the
+four prepare calls that make a conversation key (`PrepareGroupCreate`,
+`PrepareGroupMembersChange`, `PrepareGroupMembersRemove`,
+`PrepareConversationKeyChange`) encrypt it to each member's identity key.
+Both are in the records `GET /2/users/{id}/public_keys` returns. Set
+`ResolvePublicKeys` to a hook that fetches those records, and the `Async`
+form of each of those calls gets the keys it is missing by itself:
+
+```csharp
+chat.ResolvePublicKeys = async userIds =>
+{
+    var records = new Dictionary<string, IReadOnlyList<PublicKeyRecord>>();
+    foreach (var userId in userIds)
+    {
+        // The "data" array of GET /2/users/{id}/public_keys, fetched with
+        // your X API client.
+        JsonElement data = await FetchPublicKeysAsync(userId);
+        records[userId] = data.Deserialize<List<PublicKeyRecord>>()!;
+    }
+    return records;
+};
+
+// No signing keys passed: the chat calls the hook for the users whose keys
+// the page is missing, stores what it returns, and decrypts once more.
+var page = await chat.DecryptEventsAsync(new DecryptEventsParams(rawEventB64List));
+
+// No public keys passed: the chat calls the hook for the members it has no
+// stored keys for, then encrypts the new key to the stored keys.
+var created = await chat.PrepareGroupCreateAsync(
+    new GroupCreateParams(groupId, memberIds, adminIds));
+```
+
+- Only `DecryptEventsAsync`, `PrepareConversationKeyChangeAsync`,
+  `PrepareGroupCreateAsync`, `PrepareGroupMembersChangeAsync` and
+  `PrepareGroupMembersRemoveAsync` call the hook, at most once per call. An
+  exception it throws is thrown by that call. The synchronous methods never
+  call it.
+- Setting a hook turns the key cache on (`SetCacheKeys(true)`).
+- `page.MissingSigningKeys` lists, by event index, the user id and key
+  version of each signing key the page still lacks. A lookup that did not
+  bring its key is not repeated for a minute, so the hook is not called with
+  every page for a key it cannot find.
+- Without a hook, do the same by hand: `chat.MissingPublicKeys(page)` returns
+  the users to fetch, `chat.AddPublicKeys(records)` stores their records, and
+  a second `DecryptEvents` reads them.
+- With no `PublicKeys`, the prepare calls, synchronous or `Async`, read the
+  stored keys of `MemberIds` and `AdminIds` (create), `CurrentMemberIds` and
+  `NewMemberIds` (members change), `RemainingMemberIds` (members remove), and
+  `MemberIds` or the two users of a one-to-one `ConversationId` (key change).
+  A member with no stored key fails the call with a `ChatXdkException` of
+  kind `InvalidInput` that names the member.
+- A call that passes `SigningKeys` or `PublicKeys` uses them as is and never
+  calls the hook.
+
 Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatXdkUtilities`**.
 
 ## API

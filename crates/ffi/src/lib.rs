@@ -30,9 +30,10 @@ use chat_xdk_core::{
     GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
     GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
     GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
-    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, PublicKeyInput,
-    QuickReply, ScreenCaptureChange, ScreenCaptureParams, SetIdentityParams, SigningKeyEntry,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, KeyChangeCall,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, MissingSigningKey, PublicKeyInput, PublicKeyRecord, QuickReply,
+    ScreenCaptureChange, ScreenCaptureParams, SetIdentityParams, SigningKeyEntry,
 };
 
 /// The version of this C ABI: the functions and the shapes of their
@@ -214,6 +215,29 @@ fn parse_signing_keys(json: &str) -> Result<Vec<SigningKeyEntry>, String> {
         return Ok(Vec::new());
     }
     serde_json::from_str(trimmed).map_err(|e| format!("Invalid signing keys JSON: {}", e))
+}
+
+/// Parse a JSON object keyed by string passed across the FFI boundary.
+///
+/// `null` or an empty string yields an empty map. Anything else that does
+/// not parse is a caller error, whose message names the document as `what`.
+fn parse_keyed<T: serde::de::DeserializeOwned>(
+    json: &str,
+    what: &str,
+) -> Result<HashMap<String, T>, String> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(HashMap::new());
+    }
+    serde_json::from_str(trimmed).map_err(|e| format!("Invalid {} JSON: {}", what, e))
+}
+
+/// A success result whose `data` is `user_ids` as a JSON array of strings.
+fn ok_user_ids(user_ids: &[String]) -> FfiResult {
+    match serde_json::to_string(user_ids) {
+        Ok(json) => ok_data(&json),
+        Err(e) => internal_error(e),
+    }
 }
 
 // Stateless utilities (same behavior as `chat_xdk_core::utils`)
@@ -806,6 +830,86 @@ pub extern "C" fn chat_xdk_add_signing_keys(
         };
         h.inner.add_signing_keys(&signing_keys);
         ok_void()
+    })
+}
+
+/// Add users' public keys to the stored signing keys, as
+/// `chat_xdk_add_signing_keys` adds entries.
+///
+/// `records_json` is a JSON object that maps each user id to the records
+/// `GET /2/users/{id}/public_keys` returns in `data` for that user:
+/// `{"12345": [{"public_key_version", "public_key", "signing_public_key",
+/// "identity_public_key_signature"}, ...], ...}`.
+/// A record is read as the X API sends it: `public_key_version` may be a
+/// string or a number, a field may carry its camelCase name, and any other
+/// field, such as `juicebox_config`, is ignored. A record without a key
+/// version, an identity key or a signing key is left out. An empty string
+/// or `null` adds nothing, and so does a user whose records are `null` or
+/// `[]`.
+///
+/// The decrypt calls verify with the stored keys when they are passed no
+/// signing keys, and the four prepare calls that encrypt a new conversation
+/// key (a conversation-key change, a group create, a member add and a
+/// member removal) read their members' identity keys from them when they
+/// are passed no `public_keys`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_add_public_keys(
+    handle: *const ChatHandle,
+    records_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let by_user: HashMap<String, Option<Vec<PublicKeyRecord>>> =
+            match parse_keyed(try_str!(records_json), "public key records") {
+                Ok(by_user) => by_user,
+                Err(e) => return err_result(&e),
+            };
+        let records: HashMap<String, Vec<PublicKeyRecord>> = by_user
+            .into_iter()
+            .map(|(user_id, records)| (user_id, records.unwrap_or_default()))
+            .collect();
+        h.inner.add_public_keys(&records);
+        ok_void()
+    })
+}
+
+/// The users whose public keys a `chat_xdk_decrypt_events` result was
+/// missing.
+///
+/// `missing_signing_keys_json` is the result's `missing_signing_keys`
+/// object, keyed by event index: `{"0": {"user_id": "...",
+/// "public_key_version": "..."}, ...}`. An empty string or `null` is an
+/// empty object.
+///
+/// Returns in `data` a JSON array of user id strings, each user once, in
+/// batch order (`[]` when none). Fetch their keys
+/// (`GET /2/users/{id}/public_keys`), add them with
+/// `chat_xdk_add_public_keys`, and decrypt the batch again.
+///
+/// A key this call returned a user for is not asked for again for a minute,
+/// so a lookup that brought no key is not repeated with every batch. A key
+/// that arrives is no longer missing, and a key version not asked for
+/// before is asked for at once.
+#[no_mangle]
+pub extern "C" fn chat_xdk_missing_public_keys(
+    handle: *const ChatHandle,
+    missing_signing_keys_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let missing: HashMap<String, MissingSigningKey> =
+            match parse_keyed(try_str!(missing_signing_keys_json), "missing signing keys") {
+                Ok(missing) => missing,
+                Err(e) => return err_result(&e),
+            };
+        let missing = bindings::missing_signing_keys_in_order(missing);
+        ok_user_ids(&h.inner.missing_public_keys_among(&missing))
     })
 }
 

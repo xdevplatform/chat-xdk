@@ -97,6 +97,58 @@ and `fileDecryptor` the key at the version the event names. So
 map, and `GroupAvatarChangeParams` without a key version. A value that is
 passed is used as is.
 
+## Other users' public keys
+
+`decryptEvents` verifies each event with its sender's signing key, and the
+four prepare calls that make a conversation key (`prepareGroupCreate`,
+`prepareGroupMembersChange`, `prepareGroupMembersRemove`,
+`prepareConversationKeyChange`) encrypt it to each member's identity key.
+Both are in the records `GET /2/users/{id}/public_keys` returns. Set a
+resolver that fetches those records, and the chat gets the keys it is
+missing by itself:
+
+```java
+ObjectMapper mapper = new ObjectMapper();
+chat.setResolvePublicKeys(userIds -> {
+    Map<String, List<PublicKeyRecord>> records = new HashMap<>();
+    for (String userId : userIds) {
+        // The "data" array of GET /2/users/{id}/public_keys, fetched with
+        // your X API client.
+        JsonNode data = fetchPublicKeys(userId);
+        records.put(userId, List.of(mapper.treeToValue(data, PublicKeyRecord[].class)));
+    }
+    return records;
+});
+
+// No signing keys passed: the chat calls the resolver for the users whose
+// keys the page is missing, stores what it returns, and decrypts once more.
+DecryptEventsResult page = chat.decryptEvents(new DecryptEventsParams(rawEventB64List));
+
+// No public keys passed: the chat calls the resolver for the members it has
+// no stored keys for, then encrypts the new key to the stored keys.
+PreparedConversationChange created =
+        chat.prepareGroupCreate(new GroupCreateParams(groupId, memberIds, adminIds));
+```
+
+- Setting a resolver turns the key cache on (`setCacheKeys(true)`). The
+  resolver runs on the calling thread, at most once per call, and an
+  exception it throws is thrown by the decrypt or prepare call.
+- `page.missingSigningKeys` lists, by event index, the user id and key
+  version of each signing key the page still lacks. A lookup that did not
+  bring its key is not repeated for a minute, so the resolver is not called
+  with every page for a key it cannot find.
+- Without a resolver, do the same by hand: `chat.missingPublicKeys(page)`
+  returns the users to fetch, `chat.addPublicKeys(records)` stores their
+  records, and a second `decryptEvents` reads them.
+- With no `publicKeys`, the prepare calls read the stored keys of
+  `memberIds` and `adminIds` (create), `currentMemberIds` and `newMemberIds`
+  (members change), `remainingMemberIds` (members remove), and `memberIds`
+  or the two users of a one-to-one `conversationId` (key change). A member
+  with no stored key fails the call with an `INVALID_INPUT` error that names
+  the member.
+- A call that passes `signingKeys` or `publicKeys` uses them as is and never
+  calls the resolver.
+
 Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
 
 ## API

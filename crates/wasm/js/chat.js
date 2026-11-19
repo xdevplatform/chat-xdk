@@ -210,6 +210,23 @@ function keepKeyOutOfJson(prepared) {
   return prepared;
 }
 
+/** Whether `list`, an optional array of a params object, passes nothing. */
+function passesNone(list) {
+  return list == null || (Array.isArray(list) && list.length === 0);
+}
+
+/**
+ * `resolvePublicKeys` as a hook, or null for none: a function, or `null` or
+ * `undefined`. Anything else throws.
+ */
+function publicKeysHook(resolvePublicKeys) {
+  if (resolvePublicKeys == null) return null;
+  if (typeof resolvePublicKeys !== "function") {
+    throw new ChatXdkError("invalidInput", "resolvePublicKeys must be a function, or null to remove it");
+  }
+  return resolvePublicKeys;
+}
+
 // ChatWithJuicebox — JS wrapper that owns both a WasmChat and a Juicebox client
 
 /**
@@ -235,6 +252,10 @@ export class ChatWithJuicebox {
   // getter. Called before every Juicebox network operation so sequential use
   // of multiple instances presents the right tokens (last-armed wins).
   #armAuthTokenHook;
+  // The hook that fetches users' public keys, or null. Only the Async
+  // methods call it; the engine never does, and remembers on its own which
+  // lookups not to repeat.
+  #resolvePublicKeys = null;
 
   constructor(
     wasmChat,
@@ -394,6 +415,8 @@ export class ChatWithJuicebox {
   setCacheKeys(enabled) { return this.#inner.setCacheKeys(enabled); }
   setSigningKeys(signingKeys) { return this.#inner.setSigningKeys(signingKeys); }
   addSigningKeys(signingKeys) { return this.#inner.addSigningKeys(signingKeys); }
+  addPublicKeys(records) { return this.#inner.addPublicKeys(records); }
+  missingPublicKeys(result) { return this.#inner.missingPublicKeys(result); }
   getPublicKeys() { return this.#inner.getPublicKeys(); }
   getPublicKeyFingerprint() { return this.#inner.getPublicKeyFingerprint(); }
   isUnlocked() { return this.#inner.isUnlocked(); }
@@ -440,6 +463,80 @@ export class ChatWithJuicebox {
   prepareMessageTtlChange(params) { return this.#inner.prepareMessageTtlChange(params); }
   prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
   prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
+
+  // The public-key hook (handled in this JS layer)
+
+  /**
+   * Set the hook that fetches users' public keys, or remove it with `null`:
+   * a function that takes user ids and returns, or resolves to, each user's
+   * records from `GET /2/users/{id}/public_keys`, by user id. A user it has
+   * nothing for is left out.
+   *
+   * `decryptEventsAsync` and the prepare methods ending in `Async` call it
+   * for the keys they are missing; no other method does. Setting a hook
+   * turns the key cache on (`setCacheKeys`); removing it leaves the cache as
+   * it is.
+   */
+  setResolvePublicKeys(resolvePublicKeys) {
+    this.#resolvePublicKeys = publicKeysHook(resolvePublicKeys);
+    if (this.#resolvePublicKeys) this.#inner.setCacheKeys(true);
+  }
+
+  /**
+   * `decryptEvents`, fetching the public keys the batch is missing through
+   * the hook: when a hook is set and `params` passes no signing keys, the
+   * hook is called once for `missingPublicKeys` of the result, what it
+   * returns is added with `addPublicKeys`, and the batch is decrypted once
+   * more. What the hook throws rejects the promise.
+   */
+  async decryptEventsAsync(params) {
+    const result = this.#inner.decryptEvents(params);
+    const resolvePublicKeys = this.#resolvePublicKeys;
+    // The hook fills the stored keys, which only a call that is passed no
+    // signing keys verifies with.
+    if (!resolvePublicKeys || !passesNone(params.signingKeys)) return result;
+    const missing = this.#inner.missingPublicKeys(result);
+    if (missing.length === 0) return result;
+    this.#inner.addPublicKeys(await resolvePublicKeys(missing));
+    return this.#inner.decryptEvents(params);
+  }
+
+  /**
+   * Before the prepare call `call` runs with `params`: when a hook is set
+   * and `params` passes no public keys, fetch through the hook the keys of
+   * the members the call would encrypt to who have none stored, and add
+   * them.
+   */
+  async #resolvePublicKeysFor(call, params) {
+    const resolvePublicKeys = this.#resolvePublicKeys;
+    if (!resolvePublicKeys || !passesNone(params?.publicKeys)) return;
+    const missing = this.#inner.missingPublicKeysFor(call, params);
+    if (missing.length > 0) this.#inner.addPublicKeys(await resolvePublicKeys(missing));
+  }
+
+  /** `prepareConversationKeyChange`, fetching the public keys it is missing through the hook. */
+  async prepareConversationKeyChangeAsync(params) {
+    await this.#resolvePublicKeysFor("conversationKeyChange", params);
+    return this.prepareConversationKeyChange(params);
+  }
+
+  /** `prepareGroupCreate`, fetching the public keys it is missing through the hook. */
+  async prepareGroupCreateAsync(params) {
+    await this.#resolvePublicKeysFor("groupCreate", params);
+    return this.prepareGroupCreate(params);
+  }
+
+  /** `prepareGroupMembersChange`, fetching the public keys it is missing through the hook. */
+  async prepareGroupMembersChangeAsync(params) {
+    await this.#resolvePublicKeysFor("groupMembersChange", params);
+    return this.prepareGroupMembersChange(params);
+  }
+
+  /** `prepareGroupMembersRemove`, fetching the public keys it is missing through the hook. */
+  async prepareGroupMembersRemoveAsync(params) {
+    await this.#resolvePublicKeysFor("groupMembersRemove", params);
+    return this.prepareGroupMembersRemove(params);
+  }
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`) and
@@ -632,6 +729,10 @@ async function readCappedBody(response, maxBytes) {
  * @param {Function} [options.getAuthToken] - Async function to get auth token for a realm,
  *                                            required to use Juicebox
  *                                            Signature: (realmId: string) => Promise<string>
+ * @param {Function} [options.resolvePublicKeys] - Hook that fetches users' public keys, as
+ *                                                 passed to setResolvePublicKeys()
+ *                                                 Signature: (userIds: string[]) => records by
+ *                                                 user id, or a Promise of them
  * @returns {Promise<ChatWithJuicebox>} Initialized chat instance
  *
  * @example
@@ -675,6 +776,7 @@ export async function newChat(ChatClass, options = {}) {
   ) {
     throw new ChatXdkError('invalidInput', 'getAuthToken must be an async function');
   }
+  const resolvePublicKeys = publicKeysHook(options.resolvePublicKeys);
 
   const wasmModule = await initWasmModule();
   const juicebox = getAuthToken ? await juiceboxRuntime(options, getAuthToken) : null;
@@ -693,7 +795,7 @@ export async function newChat(ChatClass, options = {}) {
     numGuesses = maxGuessCount;
   }
 
-  return new ChatClass(
+  const chat = new ChatClass(
     new wasmModule.Chat(),
     juiceboxClient,
     numGuesses,
@@ -701,6 +803,8 @@ export async function newChat(ChatClass, options = {}) {
     juicebox?.Client ?? null,
     juicebox?.armAuthTokenHook ?? null,
   );
+  if (resolvePublicKeys) chat.setResolvePublicKeys(resolvePublicKeys);
+  return chat;
 }
 
 /**

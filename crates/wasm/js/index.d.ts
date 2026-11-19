@@ -284,12 +284,25 @@ export interface RejectedSigningKey {
 }
 
 /**
+ * A signing key a decryptEvents call did not have: an event's signature
+ * names it, and it was not among the signing keys the call verified with.
+ * Fetch the user's public keys (`GET /2/users/{id}/public_keys`) and add
+ * them with addPublicKeys.
+ */
+export interface MissingSigningKey {
+  /** The user who sent the event, whose signing key it is. */
+  userId: string;
+  /** The version of that user's key the signature names. */
+  publicKeyVersion: string;
+}
+
+/**
  * Result from decryptEvents batch API.
  *
- * `errors`, `unverifiedKeyChanges` and `undecryptableKeyChanges` are keyed by
- * an event's index in the batch, as a string, and `rejectedSigningKeys` by a
- * signing key's index, as a string. Each is empty when it has nothing to
- * report.
+ * `errors`, `unverifiedKeyChanges`, `undecryptableKeyChanges` and
+ * `missingSigningKeys` are keyed by an event's index in the batch, as a
+ * string, and `rejectedSigningKeys` by a signing key's index, as a string.
+ * Each is empty when it has nothing to report.
  */
 export interface DecryptEventsResult {
   /** The events that decrypted, in batch order, of every event type. */
@@ -321,7 +334,59 @@ export interface DecryptEventsResult {
    * signed with such a key does not verify.
    */
   rejectedSigningKeys: { [index: string]: RejectedSigningKey };
+  /**
+   * Event index → signing key, for each signed event, of any type, whose
+   * sender's signing key at the version it names was not among the signing
+   * keys the call verified with. Under the default reject-unverified policy
+   * such an event is in `errors`; otherwise it is in `events`, unverified. A
+   * key change listed here is also in `unverifiedKeyChanges` when this
+   * identity decrypted its key. missingPublicKeys reads the users to fetch
+   * keys for from this map.
+   */
+  missingSigningKeys: { [index: string]: MissingSigningKey };
 }
+
+/**
+ * One of a user's public keys, as the X API returns it in the `data` of
+ * `GET /2/users/{id}/public_keys`: pass the API's records as they are.
+ *
+ * Each of the four values is read under its snake_case name or the
+ * camelCase name the X API client libraries give it, the key version as a
+ * string or a number, and any other field, such as `juicebox_config`, is
+ * ignored. addPublicKeys leaves out a record without a key version, an
+ * identity key or a signing key.
+ */
+export interface PublicKeyRecord {
+  /** The version of this key. */
+  public_key_version?: string | number | null;
+  /** The user's identity public key, base64. */
+  public_key?: string | null;
+  /** The user's signing public key, base64. */
+  signing_public_key?: string | null;
+  /** The signing key's signature over the identity key, base64: what binds the two. */
+  identity_public_key_signature?: string | null;
+  /** `public_key_version` under its camelCase name. */
+  publicKeyVersion?: string | number | null;
+  /** `public_key` under its camelCase name. */
+  publicKey?: string | null;
+  /** `signing_public_key` under its camelCase name. */
+  signingPublicKey?: string | null;
+  /** `identity_public_key_signature` under its camelCase name. */
+  identityPublicKeySignature?: string | null;
+  /** Any other field of the API's record; ignored. */
+  [field: string]: any;
+}
+
+/** Users' public keys: each user's records, by user id. */
+export type PublicKeyRecords = { [userId: string]: PublicKeyRecord[] };
+
+/**
+ * A hook that fetches users' public keys: given user ids, it returns, or
+ * resolves to, each user's records from `GET /2/users/{id}/public_keys`, by
+ * user id. A user it has nothing for is left out. What it throws reaches the
+ * caller of the method that called it.
+ */
+export type ResolvePublicKeys = (userIds: string[]) => PublicKeyRecords | Promise<PublicKeyRecords>;
 
 /**
  * Image dimensions returned by detectImageDimensions.
@@ -732,9 +797,10 @@ export interface GroupMembersRemoveParams {
   /**
    * Identity public keys of the members who stay, yours included; the new key
    * is encrypted for them, and a member left out can't read what the group
-   * sends under it.
+   * sends under it. Omit it, or pass none, to take them from the stored
+   * public keys (addPublicKeys) of `remainingMemberIds`.
    */
-  publicKeys: PublicKeyInput[];
+  publicKeys?: PublicKeyInput[] | null;
   /** ID of the group conversation. */
   conversationId: string;
   /** User IDs being removed. */
@@ -751,6 +817,12 @@ export interface GroupMembersRemoveParams {
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
+  /**
+   * User IDs of the members who stay, yours included: read only when
+   * `publicKeys` passes none, to take each one's key from the stored public
+   * keys.
+   */
+  remainingMemberIds?: string[] | null;
 }
 
 /** Parameters for prepareGroupLeave. Leave does not rotate the conversation key. */
@@ -912,8 +984,13 @@ export interface ScreenCaptureParams {
  * Parameters for prepareConversationKeyChange.
  */
 export interface ConversationKeyChangeParams {
-  /** Identity public keys for every participant the new key is encrypted for. */
-  publicKeys: PublicKeyInput[];
+  /**
+   * Identity public keys for every participant the new key is encrypted for.
+   * Omit it, or pass none, to take them from the stored public keys
+   * (addPublicKeys) of `memberIds`, or, for a one-to-one `conversationId`,
+   * of its two users.
+   */
+  publicKeys?: PublicKeyInput[] | null;
   /** User ID of the sender signing the change; resolves from the session identity (setIdentity) when omitted. */
   senderId?: string | null;
   /** Version of the signing key used to sign the change; resolves from the session identity when omitted. */
@@ -924,6 +1001,12 @@ export interface ConversationKeyChangeParams {
    * group key rotation.
    */
   conversationId?: string | null;
+  /**
+   * User IDs of every participant the new key is encrypted for, yours
+   * included: read only when `publicKeys` passes none, to take each one's
+   * key from the stored public keys.
+   */
+  memberIds?: string[] | null;
 }
 
 /**
@@ -936,8 +1019,12 @@ export interface ConversationKeyChangeParams {
  * produces identical signed bytes.
  */
 export interface GroupMembersChangeParams {
-  /** Identity public keys for every participant of the updated roster. */
-  publicKeys: PublicKeyInput[];
+  /**
+   * Identity public keys for every participant of the updated roster. Omit
+   * it, or pass none, to take them from the stored public keys
+   * (addPublicKeys) of `currentMemberIds` and `newMemberIds`.
+   */
+  publicKeys?: PublicKeyInput[] | null;
   /** ID of the group conversation being changed. */
   conversationId: string;
   /** User IDs being added to the group. */
@@ -973,8 +1060,12 @@ export interface GroupMembersChangeParams {
  * so every binding produces identical signed bytes.
  */
 export interface GroupCreateParams {
-  /** Identity public keys for every participant of the new group. */
-  publicKeys: PublicKeyInput[];
+  /**
+   * Identity public keys for every participant of the new group. Omit it,
+   * or pass none, to take them from the stored public keys (addPublicKeys)
+   * of `memberIds` and `adminIds`.
+   */
+  publicKeys?: PublicKeyInput[] | null;
   /** ID of the new group conversation (the g-prefixed id minted by the initialize endpoint). */
   conversationId: string;
   /** User IDs of the group's members. */
@@ -1007,7 +1098,8 @@ export interface DecryptEventParams {
   conversationKeys?: ConversationKeyMap | null;
   /**
    * Signing keys to verify the event with; the keys stored via
-   * setSigningKeys and addSigningKeys are used when omitted or empty.
+   * setSigningKeys, addSigningKeys and addPublicKeys are used when omitted
+   * or empty.
    */
   signingKeys?: SigningKeyEntry[] | null;
 }
@@ -1023,10 +1115,12 @@ export interface DecryptEventsParams {
   events: string[];
   /**
    * Signing keys for all participants, the members who signed the batch's key
-   * changes included; the keys stored via setSigningKeys and addSigningKeys
-   * are used when omitted or empty. A key change whose signature does not
-   * verify is in the result's `unverifiedKeyChanges`, and a signing key whose
-   * identity binding does not verify in its `rejectedSigningKeys`.
+   * changes included; the keys stored via setSigningKeys, addSigningKeys and
+   * addPublicKeys are used when omitted or empty. A key change whose
+   * signature does not verify is in the result's `unverifiedKeyChanges`, a
+   * signing key whose identity binding does not verify in its
+   * `rejectedSigningKeys`, and an event whose sender's signing key was not
+   * among them in its `missingSigningKeys`.
    */
   signingKeys?: SigningKeyEntry[] | null;
 }
@@ -1422,6 +1516,26 @@ export interface CreateChatOptions {
    * }
    */
   getAuthToken?: (realmId: string) => Promise<string>;
+
+  /**
+   * Hook that fetches users' public keys, as passed to
+   * `setResolvePublicKeys`: `decryptEventsAsync` and the prepare methods
+   * ending in `Async` call it for the keys they are missing. Setting it
+   * turns the key cache on (`setCacheKeys`).
+   *
+   * @example
+   * async (userIds) => {
+   *   const records = {};
+   *   for (const userId of userIds) {
+   *     const response = await fetch(`https://api.x.com/2/users/${userId}/public_keys`, {
+   *       headers: { Authorization: `Bearer ${userToken}` }
+   *     });
+   *     if (response.ok) records[userId] = (await response.json()).data;
+   *   }
+   *   return records;
+   * }
+   */
+  resolvePublicKeys?: ResolvePublicKeys | null;
 }
 
 /**
@@ -1511,9 +1625,10 @@ interface ChatCrypto {
 
   /**
    * Store signing keys to use when a decrypt call omits its `signingKeys`
-   * argument. Only this call and addSigningKeys populate the store — a key
-   * carried inside an event is never trusted for verification. Each call
-   * replaces the previous set; addSigningKeys keeps it.
+   * argument. Only this call, addSigningKeys and addPublicKeys populate the
+   * store — a key carried inside an event is never trusted for
+   * verification. Each call replaces the previous set; addSigningKeys and
+   * addPublicKeys keep it.
    */
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
 
@@ -1523,6 +1638,19 @@ interface ChatCrypto {
    * `publicKeyVersion`, and any other is added.
    */
   addSigningKeys(signingKeys: SigningKeyEntry[]): void;
+
+  /**
+   * Add users' public keys to the store setSigningKeys sets, as
+   * addSigningKeys adds entries: `records` holds, by user id, the records
+   * `GET /2/users/{id}/public_keys` returns for that user, as the X API
+   * sends them. `undefined` or `null` adds nothing.
+   *
+   * The decrypt calls verify with the stored keys when they are passed no
+   * signing keys, and prepareConversationKeyChange, prepareGroupCreate,
+   * prepareGroupMembersChange and prepareGroupMembersRemove read their
+   * members' identity keys from them when they are passed no `publicKeys`.
+   */
+  addPublicKeys(records: PublicKeyRecords | null | undefined): void;
 
   /** Get current public keys. */
   getPublicKeys(): PublicKeys;
@@ -1559,11 +1687,12 @@ interface ChatCrypto {
    * 3. Decrypts the message using the appropriate conversation key
    *
    * Under the default reject-unverified policy, no signing keys (passed or
-   * stored via `setSigningKeys` or `addSigningKeys`) makes every signed
-   * event land in `errors`; only after `setRejectUnverified(false)` are such
-   * events returned with `verified: false`. A member removal's title and
-   * description, re-encrypted under the new key, aren't changes: they land
-   * in `errors` under either policy.
+   * stored via `setSigningKeys`, `addSigningKeys` or `addPublicKeys`) makes
+   * every signed event land in `errors`; only after
+   * `setRejectUnverified(false)` are such events returned with
+   * `verified: false`. A member removal's title and description,
+   * re-encrypted under the new key, aren't changes: they land in `errors`
+   * under either policy.
    *
    * The signing keys must include those of every member who signed a key
    * change in the batch, whether or not that member sent a message in it.
@@ -1576,6 +1705,12 @@ interface ChatCrypto {
    * chat could not decrypt, and `rejectedSigningKeys` each signing key left
    * out because its identity binding does not verify.
    *
+   * `missingSigningKeys` holds each signed event whose sender's signing key
+   * the call did not have. missingPublicKeys lists those senders: fetch
+   * their public keys, add them with addPublicKeys, and decrypt the batch
+   * again. decryptEventsAsync does all of that through the public-key hook
+   * (setResolvePublicKeys); this method never calls the hook.
+   *
    * For a batch whose events belong to more than one conversation, read
    * `conversationKeys.keysByConversation` and
    * `conversationKeys.latestVersions` by conversation id:
@@ -1587,11 +1722,11 @@ interface ChatCrypto {
    * Decrypt a raw webhook event payload.
    *
    * Under the default reject-unverified policy, no signing keys (passed or
-   * stored via `setSigningKeys` or `addSigningKeys`) makes every signed
-   * event throw; only after `setRejectUnverified(false)` are such events
-   * returned with `verified: false`. A member removal's title and
-   * description, re-encrypted under the new key, aren't changes: they throw
-   * a `ChatXdkError` of kind `'invalidInput'` under either policy.
+   * stored via `setSigningKeys`, `addSigningKeys` or `addPublicKeys`) makes
+   * every signed event throw; only after `setRejectUnverified(false)` are
+   * such events returned with `verified: false`. A member removal's title
+   * and description, re-encrypted under the new key, aren't changes: they
+   * throw a `ChatXdkError` of kind `'invalidInput'` under either policy.
    *
    * A key change that verifies is recorded as decryptEvents records it: its
    * version is the conversation's newest verified one unless a newer is
@@ -1729,6 +1864,17 @@ interface ChatCrypto {
    * derived from the two participants); pass the existing id for a group key
    * rotation.
    *
+   * With params.publicKeys omitted, null or empty, the participants' identity
+   * keys come from the stored public keys (addPublicKeys): of
+   * params.memberIds, the user ids of every participant, yours included, or
+   * of the two users of a one-to-one params.conversationId. Only a stored
+   * key whose identity binding verifies is used, and the call throws a
+   * `ChatXdkError` of kind `invalidInput` naming each participant who has
+   * none. prepareGroupCreate, prepareGroupMembersChange and
+   * prepareGroupMembersRemove read the store the same way for the members
+   * their params name. None of the four calls the public-key hook
+   * (setResolvePublicKeys): the methods ending in `Async` do.
+   *
    * While the key cache is on (setCacheKeys), the call caches the new key as
    * the conversation's newest key, as every prepare call that makes a
    * conversation key does.
@@ -1749,6 +1895,10 @@ interface ChatCrypto {
    * key cache is on (setCacheKeys), the call caches the new key as the
    * conversation's newest key.
    *
+   * With params.publicKeys omitted, null or empty, the identity keys are the
+   * stored public keys (addPublicKeys) of params.currentMemberIds and
+   * params.newMemberIds.
+   *
    * @returns PreparedConversationChange with two action signatures (the
    * conversation-key change and the member add), and `encryptedTitle` and
    * `encryptedDescription` for a title and description the params set
@@ -1768,6 +1918,10 @@ interface ChatCrypto {
    * prepareGroupAvatarChange. While the key cache is on (setCacheKeys), the
    * call caches the new key as the conversation's newest key.
    *
+   * With params.publicKeys omitted, null or empty, the identity keys are the
+   * stored public keys (addPublicKeys) of params.memberIds and
+   * params.adminIds.
+   *
    * @returns PreparedConversationChange with two action signatures (the
    * conversation-key change and the group create), and `encryptedTitle` for a
    * title the params set: the `group_name` the create request sends
@@ -1779,6 +1933,10 @@ interface ChatCrypto {
    * members who stay (`publicKeys`). While the key cache is on
    * (setCacheKeys), the call caches the new key as the conversation's newest
    * key.
+   *
+   * With params.publicKeys omitted, null or empty, the identity keys are the
+   * stored public keys (addPublicKeys) of params.remainingMemberIds, the
+   * user ids of the members who stay.
    *
    * @returns PreparedConversationChange with the new key and the action
    * signatures: the removal, a title and a description change for each one
@@ -1838,12 +1996,15 @@ interface ChatCrypto {
 declare class Chat implements ChatCrypto {
   constructor();
 
+  missingPublicKeys(result: DecryptEventsResult): string[];
+
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   addSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  addPublicKeys(records: PublicKeyRecords | null | undefined): void;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1924,12 +2085,83 @@ export declare class ChatWithJuicebox implements ChatCrypto {
    */
   updateConfig(juiceboxConfig: string): void;
 
+  /**
+   * Set the hook that fetches users' public keys, or remove it with `null`.
+   * With a hook set:
+   *
+   * - decryptEventsAsync, when it is passed no signing keys, calls the hook
+   *   for missingPublicKeys of its result, adds what it returns, and
+   *   decrypts the batch once more.
+   * - prepareConversationKeyChangeAsync, prepareGroupCreateAsync,
+   *   prepareGroupMembersChangeAsync and prepareGroupMembersRemoveAsync,
+   *   when they are passed no `publicKeys`, call it for the members they
+   *   encrypt to who have no stored key, and add what it returns.
+   *
+   * Only those five methods call the hook: every other method, the ones
+   * they are named after included, never does. The hook is not called again
+   * within a minute for a key it did not bring.
+   *
+   * Setting a hook turns the key cache on (setCacheKeys); turn it off again
+   * afterwards to keep it off. Removing the hook leaves the cache as it is.
+   * Throws a `ChatXdkError` of kind `invalidInput` for anything but a
+   * function or `null`.
+   */
+  setResolvePublicKeys(resolvePublicKeys: ResolvePublicKeys | null): void;
+
+  /**
+   * The users whose public keys a decryptEvents result was missing: the
+   * sender of each event in its `missingSigningKeys`, once each, in batch
+   * order. Fetch their keys (`GET /2/users/{id}/public_keys`), add them with
+   * addPublicKeys, and decrypt the batch again.
+   *
+   * A key this call returned a user for is not asked for again for a minute:
+   * a lookup that did not bring the key is not repeated with every batch. A
+   * key that arrives is no longer missing, and a key version not asked for
+   * before is asked for at once.
+   */
+  missingPublicKeys(result: DecryptEventsResult): string[];
+
+  /**
+   * decryptEvents, fetching the public keys the batch is missing through the
+   * hook (setResolvePublicKeys): when a hook is set and `params` passes no
+   * signing keys, the hook is called once for missingPublicKeys of the
+   * result, what it returns is added with addPublicKeys, and the batch is
+   * decrypted once more. A user the hook has no keys for stays in the
+   * result's `missingSigningKeys`.
+   *
+   * Without a hook, or when `params` passes signing keys, resolves to what
+   * decryptEvents returns. Rejects with what the hook throws.
+   */
+  decryptEventsAsync(params: DecryptEventsParams): Promise<DecryptEventsResult>;
+
+  /**
+   * prepareConversationKeyChange, fetching the public keys it is missing
+   * through the hook (setResolvePublicKeys): when a hook is set and `params`
+   * passes no `publicKeys`, the hook is called once for the participants who
+   * have no stored key, and what it returns is added with addPublicKeys
+   * before the change is prepared.
+   *
+   * Without a hook, or when `params` passes `publicKeys`, resolves to what
+   * prepareConversationKeyChange returns. Rejects with what the hook throws.
+   */
+  prepareConversationKeyChangeAsync(params: ConversationKeyChangeParams): Promise<PreparedConversationChange>;
+
+  /** prepareGroupCreate, fetching the public keys it is missing through the hook, as prepareConversationKeyChangeAsync does. */
+  prepareGroupCreateAsync(params: GroupCreateParams): Promise<PreparedConversationChange>;
+
+  /** prepareGroupMembersChange, fetching the public keys it is missing through the hook, as prepareConversationKeyChangeAsync does. */
+  prepareGroupMembersChangeAsync(params: GroupMembersChangeParams): Promise<PreparedConversationChange>;
+
+  /** prepareGroupMembersRemove, fetching the public keys it is missing through the hook, as prepareConversationKeyChangeAsync does. */
+  prepareGroupMembersRemoveAsync(params: GroupMembersRemoveParams): Promise<PreparedConversationChange>;
+
   setRejectUnverified(reject: boolean): void;
   generateKeypairs(): PublicKeyRegistrationPayload;
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
   addSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  addPublicKeys(records: PublicKeyRecords | null | undefined): void;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1994,6 +2226,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
  * `getAuthToken`, the chat has no Juicebox and needs no juicebox-sdk: it
  * runs the calls that need no private key, and keeps the keys
  * `generateKeypairs()` makes for as long as it lives.
+ *
+ * `resolvePublicKeys` sets the hook that fetches users' public keys, as
+ * `setResolvePublicKeys` does.
  *
  * Each call creates an independent instance with its own Juicebox client.
  * The Juicebox auth-token callback is a process-wide global that each

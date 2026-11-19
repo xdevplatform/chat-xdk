@@ -92,36 +92,52 @@ encrypt calls then need no key passed.
 
 ## Signing keys for key changes
 
-The signing keys a chat verifies with (`setSigningKeys` and
-`addSigningKeys`, or `signingKeys` on a decrypt call) must include those of
-every member who made a key change in the events you decrypt, not only of
-the members whose messages you read. A group's key changes are signed by
-whoever created the group, changed its members or rotated its key, and a
-recent key change that does not verify has its key dropped: every message
-under it then lands in `errors`.
+The signing keys a chat verifies with must include those of every member who
+made a key change in the events you decrypt, not only of the members whose
+messages you read. A group's key changes are signed by whoever created the
+group, changed its members or rotated its key, and a recent key change that
+does not verify has its key dropped: every message under it then lands in
+`errors`.
 
-`decryptEvents` reports each key change whose signature did not verify in
-`unverifiedKeyChanges`, keyed by the key change's index in the batch as
-`errors` is, with the `senderId` and `publicKeyVersion` of the signing key it
-needs. Fetch that member's public keys from `GET /2/users/{id}/public_keys`,
-add them to the stored keys with `addSigningKeys`, which keeps the keys
-already stored (`setSigningKeys` replaces them), and decrypt again:
+Set a hook that fetches users' public keys, and decrypt with
+`decryptEventsAsync`. It fetches the keys of every sender the batch needs
+and the chat has none for, then decrypts the batch again:
 
 ```typescript
-let result = chat.decryptEvents({ events });
-const missing = Object.values(result.unverifiedKeyChanges)
-  .filter((change) => change.reason === "missingSigningKey")
-  .map((change) => change.senderId);
-if (missing.length > 0) {
-  chat.addSigningKeys(await fetchSigningKeys(missing)); // GET /2/users/{id}/public_keys
-  result = chat.decryptEvents({ events });
-}
+import { createChat } from "@xdevplatform/chat-xdk-server";
+
+const chat = await createChat({
+  resolvePublicKeys: async (userIds) => {
+    const records = {};
+    for (const userId of userIds) {
+      // The `data` array of GET /2/users/{id}/public_keys, as the API sends it.
+      records[userId] = await xApi.getPublicKeys(userId);
+    }
+    return records;
+  },
+});
+
+const result = await chat.decryptEventsAsync({ events });
 ```
 
-Two more maps report what else the batch could not use:
+The hook also supplies the keys a new conversation key is encrypted to:
+`prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+`prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync` need no
+`publicKeys`, only the members' user ids. Only these five `Async` methods
+call the hook. Setting it turns the key cache on, and a lookup that did not
+bring a key is not repeated for a minute. `setResolvePublicKeys` sets or
+removes the hook on a chat that exists. See
+["Other users' public keys"](../js/README.md#other-users-public-keys) in the
+`@xdevplatform/chat-xdk` README, which also covers `missingPublicKeys` and
+`addPublicKeys` for fetching the keys without a hook.
+
+The result reports what the batch still could not use, each map keyed as
+`errors` is, by the event's index in the batch: `missingSigningKeys`, the
+events whose sender's signing key the call did not have;
+`unverifiedKeyChanges`, the key changes whose signature did not verify; and
 `undecryptableKeyChanges`, the key changes whose key this chat could not
-decrypt (by event index), and `rejectedSigningKeys`, the signing keys left out
-because their identity binding does not verify (by signing key index).
+decrypt. `rejectedSigningKeys` holds the signing keys left out because their
+identity binding does not verify, by signing key index.
 
 The keys and the version to encrypt with are reported per conversation, by
 the conversation id events carry: `result.conversationKeys.keysByConversation`

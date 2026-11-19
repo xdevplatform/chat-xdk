@@ -706,6 +706,404 @@ fn add_signing_keys_adds_to_the_stored_keys_and_set_signing_keys_replaces_them()
     }
 }
 
+/// A Thrift string field: its id, then the value's length and bytes.
+fn thrift_string(id: u16, value: &str) -> Vec<u8> {
+    let mut field = vec![11u8];
+    field.extend(id.to_be_bytes());
+    field.extend((value.len() as u32).to_be_bytes());
+    field.extend(value.as_bytes());
+    field
+}
+
+/// A signed action as delivered: the event the server relays for `action`,
+/// an entry of a prepared change's `action_signatures`, from `sender_id` in
+/// `conversation_id`, sequenced where a key change that does not verify
+/// loses its key.
+fn delivered_action(action: &serde_json::Value, sender_id: &str, conversation_id: &str) -> String {
+    let text = |value: &serde_json::Value| value.as_str().unwrap().to_string();
+    let signed = &action["message_event_signature"];
+    let mut event = thrift_string(1, "2100000000000000000");
+    event.extend(thrift_string(2, &text(&action["message_id"])));
+    event.extend(thrift_string(3, sender_id));
+    event.extend(thrift_string(4, conversation_id));
+    event.extend([12u8, 0, 7]);
+    event.extend(
+        BASE64
+            .decode(text(&action["encoded_message_event_detail"]))
+            .unwrap(),
+    );
+    event.extend([12u8, 0, 9]);
+    event.extend(thrift_string(1, &text(&signed["signature"])));
+    event.extend(thrift_string(2, &text(&signed["public_key_version"])));
+    event.extend(thrift_string(3, &text(&signed["signature_version"])));
+    // The end of the signature, then the end of the event.
+    event.extend([0u8, 0]);
+    BASE64.encode(event)
+}
+
+/// The record `GET /2/users/{id}/public_keys` returns for the keys of a
+/// [`party`], given its signing-key entry, with a field the SDK does not
+/// read.
+fn public_key_record(signing_key: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "public_key_version": signing_key["public_key_version"],
+        "public_key": signing_key["identity_public_key"],
+        "signing_public_key": signing_key["public_key"],
+        "identity_public_key_signature": signing_key["identity_public_key_signature"],
+        "juicebox_config": { "realms": [] },
+    })
+}
+
+/// The entry a key change's `public_keys` holds for a [`party`], given its
+/// signing-key entry.
+fn public_key_input(signing_key: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "user_id": signing_key["user_id"],
+        "identity_public_key": signing_key["identity_public_key"],
+        "public_key_version": signing_key["public_key_version"],
+    })
+}
+
+/// A JSON document a call returned in `data`.
+fn document(result: FfiResult) -> serde_json::Value {
+    serde_json::from_str(&data(result).unwrap()).unwrap()
+}
+
+#[test]
+fn decrypt_events_names_the_signing_keys_it_lacked_and_add_public_keys_supplies_them() {
+    // An admin rotates a group's key and a member sends a message under it.
+    let (admin, admin_keys) = party("5001");
+    let (member, member_keys) = party("5002");
+    let (bot, bot_keys) = party("5003");
+    let change = c(&serde_json::json!({
+        "public_keys": [
+            public_key_input(&admin_keys),
+            public_key_input(&member_keys),
+            public_key_input(&bot_keys),
+        ],
+        "conversation_id": "g900",
+    })
+    .to_string());
+    let prepared = document(chat_xdk_prepare_conversation_key_change(
+        admin,
+        change.as_ptr(),
+    ));
+    let message = c(&serde_json::json!({
+        "conversation_id": "g900",
+        "text": "hello group",
+        "conversation_key": prepared["conversation_key"],
+        "conversation_key_version": prepared["conversation_key_version"],
+    })
+    .to_string());
+    let payload = document(chat_xdk_encrypt_message(member, message.as_ptr()));
+    let events = serde_json::json!([
+        delivered_action(&prepared["action_signatures"][0], "5001", "g900"),
+        delivered(payload["event_b64"].as_str().unwrap()),
+    ]);
+    let decrypt = || {
+        let params = c(&serde_json::json!({ "events": events }).to_string());
+        document(chat_xdk_decrypt_events(bot, params.as_ptr()))
+    };
+    let missing_users = |missing_signing_keys: &serde_json::Value| {
+        let missing_signing_keys = c(&missing_signing_keys.to_string());
+        document(chat_xdk_missing_public_keys(
+            bot,
+            missing_signing_keys.as_ptr(),
+        ))
+    };
+    let add = |records: serde_json::Value| {
+        let records = c(&records.to_string());
+        assert!(data(chat_xdk_add_public_keys(bot, records.as_ptr())).is_none());
+    };
+
+    // With no signing keys the result names the key each event needed, by
+    // the event's index.
+    let unverified = decrypt();
+    assert_eq!(unverified["events"], serde_json::json!([]));
+    assert_eq!(
+        unverified["missing_signing_keys"],
+        serde_json::json!({
+            "0": { "user_id": "5001", "public_key_version": "1" },
+            "1": { "user_id": "5002", "public_key_version": "1" },
+        })
+    );
+    assert_eq!(unverified["rejected_signing_keys"], serde_json::json!({}));
+
+    // The users to fetch keys for come in batch order, and are not asked for
+    // again at once.
+    assert_eq!(
+        missing_users(&unverified["missing_signing_keys"]),
+        serde_json::json!(["5001", "5002"])
+    );
+    assert_eq!(
+        missing_users(&unverified["missing_signing_keys"]),
+        serde_json::json!([])
+    );
+
+    // A record without its signing key is left out.
+    let mut partial = public_key_record(&admin_keys);
+    partial
+        .as_object_mut()
+        .unwrap()
+        .remove("signing_public_key");
+    add(serde_json::json!({ "5001": [partial] }));
+    assert_eq!(decrypt()["events"], serde_json::json!([]));
+
+    // Records as the X API returns them, one of them with camelCase names
+    // and its key version as a number.
+    add(serde_json::json!({
+        "5001": [public_key_record(&admin_keys)],
+        "5002": [{
+            "publicKeyVersion": 1,
+            "publicKey": member_keys["identity_public_key"],
+            "signingPublicKey": member_keys["public_key"],
+            "identityPublicKeySignature": member_keys["identity_public_key_signature"],
+        }],
+    }));
+    let verified = decrypt();
+    assert_eq!(verified["errors"], serde_json::json!({}));
+    assert_eq!(verified["missing_signing_keys"], serde_json::json!({}));
+    assert_eq!(verified["unverified_key_changes"], serde_json::json!({}));
+    let decrypted = verified["events"].as_array().unwrap();
+    assert_eq!(decrypted.len(), 2);
+    assert_eq!(decrypted[0]["event"]["type"], "KeyChange");
+    assert_eq!(decrypted[1]["event"]["type"], "Message");
+
+    // Null, empty and `{}` hold nothing; a document of another shape is an
+    // error.
+    for nothing in ["null", "", "{}"] {
+        let nothing = c(nothing);
+        assert!(data(chat_xdk_add_public_keys(bot, nothing.as_ptr())).is_none());
+        assert_eq!(
+            data(chat_xdk_missing_public_keys(bot, nothing.as_ptr())).as_deref(),
+            Some("[]")
+        );
+    }
+    assert!(data(chat_xdk_add_public_keys(bot, std::ptr::null())).is_none());
+    assert_eq!(
+        data(chat_xdk_missing_public_keys(bot, std::ptr::null())).as_deref(),
+        Some("[]")
+    );
+    // A user whose lookup found nothing may carry null or no records.
+    add(serde_json::json!({ "5004": null, "5005": [] }));
+    let malformed = c(r#"{"5001":"not a record"}"#);
+    for failed in [
+        error(chat_xdk_add_public_keys(bot, malformed.as_ptr())),
+        error(chat_xdk_add_public_keys(
+            std::ptr::null(),
+            malformed.as_ptr(),
+        )),
+        error(chat_xdk_missing_public_keys(bot, malformed.as_ptr())),
+        error(chat_xdk_missing_public_keys(
+            std::ptr::null(),
+            malformed.as_ptr(),
+        )),
+    ] {
+        assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    }
+
+    for chat in [admin, member, bot] {
+        chat_xdk_free(chat);
+    }
+}
+
+#[test]
+fn prepare_calls_read_stored_public_keys_and_missing_public_keys_for_names_the_users_without() {
+    let (admin, admin_keys) = party("5001");
+    let (member, member_keys) = party("5002");
+    let (joiner, joiner_keys) = party("5004");
+    let missing_for = |call: &str, params: &serde_json::Value| {
+        let call = c(call);
+        let params = c(&params.to_string());
+        prepare::chat_xdk_missing_public_keys_for(admin, call.as_ptr(), params.as_ptr())
+    };
+    // The users a prepared change encrypted its key to, sorted.
+    let recipients = |prepared: FfiResult| {
+        let prepared = document(prepared);
+        let mut user_ids: Vec<String> = prepared["conversation_participant_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key["user_id"].as_str().unwrap().to_string())
+            .collect();
+        user_ids.sort();
+        user_ids
+    };
+
+    let create = serde_json::json!({
+        "conversation_id": "g900",
+        "member_ids": ["5001", "5002"],
+        "admin_ids": ["5001"],
+    });
+    let add_members = serde_json::json!({
+        "public_keys": null,
+        "conversation_id": "g900",
+        "new_member_ids": ["5004"],
+        "current_member_ids": ["5001", "5002"],
+        "current_admin_ids": ["5001"],
+        "current_pending_member_ids": [],
+    });
+    let remove = serde_json::json!({
+        "public_keys": [],
+        "conversation_id": "g900",
+        "user_ids": ["5004"],
+        "remaining_member_ids": ["5001", "5002"],
+    });
+    let rotate = serde_json::json!({
+        "conversation_id": "g900",
+        "member_ids": ["5001", "5002"],
+    });
+    let direct = serde_json::json!({ "conversation_id": "5002" });
+
+    // With nothing stored, a call that passes no public keys fails naming
+    // the users it has no keys for, and the lookup names them once.
+    let params = c(&create.to_string());
+    let failed = error(prepare::chat_xdk_prepare_group_create(
+        admin,
+        params.as_ptr(),
+    ));
+    assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("no public keys are stored for user(s) 5001, 5002"),
+        "{failed}"
+    );
+    assert_eq!(
+        document(missing_for("group_create", &create)),
+        serde_json::json!(["5001", "5002"])
+    );
+    assert_eq!(
+        document(missing_for("group_create", &create)),
+        serde_json::json!([])
+    );
+    // A user not asked for before is named by the call that needs its keys.
+    assert_eq!(
+        document(missing_for("group_members_change", &add_members)),
+        serde_json::json!(["5004"])
+    );
+
+    let records = c(&serde_json::json!({
+        "5001": [public_key_record(&admin_keys)],
+        "5002": [public_key_record(&member_keys)],
+        "5004": [public_key_record(&joiner_keys)],
+    })
+    .to_string());
+    data(chat_xdk_add_public_keys(admin, records.as_ptr()));
+
+    // Each call encrypts its key to the stored keys of the members it names.
+    let params = c(&create.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_create(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    let params = c(&add_members.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_members_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002", "5004"]
+    );
+    let params = c(&remove.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_members_remove(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    let params = c(&rotate.to_string());
+    assert_eq!(
+        recipients(chat_xdk_prepare_conversation_key_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    // A one-to-one names its two users by its id: here the other user's.
+    let params = c(&direct.to_string());
+    assert_eq!(
+        recipients(chat_xdk_prepare_conversation_key_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    for (call, params) in [
+        ("group_create", &create),
+        ("group_members_change", &add_members),
+        ("group_members_remove", &remove),
+        ("conversation_key_change", &rotate),
+        ("conversation_key_change", &direct),
+    ] {
+        assert_eq!(
+            document(missing_for(call, params)),
+            serde_json::json!([]),
+            "{call}"
+        );
+    }
+
+    // A call that passes its public keys is missing none, whoever it names.
+    let mut passed = create.clone();
+    passed["member_ids"] = serde_json::json!(["5001", "5009"]);
+    passed["public_keys"] = serde_json::json!([public_key_input(&admin_keys)]);
+    assert_eq!(
+        document(missing_for("group_create", &passed)),
+        serde_json::json!([])
+    );
+
+    // A call that names no members reports its empty public keys as before.
+    let params = c(r#"{"conversation_id":"g900","user_ids":["5004"]}"#);
+    let failed = error(prepare::chat_xdk_prepare_group_members_remove(
+        admin,
+        params.as_ptr(),
+    ));
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("public_keys is empty: pass the public keys of the remaining members"),
+        "{failed}"
+    );
+    let params = c(r#"{"conversation_id":"g900"}"#);
+    let failed = error(chat_xdk_prepare_conversation_key_change(
+        admin,
+        params.as_ptr(),
+    ));
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("public_keys must not be empty"),
+        "{failed}"
+    );
+
+    // An unknown call, a document that does not parse and a null handle are
+    // invalid input.
+    let call = c("group_create");
+    let params = c(&create.to_string());
+    for failed in [
+        error(missing_for("group_rename", &create)),
+        error(missing_for("group_create", &serde_json::json!({}))),
+        error(prepare::chat_xdk_missing_public_keys_for(
+            std::ptr::null(),
+            call.as_ptr(),
+            params.as_ptr(),
+        )),
+    ] {
+        assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    }
+
+    for chat in [admin, member, joiner] {
+        chat_xdk_free(chat);
+    }
+}
+
 #[test]
 fn file_decryption_and_the_avatar_change_read_the_key_cache_for_a_key_left_out() {
     let (chat, signing_key) = party("5001");

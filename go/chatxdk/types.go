@@ -231,12 +231,84 @@ type RejectedSigningKey struct {
 	PublicKeyVersion string `json:"public_key_version"`
 }
 
+// MissingSigningKey is the signing key a signed event in a DecryptEvents
+// batch needed and the call did not verify with.
+type MissingSigningKey struct {
+	// UserID is the user who signed the event: its sender.
+	UserID string `json:"user_id"`
+	// PublicKeyVersion is the version of that user's signing key the
+	// event's signature names.
+	PublicKeyVersion string `json:"public_key_version"`
+}
+
+// PublicKeyRecord is one of a user's public keys, as the X API returns it in
+// the data of GET /2/users/{id}/public_keys. AddPublicKeys stores records,
+// and a SetResolvePublicKeys hook returns them.
+//
+// A record unmarshals from the API's own JSON: public_key_version may be
+// written as a string or as a number, and any other field, such as
+// juicebox_config, is ignored.
+type PublicKeyRecord struct {
+	// PublicKeyVersion is the version of this key.
+	PublicKeyVersion string `json:"public_key_version"`
+	// PublicKey is the user's identity public key, base64.
+	PublicKey string `json:"public_key"`
+	// SigningPublicKey is the user's signing public key, base64.
+	SigningPublicKey string `json:"signing_public_key"`
+	// IdentityPublicKeySignature is the signing key's signature over the
+	// identity key, base64: what binds the two.
+	IdentityPublicKeySignature string `json:"identity_public_key_signature"`
+}
+
+// UnmarshalJSON reads a record as the X API sends it.
+func (r *PublicKeyRecord) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		PublicKeyVersion           keyVersion `json:"public_key_version"`
+		PublicKey                  string     `json:"public_key"`
+		SigningPublicKey           string     `json:"signing_public_key"`
+		IdentityPublicKeySignature string     `json:"identity_public_key_signature"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*r = PublicKeyRecord{
+		PublicKeyVersion:           string(wire.PublicKeyVersion),
+		PublicKey:                  wire.PublicKey,
+		SigningPublicKey:           wire.SigningPublicKey,
+		IdentityPublicKeySignature: wire.IdentityPublicKeySignature,
+	}
+	return nil
+}
+
+// keyVersion is a key version read from JSON that writes it as a string or
+// as a number.
+type keyVersion string
+
+func (v *keyVersion) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var text string
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		*v = keyVersion(text)
+		return nil
+	}
+	// A number keeps the digits it was written with; null leaves the
+	// version empty.
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return err
+	}
+	*v = keyVersion(number.String())
+	return nil
+}
+
 // DecryptEventsResult is the batch decrypt API.
 //
-// Errors, UnverifiedKeyChanges and UndecryptableKeyChanges are keyed by an
-// event's index in the batch, as a string, and RejectedSigningKeys by a
-// signing key's index, as a string. Each is empty when it has nothing to
-// report.
+// Errors, UnverifiedKeyChanges, UndecryptableKeyChanges and
+// MissingSigningKeys are keyed by an event's index in the batch, as a
+// string, and RejectedSigningKeys by a signing key's index, as a string.
+// Each is empty when it has nothing to report.
 //
 // Errors holds the error of each event left out of Events: one that failed,
 // or one decrypt drops, such as a member removal's title or description
@@ -248,7 +320,11 @@ type RejectedSigningKey struct {
 // decrypt. RejectedSigningKeys holds each of the signing keys the call
 // verified with (SigningKeys, or the stored ones when it was given none)
 // that it left out because its identity binding does not verify; an event
-// signed with such a key does not verify.
+// signed with such a key does not verify. MissingSigningKeys holds, for each
+// signed event whose sender's signing key was not among the signing keys the
+// call verified with, that sender and the key version the signature names:
+// a key change, a message, or any other signed event. Chat.MissingPublicKeys
+// lists the users to fetch public keys for.
 type DecryptEventsResult struct {
 	Events                  []DecryptedEvent                  `json:"events"`
 	ConversationKeys        ConversationKeyBundle             `json:"conversation_keys"`
@@ -256,6 +332,7 @@ type DecryptEventsResult struct {
 	UnverifiedKeyChanges    map[string]UnverifiedKeyChange    `json:"unverified_key_changes"`
 	UndecryptableKeyChanges map[string]UndecryptableKeyChange `json:"undecryptable_key_changes"`
 	RejectedSigningKeys     map[string]RejectedSigningKey     `json:"rejected_signing_keys"`
+	MissingSigningKeys      map[string]MissingSigningKey      `json:"missing_signing_keys"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,
@@ -285,11 +362,21 @@ type PreparedConversationChange struct {
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
 // SenderID and SigningKeyVersion are optional overrides: empty resolves from
 // the session identity set via SetIdentity.
+//
+// PublicKeys are the identity keys of every participant, the sender
+// included. Leave them nil to encrypt the key to the public keys this Chat
+// has stored (AddPublicKeys, or a SetResolvePublicKeys hook) for the users
+// in MemberIDs, or, without MemberIDs, for the two users of the one-to-one
+// conversation ConversationID names.
 type ConversationKeyChangeParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity
 	PublicKeys        []PublicKeyInput `json:"public_keys"`
 	ConversationID    string           `json:"conversation_id,omitempty"` // empty = derive the one-to-one id
+	// MemberIDs are the user ids of every participant, the sender included.
+	// They are read only when PublicKeys is empty, to name the users whose
+	// stored public keys the key is encrypted to.
+	MemberIDs []string `json:"member_ids,omitempty"`
 }
 
 // GroupMembersChangeParams are the parameters for PrepareGroupMembersChange.
@@ -298,6 +385,11 @@ type ConversationKeyChangeParams struct {
 // CurrentDescription are plaintext: the call encrypts each under the new
 // conversation key it generates. CurrentAvatarURL is the avatar's media URL,
 // signed as is.
+//
+// PublicKeys are the identity keys of the current and the new members.
+// Leave them nil to encrypt the key to the public keys this Chat has stored
+// (AddPublicKeys, or a SetResolvePublicKeys hook) for the users in
+// CurrentMemberIDs and NewMemberIDs.
 type GroupMembersChangeParams struct {
 	SenderID                            string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion                   string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -319,6 +411,11 @@ type GroupMembersChangeParams struct {
 // the session identity set via SetIdentity. Title is plaintext: the create
 // encrypts it under the new conversation key. A create sets no avatar; set it
 // afterwards with PrepareGroupAvatarChange.
+//
+// PublicKeys are the identity keys of every member, the creator included.
+// Leave them nil to encrypt the key to the public keys this Chat has stored
+// (AddPublicKeys, or a SetResolvePublicKeys hook) for the users in MemberIDs
+// and AdminIDs.
 type GroupCreateParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -598,11 +695,13 @@ const (
 //
 // PublicKeys are the identity keys of the members who stay, yours included:
 // the call rotates the conversation key for them, and a member left out can't
-// read what the group sends under the new key. Title and Description are the
-// group's current plaintext metadata; pass each one the group has. Each one
-// set is encrypted under the new key and signed with the removal as a
-// key-rotation re-encryption, which recipients' decrypt drops rather than show
-// as a change.
+// read what the group sends under the new key. Leave them nil and name those
+// members in RemainingMemberIDs to encrypt the key to the public keys this
+// Chat has stored for them (AddPublicKeys, or a SetResolvePublicKeys hook).
+// Title and Description are the group's current plaintext metadata; pass each
+// one the group has. Each one set is encrypted under the new key and signed
+// with the removal as a key-rotation re-encryption, which recipients' decrypt
+// drops rather than show as a change.
 type GroupMembersRemoveParams struct {
 	// PublicKeys are the identity keys of the members who stay, yours included.
 	PublicKeys     []PublicKeyInput `json:"public_keys"`
@@ -613,6 +712,10 @@ type GroupMembersRemoveParams struct {
 	Description       string   `json:"description,omitempty"` // empty = unset
 	SenderID          string   `json:"sender_id,omitempty"`
 	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
+	// RemainingMemberIDs are the user ids of the members who stay, yours
+	// included. They are read only when PublicKeys is empty, to name the
+	// users whose stored public keys the new key is encrypted to.
+	RemainingMemberIDs []string `json:"remaining_member_ids,omitempty"`
 }
 
 // GroupLeaveParams are the parameters for PrepareGroupLeave.
@@ -791,7 +894,7 @@ type DecryptEventParams struct {
 	// (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// SigningKeys verify the event; nil or empty uses the keys stored via
-	// SetSigningKeys and AddSigningKeys.
+	// SetSigningKeys, AddSigningKeys and AddPublicKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 
@@ -801,7 +904,7 @@ type DecryptEventsParams struct {
 	// the conversation keys the messages among them are decrypted with.
 	Events []string `json:"events"`
 	// SigningKeys are the signing keys of all participants; nil or empty uses
-	// the keys stored via SetSigningKeys and AddSigningKeys.
+	// the keys stored via SetSigningKeys, AddSigningKeys and AddPublicKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 

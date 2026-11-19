@@ -24,6 +24,13 @@
 //	chat.SetCacheKeys(true)
 //	chat.SetSigningKeys(senderSigningKeys)
 //
+//	// Or let the Chat ask for the public keys it lacks: the hook returns,
+//	// by user id, the records GET /2/users/{id}/public_keys returns in
+//	// data. Setting a hook turns the key cache on.
+//	chat.SetResolvePublicKeys(func(userIDs []string) (map[string][]chatxdk.PublicKeyRecord, error) {
+//	    return fetchPublicKeys(userIDs)
+//	})
+//
 //	// Decrypt events. The batch path self-extracts conversation keys from
 //	// KeyChange events; while SetCacheKeys is on, both decrypt calls cache
 //	// the key of each key change that verifies. With nil signing keys the
@@ -47,6 +54,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"runtime"
+	"sync"
 )
 
 // Chat is the main X Chat encryption SDK interface.
@@ -56,6 +64,12 @@ import (
 // goroutines at once; Close must not race them.
 type Chat struct {
 	h handle
+
+	// resolveMu guards resolvePublicKeys. It is held to read or replace the
+	// hook, never while the hook runs.
+	resolveMu sync.Mutex
+	// resolvePublicKeys is the hook SetResolvePublicKeys set, or nil.
+	resolvePublicKeys func(userIDs []string) (map[string][]PublicKeyRecord, error)
 }
 
 // New creates a new Chat SDK instance. It reads the X API's feature switches
@@ -170,8 +184,8 @@ func (c *Chat) SetCacheKeys(enabled bool) {
 
 // SetSigningKeys stores signing keys to use when a decrypt call's params leave
 // SigningKeys nil (or empty). Each call replaces the previous set; add to it
-// with AddSigningKeys. Only these two calls populate the store — a key
-// carried inside an event is never trusted for verification.
+// with AddSigningKeys or AddPublicKeys. Only these calls populate the store —
+// a key carried inside an event is never trusted for verification.
 func (c *Chat) SetSigningKeys(keys []SigningKeyEntry) error {
 	defer runtime.KeepAlive(c)
 	if keys == nil {
@@ -197,6 +211,157 @@ func (c *Chat) AddSigningKeys(keys []SigningKeyEntry) error {
 		return err
 	}
 	return ffiAddSigningKeys(c.h, string(b))
+}
+
+// AddPublicKeys adds users' public keys to the stored signing keys, as
+// AddSigningKeys adds entries. records holds, by user id, the records
+// GET /2/users/{id}/public_keys returns in data for that user. A record
+// without a key version, an identity key or a signing key is left out.
+//
+// The decrypt calls verify with the stored keys when their SigningKeys are
+// nil, and PrepareConversationKeyChange, PrepareGroupCreate,
+// PrepareGroupMembersChange and PrepareGroupMembersRemove encrypt the new
+// conversation key to their members' stored keys when their PublicKeys are
+// nil.
+func (c *Chat) AddPublicKeys(records map[string][]PublicKeyRecord) error {
+	defer runtime.KeepAlive(c)
+	if len(records) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+	return ffiAddPublicKeys(c.h, string(b))
+}
+
+// MissingPublicKeys returns the users whose public keys a DecryptEvents
+// result was missing: the sender of each event in its MissingSigningKeys,
+// once each, in batch order. Fetch their keys
+// (GET /2/users/{id}/public_keys), add them with AddPublicKeys, and decrypt
+// the batch again.
+//
+// A key this call returned a user for is not asked for again for a minute,
+// so a lookup that brought no key is not repeated with every batch. A key
+// that arrives is no longer missing, and a key version not asked for before
+// is asked for at once.
+func (c *Chat) MissingPublicKeys(result *DecryptEventsResult) ([]string, error) {
+	defer runtime.KeepAlive(c)
+	if result == nil || len(result.MissingSigningKeys) == 0 {
+		return []string{}, nil
+	}
+	b, err := json.Marshal(result.MissingSigningKeys)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiMissingPublicKeys(c.h, string(b))
+	if err != nil {
+		return nil, err
+	}
+	return decodeUserIDs(data)
+}
+
+// The names the native side knows the prepare calls that encrypt a new
+// conversation key by.
+const (
+	callConversationKeyChange = "conversation_key_change"
+	callGroupCreate           = "group_create"
+	callGroupMembersChange    = "group_members_change"
+	callGroupMembersRemove    = "group_members_remove"
+)
+
+// missingPublicKeysFor returns the users whose public keys the prepare call
+// named call would be missing with params: the members it encrypts its key
+// to who have no stored public key, and none when params passes PublicKeys.
+// A user it returned is not returned again for a minute while no key is
+// stored for that user.
+func (c *Chat) missingPublicKeysFor(call string, params any) ([]string, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiMissingPublicKeysFor(c.h, call, string(j))
+	if err != nil {
+		return nil, err
+	}
+	return decodeUserIDs(data)
+}
+
+// decodeUserIDs reads the JSON array of user ids a native call returned.
+func decodeUserIDs(data string) ([]string, error) {
+	userIDs := []string{}
+	if err := json.Unmarshal([]byte(data), &userIDs); err != nil {
+		return nil, err
+	}
+	return userIDs, nil
+}
+
+// SetResolvePublicKeys sets the hook that fetches users' public keys, or
+// removes it with nil. The hook is given user ids and returns, by user id,
+// the records GET /2/users/{id}/public_keys returns in data for each; a user
+// it has nothing for is left out.
+//
+// With a hook set:
+//
+//   - DecryptEvents, when its SigningKeys are nil, calls the hook for the
+//     users its result reports in MissingSigningKeys, adds what it returns
+//     (AddPublicKeys), and decrypts the batch once more.
+//   - PrepareConversationKeyChange, PrepareGroupCreate,
+//     PrepareGroupMembersChange and PrepareGroupMembersRemove, when their
+//     PublicKeys are nil, call the hook for the members they have no stored
+//     public key for and add what it returns before they encrypt the new
+//     key.
+//
+// An error the hook returns is returned by the call that ran it. A user the
+// hook was asked for and returned no key for is not asked for again for a
+// minute, so a lookup that fails is not repeated with every call.
+//
+// Setting a hook turns the key cache on (SetCacheKeys); removing it leaves
+// the cache as it is. The hook runs on the goroutine of the call that needs
+// the keys, and may be called from several goroutines at once.
+func (c *Chat) SetResolvePublicKeys(hook func(userIDs []string) (map[string][]PublicKeyRecord, error)) {
+	c.resolveMu.Lock()
+	c.resolvePublicKeys = hook
+	c.resolveMu.Unlock()
+	if hook != nil {
+		c.SetCacheKeys(true)
+	}
+}
+
+// publicKeysHook returns the hook SetResolvePublicKeys set, or nil.
+func (c *Chat) publicKeysHook() func(userIDs []string) (map[string][]PublicKeyRecord, error) {
+	c.resolveMu.Lock()
+	defer c.resolveMu.Unlock()
+	return c.resolvePublicKeys
+}
+
+// runPublicKeysHook calls hook for userIDs and stores the records it
+// returns.
+func (c *Chat) runPublicKeysHook(hook func(userIDs []string) (map[string][]PublicKeyRecord, error), userIDs []string) error {
+	records, err := hook(userIDs)
+	if err != nil {
+		return err
+	}
+	return c.AddPublicKeys(records)
+}
+
+// resolvePublicKeysFor gets, through the hook when one is set, the public
+// keys the prepare call named call lacks. params is that call's params; a
+// call that passes PublicKeys needs none.
+func (c *Chat) resolvePublicKeysFor(call string, params any, passesPublicKeys bool) error {
+	hook := c.publicKeysHook()
+	if hook == nil || passesPublicKeys {
+		return nil
+	}
+	missing, err := c.missingPublicKeysFor(call, params)
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return c.runPublicKeysHook(hook, missing)
 }
 
 // Lock clears keys from memory.
@@ -301,21 +466,29 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // Errors map, keyed by event index.
 //
 // Nil (or empty) SigningKeys fall back to the keys stored via
-// SetSigningKeys and AddSigningKeys; with nothing stored either, signed
-// events fail decryption under the default reject-unverified policy. A
-// member removal's title and description, re-encrypted under the new key,
-// aren't changes: they land in Errors under either policy.
+// SetSigningKeys, AddSigningKeys and AddPublicKeys; with nothing stored
+// either, signed events fail decryption under the default reject-unverified
+// policy. A member removal's title and description, re-encrypted under the
+// new key, aren't changes: they land in Errors under either policy.
 //
 // The signing keys must include those of every member who signed a key
 // change in the batch, whether or not that member sent a message in it.
 // Under either policy, a recent key change whose signature does not verify
 // has its key dropped, and every message under that key then lands in
-// Errors. The result's UnverifiedKeyChanges holds each such key change with
-// why it did not verify and, when its signer's key was missing, the SenderID
-// and PublicKeyVersion to fetch: add that user's public keys and decrypt
-// again. Its UndecryptableKeyChanges holds each key change whose key this
-// chat could not decrypt, and its RejectedSigningKeys each signing key left
-// out because its identity binding does not verify.
+// Errors. The result's MissingSigningKeys holds, for each signed event whose
+// sender's signing key the call lacked, the user and key version to fetch:
+// MissingPublicKeys lists those users, AddPublicKeys stores their keys, and
+// the batch then decrypts. Its UnverifiedKeyChanges holds each key change
+// whose signature did not verify with why, its UndecryptableKeyChanges each
+// key change whose key this chat could not decrypt, and its
+// RejectedSigningKeys each signing key left out because its identity binding
+// does not verify.
+//
+// With a SetResolvePublicKeys hook set and nil SigningKeys, the call fetches
+// the missing keys itself: it calls the hook for MissingPublicKeys of its
+// result, stores what the hook returns, and decrypts the batch once more.
+// The result then reports only what is still missing. An error from the hook
+// is returned as the call's error.
 //
 // For a batch whose events belong to more than one conversation, read
 // ConversationKeys.KeysByConversation and ConversationKeys.LatestVersions by
@@ -327,7 +500,32 @@ func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, 
 	if err != nil {
 		return nil, err
 	}
-	data, err := ffiDecryptEvents(c.h, string(j))
+	result, err := c.decryptEvents(string(j))
+	if err != nil {
+		return nil, err
+	}
+	hook := c.publicKeysHook()
+	if hook == nil || len(params.SigningKeys) > 0 {
+		return result, nil
+	}
+	missing, err := c.MissingPublicKeys(result)
+	if err != nil {
+		return nil, err
+	}
+	if len(missing) == 0 {
+		return result, nil
+	}
+	if err := c.runPublicKeysHook(hook, missing); err != nil {
+		return nil, err
+	}
+	return c.decryptEvents(string(j))
+}
+
+// decryptEvents batch-decrypts the events of a DecryptEvents params
+// document.
+func (c *Chat) decryptEvents(paramsJSON string) (*DecryptEventsResult, error) {
+	defer runtime.KeepAlive(c)
+	data, err := ffiDecryptEvents(c.h, paramsJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -349,10 +547,20 @@ func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, 
 // Leave ConversationID empty for a one-to-one to derive the canonical id from the
 // two participants; pass the existing id for a group key rotation.
 //
+// With nil PublicKeys the key is encrypted to the stored public keys
+// (AddPublicKeys) of the users in MemberIDs, or, without MemberIDs, of the
+// two users of the one-to-one conversation ConversationID names. A
+// SetResolvePublicKeys hook is called first for the users among them with no
+// stored key. A user still without one fails the call with an
+// ErrorKindInvalidInput error that names the user.
+//
 // While the key cache is on (SetCacheKeys), the new key is cached when the
 // call returns.
 func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
+	if err := c.resolvePublicKeysFor(callConversationKeyChange, params, len(params.PublicKeys) > 0); err != nil {
+		return nil, err
+	}
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -379,6 +587,12 @@ func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) 
 // EncryptedTitle and EncryptedDescription. CurrentAvatarURL is the avatar's
 // media URL, signed as is.
 //
+// With nil PublicKeys the key is encrypted to the stored public keys
+// (AddPublicKeys) of the users in CurrentMemberIDs and NewMemberIDs. A
+// SetResolvePublicKeys hook is called first for the users among them with no
+// stored key. A user still without one fails the call with an
+// ErrorKindInvalidInput error that names the user.
+//
 // While the key cache is on (SetCacheKeys), the new key is cached when the
 // call returns.
 func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*PreparedConversationChange, error) {
@@ -388,6 +602,9 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 	params.CurrentMemberIDs = orEmpty(params.CurrentMemberIDs)
 	params.CurrentAdminIDs = orEmpty(params.CurrentAdminIDs)
 	params.CurrentPendingMemberIDs = orEmpty(params.CurrentPendingMemberIDs)
+	if err := c.resolvePublicKeysFor(callGroupMembersChange, params, len(params.PublicKeys) > 0); err != nil {
+		return nil, err
+	}
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -412,6 +629,12 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 // returns it as EncryptedTitle: the group_name the create request sends. A
 // create sets no avatar; set it afterwards with PrepareGroupAvatarChange.
 //
+// With nil PublicKeys the key is encrypted to the stored public keys
+// (AddPublicKeys) of the users in MemberIDs and AdminIDs. A
+// SetResolvePublicKeys hook is called first for the users among them with no
+// stored key. A user still without one fails the call with an
+// ErrorKindInvalidInput error that names the user.
+//
 // While the key cache is on (SetCacheKeys), the new key is cached when the
 // call returns.
 func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversationChange, error) {
@@ -419,6 +642,9 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 	// Rosters are required fields; marshal nil slices as [] rather than null.
 	params.MemberIDs = orEmpty(params.MemberIDs)
 	params.AdminIDs = orEmpty(params.AdminIDs)
+	if err := c.resolvePublicKeysFor(callGroupCreate, params, len(params.PublicKeys) > 0); err != nil {
+		return nil, err
+	}
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -439,6 +665,12 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 // description change for each one the params set, re-encrypted under the new
 // key, and the key change.
 //
+// With nil PublicKeys the key is encrypted to the stored public keys
+// (AddPublicKeys) of the users in RemainingMemberIDs. A SetResolvePublicKeys
+// hook is called first for the users among them with no stored key. A user
+// still without one fails the call with an ErrorKindInvalidInput error that
+// names the user.
+//
 // While the key cache is on (SetCacheKeys), the new key is cached when the
 // call returns.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {
@@ -447,6 +679,9 @@ func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*Prep
 		params.PublicKeys = []PublicKeyInput{}
 	}
 	params.UserIDs = orEmpty(params.UserIDs)
+	if err := c.resolvePublicKeysFor(callGroupMembersRemove, params, len(params.PublicKeys) > 0); err != nil {
+		return nil, err
+	}
 	j, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -644,10 +879,10 @@ func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*
 //
 // Nil (or empty) ConversationKeys fall back to the opt-in conversation-key
 // cache (SetCacheKeys); leave them nil for non-message events. Nil (or empty)
-// SigningKeys fall back to the keys stored via SetSigningKeys and
-// AddSigningKeys; the SDK picks the sender's key for the version the event
-// carries. With no signing keys passed or stored, every signed event fails
-// under the default reject-unverified policy; only after
+// SigningKeys fall back to the keys stored via SetSigningKeys,
+// AddSigningKeys and AddPublicKeys; the SDK picks the sender's key for the
+// version the event carries. With no signing keys passed or stored, every
+// signed event fails under the default reject-unverified policy; only after
 // SetRejectUnverified(false) are such events returned with Verified=false. A
 // member removal's title and description, re-encrypted under the new key,
 // aren't changes: they fail with an ErrorKindInvalidInput error under either

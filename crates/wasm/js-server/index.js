@@ -54,7 +54,7 @@ export class ServerChat extends ChatWithJuicebox {
  * Create a ServerChat, with Juicebox key storage when `getAuthToken` is
  * given. Takes the options of @xdevplatform/chat-xdk's `createChat`.
  *
- * @param {Object} [options] - `{ juiceboxConfig?, getAuthToken? }`
+ * @param {Object} [options] - `{ juiceboxConfig?, getAuthToken?, resolvePublicKeys? }`
  * @returns {Promise<ServerChat>} Initialized chat instance
  *
  * @example

@@ -1,5 +1,6 @@
 package com.x.chatxdk;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -508,10 +509,72 @@ public final class Types {
     }
 
     /**
-     * Result of {@link Chat#decryptEvents}. {@link #errors}, {@link #unverifiedKeyChanges} and
-     * {@link #undecryptableKeyChanges} are keyed by an event's index in the batch, as a string,
-     * and {@link #rejectedSigningKeys} by a signing key's index, as a string. Each is empty when
-     * it has nothing to report.
+     * A signing key a {@link Chat#decryptEvents} call did not have: an event's signature names
+     * it, and it was not among the signing keys the call verified with. Fetch the user's public
+     * keys ({@code GET /2/users/{id}/public_keys}), add them with {@link Chat#addPublicKeys}, and
+     * decrypt again.
+     */
+    public static final class MissingSigningKey {
+        /** The user who sent the event, whose signing key it is. */
+        @JsonProperty("user_id")
+        public String userId = "";
+
+        /** The version of that user's key the signature names. */
+        @JsonProperty("public_key_version")
+        public String publicKeyVersion = "";
+    }
+
+    /**
+     * One of a user's public keys, as the X API returns it in the {@code data} array of
+     * {@code GET /2/users/{id}/public_keys}. A record converts from the API's JSON with
+     * {@code new ObjectMapper().treeToValue(node, PublicKeyRecord.class)}: the fields are read
+     * under the API's names, {@code public_key_version} may be written as a string or a number,
+     * and any other field, such as {@code juicebox_config}, is ignored. Pass the records to
+     * {@link Chat#addPublicKeys}, or return them from a {@link PublicKeyResolver}; a record that
+     * lacks its key version, identity key or signing key is left out there.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static final class PublicKeyRecord {
+        /** The version of this key: the API's {@code public_key_version}. */
+        @JsonProperty("public_key_version")
+        public String publicKeyVersion = "";
+
+        /** Base64-encoded identity public key: the API's {@code public_key}. */
+        @JsonProperty("public_key")
+        public String publicKey = "";
+
+        /** Base64-encoded signing public key: the API's {@code signing_public_key}. */
+        @JsonProperty("signing_public_key")
+        public String signingPublicKey = "";
+
+        /**
+         * Base64-encoded signature of the signing key over the identity key, which binds the
+         * two: the API's {@code identity_public_key_signature}.
+         */
+        @JsonProperty("identity_public_key_signature")
+        public String identityPublicKeySignature = "";
+
+        /** An empty record, for a JSON mapper to fill. */
+        public PublicKeyRecord() {}
+
+        /** A record of the four values the SDK reads. */
+        public PublicKeyRecord(
+                String publicKeyVersion,
+                String publicKey,
+                String signingPublicKey,
+                String identityPublicKeySignature) {
+            this.publicKeyVersion = publicKeyVersion;
+            this.publicKey = publicKey;
+            this.signingPublicKey = signingPublicKey;
+            this.identityPublicKeySignature = identityPublicKeySignature;
+        }
+    }
+
+    /**
+     * Result of {@link Chat#decryptEvents}. {@link #errors}, {@link #unverifiedKeyChanges},
+     * {@link #undecryptableKeyChanges} and {@link #missingSigningKeys} are keyed by an event's
+     * index in the batch, as a string, and {@link #rejectedSigningKeys} by a signing key's index,
+     * as a string. Each is empty when it has nothing to report.
      */
     public static final class DecryptEventsResult {
         /** The events that decrypted, in batch order, of every event type. */
@@ -548,6 +611,17 @@ public final class Types {
          * not verify. An event signed with such a key does not verify.
          */
         public Map<String, RejectedSigningKey> rejectedSigningKeys = Collections.emptyMap();
+
+        /**
+         * String indices into the input batch, with the signing key each event's signature
+         * names, for the events, of any signed type, whose sender's signing key at that version
+         * was not among the signing keys the call verified with. Under the default
+         * reject-unverified policy such an event is in {@link #errors}; otherwise it is in
+         * {@link #events}, unverified. A key change listed here is also in
+         * {@link #unverifiedKeyChanges} when this identity decrypted its key.
+         * {@link Chat#missingPublicKeys} reads the users to fetch keys for from this map.
+         */
+        public Map<String, MissingSigningKey> missingSigningKeys = Collections.emptyMap();
     }
 
     /**
@@ -1257,7 +1331,11 @@ public final class Types {
 
     /** Parameters for {@link Chat#prepareConversationKeyChange}. */
     public static final class ConversationKeyChangeParams {
-        /** Public keys for every participant the new key is encrypted for. */
+        /**
+         * Public keys for every participant the new key is encrypted for. Null or empty takes
+         * them from the stored public keys ({@link Chat#addPublicKeys}) of {@link #memberIds}, or,
+         * for a one-to-one {@link #conversationId}, of its two users.
+         */
         public final List<PublicKeyInput> publicKeys;
 
         /** User ID of the sender signing the change; resolves from the session identity when null. */
@@ -1270,12 +1348,29 @@ public final class Types {
         public String conversationId;
 
         /**
-         * Create params with the required fields; all optional fields default to null.
+         * User IDs of every participant the new key is encrypted for, the sender included. Read
+         * only when {@link #publicKeys} is null or empty, to take each one's key from the stored
+         * public keys.
+         */
+        public List<String> memberIds;
+
+        /**
+         * Create params with the participants' public keys; all optional fields default to null.
          *
-         * @param publicKeys Public keys for every participant the new key is encrypted for.
+         * @param publicKeys Public keys for every participant the new key is encrypted for; null
+         *     or empty takes them from the stored public keys.
          */
         public ConversationKeyChangeParams(List<PublicKeyInput> publicKeys) {
             this.publicKeys = publicKeys;
+        }
+
+        /**
+         * Create params without public keys: the call takes them from the stored public keys
+         * ({@link Chat#addPublicKeys}) of {@link #memberIds}, or, for a one-to-one
+         * {@link #conversationId}, of its two users.
+         */
+        public ConversationKeyChangeParams() {
+            this.publicKeys = null;
         }
     }
 
@@ -1286,7 +1381,11 @@ public final class Types {
      * signed as is.
      */
     public static final class GroupMembersChangeParams {
-        /** Public keys for the updated roster. */
+        /**
+         * Public keys for the updated roster. Null or empty takes them from the stored public
+         * keys ({@link Chat#addPublicKeys}) of {@link #currentMemberIds} and
+         * {@link #newMemberIds}.
+         */
         public final List<PublicKeyInput> publicKeys;
 
         /** ID of the group conversation being modified. */
@@ -1326,9 +1425,10 @@ public final class Types {
         public Boolean currentScreenCaptureBlockingEnabled;
 
         /**
-         * Create params with the required fields; all optional fields default to null.
+         * Create params with the roster's public keys; all optional fields default to null.
          *
-         * @param publicKeys Public keys for the updated roster.
+         * @param publicKeys Public keys for the updated roster; null or empty takes them from
+         *     the stored public keys of {@code currentMemberIds} and {@code newMemberIds}.
          * @param conversationId ID of the group conversation being modified.
          * @param newMemberIds IDs of the members being added.
          * @param currentMemberIds IDs of the current members.
@@ -1349,6 +1449,25 @@ public final class Types {
             this.currentAdminIds = currentAdminIds;
             this.currentPendingMemberIds = currentPendingMemberIds;
         }
+
+        /**
+         * Create params without public keys: the call takes them from the stored public keys
+         * ({@link Chat#addPublicKeys}) of {@code currentMemberIds} and {@code newMemberIds}.
+         *
+         * @param conversationId ID of the group conversation being modified.
+         * @param newMemberIds IDs of the members being added.
+         * @param currentMemberIds IDs of the current members.
+         * @param currentAdminIds IDs of the current admins.
+         * @param currentPendingMemberIds IDs of the current pending members.
+         */
+        public GroupMembersChangeParams(
+                String conversationId,
+                List<String> newMemberIds,
+                List<String> currentMemberIds,
+                List<String> currentAdminIds,
+                List<String> currentPendingMemberIds) {
+            this(null, conversationId, newMemberIds, currentMemberIds, currentAdminIds, currentPendingMemberIds);
+        }
     }
 
     /**
@@ -1356,7 +1475,10 @@ public final class Types {
      * afterwards with {@link Chat#prepareGroupAvatarChange}.
      */
     public static final class GroupCreateParams {
-        /** Public keys for the new roster. */
+        /**
+         * Public keys for the new roster. Null or empty takes them from the stored public keys
+         * ({@link Chat#addPublicKeys}) of {@link #memberIds} and {@link #adminIds}.
+         */
         public final List<PublicKeyInput> publicKeys;
 
         /** ID of the group conversation being created. */
@@ -1381,9 +1503,10 @@ public final class Types {
         public Long ttlMsec;
 
         /**
-         * Create params with the required fields; all optional fields default to null.
+         * Create params with the roster's public keys; all optional fields default to null.
          *
-         * @param publicKeys Public keys for the new roster.
+         * @param publicKeys Public keys for the new roster; null or empty takes them from the
+         *     stored public keys of {@code memberIds} and {@code adminIds}.
          * @param conversationId ID of the group conversation being created.
          * @param memberIds IDs of the initial members.
          * @param adminIds IDs of the initial admins.
@@ -1397,6 +1520,18 @@ public final class Types {
             this.conversationId = conversationId;
             this.memberIds = memberIds;
             this.adminIds = adminIds;
+        }
+
+        /**
+         * Create params without public keys: the call takes them from the stored public keys
+         * ({@link Chat#addPublicKeys}) of {@code memberIds} and {@code adminIds}.
+         *
+         * @param conversationId ID of the group conversation being created.
+         * @param memberIds IDs of the initial members.
+         * @param adminIds IDs of the initial admins.
+         */
+        public GroupCreateParams(String conversationId, List<String> memberIds, List<String> adminIds) {
+            this(null, conversationId, memberIds, adminIds);
         }
     }
 
@@ -1823,13 +1958,20 @@ public final class Types {
     public static final class GroupMembersRemoveParams {
         /**
          * Identity public keys of the members who stay, yours included; the new key is encrypted
-         * for them, and a member left out can't read what the group sends under it.
+         * for them, and a member left out can't read what the group sends under it. Null or
+         * empty takes them from the stored public keys ({@link Chat#addPublicKeys}) of
+         * {@link #remainingMemberIds}.
          */
         public final List<PublicKeyInput> publicKeys;
         /** ID of the group conversation. */
         public final String conversationId;
         /** User IDs being removed. */
         public final List<String> userIds;
+        /**
+         * User IDs of the members who stay, yours included. Read only when {@link #publicKeys}
+         * is null or empty, to take each one's key from the stored public keys.
+         */
+        public List<String> remainingMemberIds;
         /**
          * The group's current title, re-encrypted under the new conversation key; recipients'
          * decrypt drops the re-encryption rather than show a change. Pass it when the group has
@@ -1846,11 +1988,31 @@ public final class Types {
         /** Version of the sender's signing key; resolves from the session identity when null. */
         public String signingKeyVersion;
 
+        /**
+         * Create params with the public keys of the members who stay; all optional fields
+         * default to null.
+         *
+         * @param publicKeys Identity public keys of the members who stay; null or empty takes
+         *     them from the stored public keys of {@link #remainingMemberIds}.
+         * @param conversationId ID of the group conversation.
+         * @param userIds User IDs being removed.
+         */
         public GroupMembersRemoveParams(
                 List<PublicKeyInput> publicKeys, String conversationId, List<String> userIds) {
             this.publicKeys = publicKeys;
             this.conversationId = conversationId;
             this.userIds = userIds;
+        }
+
+        /**
+         * Create params without public keys: the call takes them from the stored public keys
+         * ({@link Chat#addPublicKeys}) of {@link #remainingMemberIds}.
+         *
+         * @param conversationId ID of the group conversation.
+         * @param userIds User IDs being removed.
+         */
+        public GroupMembersRemoveParams(String conversationId, List<String> userIds) {
+            this(null, conversationId, userIds);
         }
     }
 

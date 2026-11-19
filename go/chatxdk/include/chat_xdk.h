@@ -313,6 +313,52 @@ struct FfiResult chat_xdk_add_signing_keys(const struct ChatHandle *handle,
                                            const char *signing_keys_json);
 
 /**
+ * Add users' public keys to the stored signing keys, as
+ * `chat_xdk_add_signing_keys` adds entries.
+ *
+ * `records_json` is a JSON object that maps each user id to the records
+ * `GET /2/users/{id}/public_keys` returns in `data` for that user:
+ * `{"12345": [{"public_key_version", "public_key", "signing_public_key",
+ * "identity_public_key_signature"}, ...], ...}`.
+ * A record is read as the X API sends it: `public_key_version` may be a
+ * string or a number, a field may carry its camelCase name, and any other
+ * field, such as `juicebox_config`, is ignored. A record without a key
+ * version, an identity key or a signing key is left out. An empty string
+ * or `null` adds nothing, and so does a user whose records are `null` or
+ * `[]`.
+ *
+ * The decrypt calls verify with the stored keys when they are passed no
+ * signing keys, and the four prepare calls that encrypt a new conversation
+ * key (a conversation-key change, a group create, a member add and a
+ * member removal) read their members' identity keys from them when they
+ * are passed no `public_keys`.
+ */
+struct FfiResult chat_xdk_add_public_keys(const struct ChatHandle *handle,
+                                          const char *records_json);
+
+/**
+ * The users whose public keys a `chat_xdk_decrypt_events` result was
+ * missing.
+ *
+ * `missing_signing_keys_json` is the result's `missing_signing_keys`
+ * object, keyed by event index: `{"0": {"user_id": "...",
+ * "public_key_version": "..."}, ...}`. An empty string or `null` is an
+ * empty object.
+ *
+ * Returns in `data` a JSON array of user id strings, each user once, in
+ * batch order (`[]` when none). Fetch their keys
+ * (`GET /2/users/{id}/public_keys`), add them with
+ * `chat_xdk_add_public_keys`, and decrypt the batch again.
+ *
+ * A key this call returned a user for is not asked for again for a minute,
+ * so a lookup that brought no key is not repeated with every batch. A key
+ * that arrives is no longer missing, and a key version not asked for
+ * before is asked for at once.
+ */
+struct FfiResult chat_xdk_missing_public_keys(const struct ChatHandle *handle,
+                                              const char *missing_signing_keys_json);
+
+/**
  * Lock the SDK, clearing keys from memory.
  */
 struct FfiResult chat_xdk_lock(const struct ChatHandle *handle);
@@ -484,9 +530,10 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * `params_json` — single JSON document: `events` (the base64 events) plus
  * optional `signing_keys` (`[{"user_id","public_key_version","public_key",
  * "identity_public_key","identity_public_key_signature"},...]`); absent or
- * empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
- * They must include the keys of every member who signed a key change in
- * the batch.
+ * empty falls back to the stored keys (`chat_xdk_set_signing_keys`,
+ * `chat_xdk_add_signing_keys`, `chat_xdk_add_public_keys`). They must
+ * include the keys of every member who signed a key change in the batch;
+ * the result's `missing_signing_keys` names the ones the call lacked.
  *
  * The result's `errors` maps the index of each event left out of `events`,
  * as a string, to its error: one that failed, or one decrypt drops, such as
@@ -498,7 +545,7 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * conversation, and `latest_version` that version when every event belongs
  * to one conversation (null for a batch of more than one).
  *
- * Three more objects are keyed by index, as a string, like `errors`, and
+ * Four more objects are keyed by index, as a string, like `errors`, and
  * are `{}` when they have nothing to report. `unverified_key_changes` maps
  * the index of each key change whose signature did not verify to
  * `{"reason","key_dropped","conversation_id","conversation_key_version",
@@ -511,6 +558,11 @@ struct FfiResult chat_xdk_extract_conversation_keys(const struct ChatHandle *han
  * `DecryptionFailed`. `rejected_signing_keys` maps the index, among the
  * signing keys the call verified with, of each one left out because its
  * identity binding does not verify to `{"user_id","public_key_version"}`.
+ * `missing_signing_keys` maps the index of each signed event whose
+ * sender's signing key was not among the signing keys the call verified
+ * with to `{"user_id","public_key_version"}`: the sender, and the key
+ * version the event's signature names. `chat_xdk_missing_public_keys`
+ * reads the users to fetch keys for from this object.
  */
 struct FfiResult chat_xdk_decrypt_events(const struct ChatHandle *handle, const char *params_json);
 
@@ -661,6 +713,14 @@ void chat_xdk_file_decryptor_free(struct FileDecryptorHandle *handle);
  * `sender_id` / `signing_key_version` (unset resolves from the session
  * identity) and `conversation_id` (absent or empty derives the one-to-one
  * id).
+ *
+ * `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+ * the stored public keys (`chat_xdk_add_public_keys`) of the users in the
+ * optional `member_ids` (every participant, the sender included), or,
+ * without `member_ids`, of the two users of the one-to-one conversation
+ * `conversation_id` names. A user with no stored key is an `invalid_input`
+ * error naming the user; `chat_xdk_missing_public_keys_for` lists those
+ * users before the call.
  */
 struct FfiResult chat_xdk_prepare_conversation_key_change(const struct ChatHandle *handle,
                                                           const char *params_json);
@@ -679,6 +739,12 @@ struct FfiResult chat_xdk_prepare_conversation_key_change(const struct ChatHandl
  * never false). Emits two action signatures; the result carries the
  * encrypted title and description as `encrypted_title` and
  * `encrypted_description`.
+ *
+ * `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+ * the stored public keys (`chat_xdk_add_public_keys`) of the users in
+ * `current_member_ids` and `new_member_ids`. A user with no stored key is
+ * an `invalid_input` error naming the user;
+ * `chat_xdk_missing_public_keys_for` lists those users before the call.
  */
 struct FfiResult chat_xdk_prepare_group_members_change(const struct ChatHandle *handle,
                                                        const char *params_json);
@@ -693,6 +759,12 @@ struct FfiResult chat_xdk_prepare_group_members_change(const struct ChatHandle *
  * `ttl_msec`. Emits two action signatures; the result carries the
  * encrypted title as `encrypted_title`. A create sets no avatar; set it
  * afterwards with `chat_xdk_prepare_group_avatar_change`.
+ *
+ * `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+ * the stored public keys (`chat_xdk_add_public_keys`) of the users in
+ * `member_ids` and `admin_ids`. A user with no stored key is an
+ * `invalid_input` error naming the user; `chat_xdk_missing_public_keys_for`
+ * lists those users before the call.
  */
 struct FfiResult chat_xdk_prepare_group_create(const struct ChatHandle *handle,
                                                const char *params_json);
@@ -723,6 +795,13 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
  * under the new key; pass each one the group has) and `sender_id` /
  * `signing_key_version`.
  *
+ * `public_keys` may be absent, `null` or `[]` when the optional
+ * `remaining_member_ids` names the members who stay, yours included. The
+ * key is then encrypted to their stored public keys
+ * (`chat_xdk_add_public_keys`). A user with no stored key is an
+ * `invalid_input` error naming the user; `chat_xdk_missing_public_keys_for`
+ * lists those users before the call.
+ *
  * Returns JSON `PreparedConversationChange`: `conversation_key` is the new
  * raw key base64, and `action_signatures` is the removal, a title and a
  * description change for each one set, marked as key-rotation
@@ -730,6 +809,29 @@ struct FfiResult chat_xdk_prepare_message_delete(const struct ChatHandle *handle
  */
 struct FfiResult chat_xdk_prepare_group_members_remove(const struct ChatHandle *handle,
                                                        const char *params_json);
+
+/**
+ * The users whose public keys one of the four prepare calls that encrypt a
+ * new conversation key would be missing.
+ *
+ * `call` names the prepare call: `conversation_key_change`, `group_create`,
+ * `group_members_change` or `group_members_remove`; any other value is an
+ * `invalid_input` error. `params_json` is the params document that call's
+ * `chat_xdk_prepare_*` function takes, read the same way.
+ *
+ * Returns in `data` a JSON array of user id strings (`[]` when none): the
+ * members the call encrypts its key to who have no stored public key, and
+ * none when the document passes `public_keys`. Fetch their keys
+ * (`GET /2/users/{id}/public_keys`), add them with
+ * `chat_xdk_add_public_keys`, then make the prepare call.
+ *
+ * A user this call returned is not returned again for a minute while no
+ * key is stored for that user, so a lookup that brought no key is not
+ * repeated with every call.
+ */
+struct FfiResult chat_xdk_missing_public_keys_for(const struct ChatHandle *handle,
+                                                  const char *call,
+                                                  const char *params_json);
 
 /**
  * Sign leaving a group.

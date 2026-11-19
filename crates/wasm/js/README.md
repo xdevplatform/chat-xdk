@@ -110,17 +110,17 @@ for (const dm of result.events) {
 
 // A key change verifies with the signing keys of the member who made it. One
 // that did not verify is here, by its index in the batch; when its key was
-// dropped, the messages under it are in result.errors. For
-// "missingSigningKey", fetch the public keys of change.senderId
-// (GET /2/users/{id}/public_keys), add them to the stored keys with
-// chat.addSigningKeys([...]), which keeps the keys already stored, and
-// decrypt again.
+// dropped, the messages under it are in result.errors. With a public-key
+// hook, decryptEventsAsync fetches the keys a batch is missing: see "Other
+// users' public keys" below.
 for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
   console.warn(index, change.reason, change.senderId, change.keyDropped);
 }
-// Key changes whose key this chat could not decrypt, and signing keys left
-// out because their identity binding does not verify, are reported the same
-// way: result.undecryptableKeyChanges, result.rejectedSigningKeys.
+// Three more maps are reported the same way: result.missingSigningKeys, the
+// events whose sender's signing key the call did not have;
+// result.undecryptableKeyChanges, the key changes whose key this chat could
+// not decrypt; and result.rejectedSigningKeys, the signing keys left out
+// because their identity binding does not verify.
 
 // The version to encrypt with: for a batch of one conversation,
 // result.conversationKeys.latestVersion; for any batch,
@@ -159,6 +159,87 @@ no `conversationKeyVersion`), and `decryptEvent`, `decryptFile` and
 `fileDecryptor` the version the event names. A prepared key is cached before
 its request is sent: if the X API rejects the request, prepare the change
 again.
+
+## Other users' public keys
+
+A chat verifies events with the signing keys of the users who sent them, and
+encrypts a new conversation key to its members' identity keys. Both are in
+the records `GET /2/users/{id}/public_keys` returns. Set a hook that fetches
+them, and the chat asks it for the keys it is missing:
+
+```typescript
+import { createChat, type PublicKeyRecords } from "@xdevplatform/chat-xdk";
+
+const chat = await createChat({
+  getAuthToken,
+  resolvePublicKeys: async (userIds) => {
+    const records: PublicKeyRecords = {};
+    for (const userId of userIds) {
+      // The `data` array of GET /2/users/{id}/public_keys, as the API sends it.
+      records[userId] = await xApi.getPublicKeys(userId);
+    }
+    return records;
+  },
+});
+
+// Verifies with the stored keys, after fetching the keys of the senders it
+// has none for.
+const result = await chat.decryptEventsAsync({ events: rawEvents });
+
+// Encrypts the new key to the stored keys of the members named, after
+// fetching the ones it has none for. No publicKeys needed.
+const group = await chat.prepareGroupCreateAsync({
+  conversationId: "g123",
+  memberIds: ["111", "222"],
+  adminIds: ["111"],
+});
+```
+
+- The hook takes user ids and returns, or resolves to, each user's records
+  by user id. Leave out a user it has nothing for. What it throws rejects
+  the call that asked.
+- Only five methods call the hook: `decryptEventsAsync`,
+  `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+  `prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync`.
+  Each returns a Promise of what the method it is named after returns. The
+  other methods never call it.
+- `decryptEventsAsync` calls the hook only when it is passed no
+  `signingKeys`, and the prepare methods only when they are passed no
+  `publicKeys`.
+- `chat.setResolvePublicKeys(hook)` sets or replaces the hook later, and
+  `chat.setResolvePublicKeys(null)` removes it.
+- Setting a hook turns the key cache on (`setCacheKeys(true)`). Removing the
+  hook leaves the cache on.
+- A lookup that did not bring a key is not repeated for a minute, so a user
+  without keys does not cost a request with every batch.
+
+With `publicKeys` omitted, a prepare call encrypts to the stored keys of the
+members its params name, and throws when one of them has none:
+
+| Call | Members it reads keys for |
+|---|---|
+| `prepareGroupCreate` | `memberIds` and `adminIds` |
+| `prepareGroupMembersChange` | `currentMemberIds` and `newMemberIds` |
+| `prepareGroupMembersRemove` | `remainingMemberIds`: the members who stay, you included |
+| `prepareConversationKeyChange` | `memberIds`: every participant, you included. For a one-to-one, `conversationId` is enough |
+
+To fetch the keys yourself instead, without a hook, use the two calls the
+hook is built on. `decryptEvents` reports each event whose sender's signing
+key it did not have in `missingSigningKeys`, by the event's index in the
+batch; `missingPublicKeys` lists those senders, and `addPublicKeys` stores
+their records, keeping the keys already stored:
+
+```typescript
+let result = chat.decryptEvents({ events: rawEvents });
+const userIds = chat.missingPublicKeys(result);
+if (userIds.length > 0) {
+  chat.addPublicKeys(await fetchPublicKeys(userIds)); // { [userId]: records }
+  result = chat.decryptEvents({ events: rawEvents });
+}
+```
+
+`missingPublicKeys` also remembers what it returned: it does not list the
+same missing key again for a minute.
 
 ## API
 

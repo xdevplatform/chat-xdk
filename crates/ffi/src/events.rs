@@ -84,6 +84,10 @@ pub(crate) fn json_decrypt_events_result(
         "rejected_signing_keys".into(),
         serde_json::to_value(&r.rejected_signing_keys)?,
     );
+    root.insert(
+        "missing_signing_keys".into(),
+        serde_json::to_value(&r.missing_signing_keys)?,
+    );
     serde_json::to_string(&serde_json::Value::Object(root))
 }
 
@@ -133,9 +137,10 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// `params_json` — single JSON document: `events` (the base64 events) plus
 /// optional `signing_keys` (`[{"user_id","public_key_version","public_key",
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
-/// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
-/// They must include the keys of every member who signed a key change in
-/// the batch.
+/// empty falls back to the stored keys (`chat_xdk_set_signing_keys`,
+/// `chat_xdk_add_signing_keys`, `chat_xdk_add_public_keys`). They must
+/// include the keys of every member who signed a key change in the batch;
+/// the result's `missing_signing_keys` names the ones the call lacked.
 ///
 /// The result's `errors` maps the index of each event left out of `events`,
 /// as a string, to its error: one that failed, or one decrypt drops, such as
@@ -147,7 +152,7 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// conversation, and `latest_version` that version when every event belongs
 /// to one conversation (null for a batch of more than one).
 ///
-/// Three more objects are keyed by index, as a string, like `errors`, and
+/// Four more objects are keyed by index, as a string, like `errors`, and
 /// are `{}` when they have nothing to report. `unverified_key_changes` maps
 /// the index of each key change whose signature did not verify to
 /// `{"reason","key_dropped","conversation_id","conversation_key_version",
@@ -160,6 +165,11 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// `DecryptionFailed`. `rejected_signing_keys` maps the index, among the
 /// signing keys the call verified with, of each one left out because its
 /// identity binding does not verify to `{"user_id","public_key_version"}`.
+/// `missing_signing_keys` maps the index of each signed event whose
+/// sender's signing key was not among the signing keys the call verified
+/// with to `{"user_id","public_key_version"}`: the sender, and the key
+/// version the event's signature names. `chat_xdk_missing_public_keys`
+/// reads the users to fetch keys for from this object.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,

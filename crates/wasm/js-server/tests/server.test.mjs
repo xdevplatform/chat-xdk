@@ -9,6 +9,7 @@ import init, { __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as browser from "../../js/index.js";
 import { keyCacheTests } from "../../js/tests/key_cache.mjs";
 import { keyChangeSignerTests } from "../../js/tests/key_change_signers.mjs";
+import { publicKeyTests } from "../../js/tests/public_keys.mjs";
 import * as server from "../index.js";
 
 const { ChatWithJuicebox, ChatXdkError, ServerChat, bytesToBase64, createChat } = server;
@@ -204,6 +205,10 @@ async function main() {
   // a key and read by every call that takes one, and its addSigningKeys
   // merges into the stored signing keys.
   await keyCacheTests(() => createChat());
+  // A ServerChat names the signing keys a batch lacked, stores the public
+  // keys the X API returns, reads its prepare calls' keys from them, and
+  // fetches what is missing through its public-key hook.
+  await publicKeyTests((options) => createChat(options));
   console.log("server.test.mjs: all assertions passed");
 }
 

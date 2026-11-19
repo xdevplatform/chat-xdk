@@ -38,7 +38,9 @@ use chat_xdk_core::bindings::{self, FeatureSwitches};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::{ErrorKind, SdkError};
 use chat_xdk_core::keys::juicebox::JuiceboxConfig;
-use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, QuickReply, SigningKeyEntry};
+use chat_xdk_core::{
+    AttachmentDescriptor, EntityDescriptor, KeyChangeCall, QuickReply, SigningKeyEntry,
+};
 
 mod chat;
 mod params;
@@ -287,12 +289,25 @@ fn optional_conversation_keys_field(
 }
 
 /// Convert a list of ``{user_id, identity_public_key, public_key_version}``
-/// dicts through the core type.
+/// dicts through the core type. `None` is the empty list, with which a
+/// prepare call takes its members' keys from the stored public keys.
 fn public_keys_field(
     py: Python<'_>,
-    value: &Py<PyAny>,
+    value: &Option<Py<PyAny>>,
 ) -> PyResult<Vec<chat_xdk_core::PublicKeyInput>> {
-    json_field(py, value, "public_keys")
+    match value {
+        Some(keys) => json_field(py, keys, "public_keys"),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Convert a list of user ids that may be `None`, which is the empty list.
+fn optional_user_ids_field(
+    py: Python<'_>,
+    value: &Option<Py<PyAny>>,
+    field: &str,
+) -> PyResult<Vec<String>> {
+    Ok(extract_optional_field(py, value, field)?.unwrap_or_default())
 }
 
 /// A required argument that follows an optional positional one, as

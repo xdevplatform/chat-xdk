@@ -15,6 +15,13 @@ use super::*;
 // attachment objects use the wire-format keys of `AttachmentDescriptor` and
 // are parsed strictly (a missing required media field is an error — see
 // `parse_attachments`).
+//
+// The four params that hand out a conversation key (conversation key change,
+// group create, group members change, group members remove) take
+// `public_keys` as optional: absent, null and `[]` all mean the public keys
+// stored for the members the call names. `member_ids` and
+// `remaining_member_ids` name those members for the two calls whose other
+// fields do not.
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiEncryptMessageParams {
@@ -123,9 +130,12 @@ pub(crate) struct FfiMessageDeleteParams {
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiGroupMembersRemoveParams {
-    pub(crate) public_keys: Vec<PublicKeyInput>,
+    #[serde(default)]
+    pub(crate) public_keys: Option<Vec<PublicKeyInput>>,
     pub(crate) conversation_id: String,
     pub(crate) user_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) remaining_member_ids: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) title: Option<String>,
     #[serde(default)]
@@ -298,7 +308,10 @@ pub(crate) struct FfiMarkConversationReadParams {
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiConversationKeyChangeParams {
-    pub(crate) public_keys: Vec<PublicKeyInput>,
+    #[serde(default)]
+    pub(crate) public_keys: Option<Vec<PublicKeyInput>>,
+    #[serde(default)]
+    pub(crate) member_ids: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) sender_id: Option<String>,
     #[serde(default)]
@@ -308,7 +321,8 @@ pub(crate) struct FfiConversationKeyChangeParams {
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiGroupMembersChangeParams {
-    pub(crate) public_keys: Vec<PublicKeyInput>,
+    #[serde(default)]
+    pub(crate) public_keys: Option<Vec<PublicKeyInput>>,
     pub(crate) conversation_id: String,
     pub(crate) new_member_ids: Vec<String>,
     pub(crate) current_member_ids: Vec<String>,
@@ -327,7 +341,8 @@ pub(crate) struct FfiGroupMembersChangeParams {
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiGroupCreateParams {
-    pub(crate) public_keys: Vec<PublicKeyInput>,
+    #[serde(default)]
+    pub(crate) public_keys: Option<Vec<PublicKeyInput>>,
     pub(crate) conversation_id: String,
     pub(crate) member_ids: Vec<String>,
     pub(crate) admin_ids: Vec<String>,

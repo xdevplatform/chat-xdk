@@ -96,7 +96,8 @@ for dm in result["events"]:
 # that did not verify is here, by its index in the batch; when its key was
 # dropped, the messages under it are in result["errors"]. For
 # "MissingSigningKey", add the public keys of change["sender_id"]
-# (GET /2/users/{id}/public_keys) and decrypt again.
+# (GET /2/users/{id}/public_keys) and decrypt again, or set a hook that
+# does: see "Other users' public keys" below.
 for index, change in result["unverified_key_changes"].items():
     print(index, change["reason"], change["sender_id"], change["key_dropped"])
 # Key changes whose key this chat could not decrypt, and signing keys left
@@ -151,6 +152,75 @@ A prepared key is cached when the prepare call returns, before its request
 is sent. If the X API rejects the request, no one else holds that key:
 prepare the change again, or pass the key to encrypt with explicitly, until
 a newer key change verifies.
+
+### Other users' public keys
+
+A chat uses other users' public keys (`GET /2/users/{id}/public_keys`) twice:
+their signing keys verify the events they sign, and their identity keys are
+what a new conversation key is encrypted to. Set a hook that fetches them,
+and the chat asks it for the keys it lacks:
+
+```python
+def resolve_public_keys(user_ids):
+    # User id -> the records in "data" of GET /2/users/{id}/public_keys.
+    return {user_id: fetch_public_keys(user_id) for user_id in user_ids}
+
+chat.set_resolve_public_keys(resolve_public_keys)
+
+# No signing keys passed: the hook fetches the keys of the senders the batch
+# names, the members who signed its key changes included.
+result = chat.decrypt_events(DecryptEventsParams(raw_events))
+
+# No public_keys passed: the hook fetches the keys of the members named.
+created = chat.prepare_group_create(
+    GroupCreateParams(conversation_id=group_id, member_ids=["111", "222"], admin_ids=["111"])
+)
+```
+
+- `decrypt_events`, when it is passed no signing keys, calls the hook for
+  the users whose keys its result was missing, adds the records the hook
+  returns, and decrypts the batch once more.
+- `prepare_conversation_key_change`, `prepare_group_create`,
+  `prepare_group_members_change` and `prepare_group_members_remove`, when
+  they are passed no `public_keys`, call the hook for the members who have
+  no stored key.
+
+The hook is called with a list of user ids and returns a dict from user id
+to that user's records, leaving out a user it has nothing for. A record is
+read as the X API sends it; other fields, such as `juicebox_config`, are
+ignored. An exception the hook raises reaches the caller. Setting a hook
+turns the key cache on. A lookup that brought no key is not repeated for a
+minute.
+
+`public_keys` is optional on the params of those four prepare methods. Left
+out, the new key is encrypted to the stored public keys of the members the
+params name:
+
+| Params | Members |
+| --- | --- |
+| `GroupCreateParams` | `member_ids` and `admin_ids` |
+| `GroupMembersChangeParams` | `current_member_ids` and `new_member_ids` |
+| `GroupMembersRemoveParams` | `remaining_member_ids`: the members who stay, you included |
+| `ConversationKeyChangeParams` | `member_ids`: every participant, you included. Without it, the two users of the one-to-one conversation `conversation_id` names |
+
+A member with no stored key raises `InvalidInputError`, which names the user.
+
+Without a hook, the same steps by hand:
+
+```python
+result = chat.decrypt_events(DecryptEventsParams(raw_events))
+# result["missing_signing_keys"] maps the index of each event whose sender's
+# signing key the call lacked to {"user_id", "public_key_version"}.
+user_ids = chat.missing_public_keys(result)
+if user_ids:
+    chat.add_public_keys({user_id: fetch_public_keys(user_id) for user_id in user_ids})
+    result = chat.decrypt_events(DecryptEventsParams(raw_events))
+```
+
+`missing_public_keys` lists each user once, in batch order, and does not
+list a user again for a minute when the lookup brought no key.
+`add_public_keys` adds to the stored signing keys, as `add_signing_keys`
+does.
 
 ## API
 

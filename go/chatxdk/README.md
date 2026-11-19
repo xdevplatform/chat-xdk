@@ -63,6 +63,10 @@ func main() {
     // such as the keys of a member who joins later.
     _ = chat.AddSigningKeys(newMemberSigningKeyEntries)
 
+    // Or let the chat ask for the public keys it lacks, in place of
+    // SetSigningKeys and AddSigningKeys: see "Public keys" below.
+    chat.SetResolvePublicKeys(fetchPublicKeys)
+
     // Batch load: decrypt many events at once (unset SigningKeys = stored signing keys)
     batch, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64List})
     if err != nil {
@@ -77,12 +81,12 @@ func main() {
 
     // A key change verifies with the signing keys of the member who made it.
     // One that did not verify is here, by its index in the batch; when its
-    // key was dropped, the messages under it are in batch.Errors. For
-    // UnverifiedKeyChangeMissingSigningKey, add the public keys of
-    // change.SenderID (GET /2/users/{id}/public_keys) and decrypt again.
+    // key was dropped, the messages under it are in batch.Errors.
     for index, change := range batch.UnverifiedKeyChanges {
         fmt.Println(index, change.Reason, change.KeyDropped)
     }
+    // Each signed event whose sender's signing key the call lacked is in
+    // batch.MissingSigningKeys, with the user and key version to fetch.
     // Key changes whose key this chat could not decrypt, and signing keys
     // left out because their identity binding does not verify, are reported
     // the same way: batch.UndecryptableKeyChanges, batch.RejectedSigningKeys.
@@ -121,6 +125,67 @@ and `FileDecryptor` the key at the version the event names. So
 `DecryptFileParams.ConversationKeys`, `FileDecryptorParams.ConversationKeys`
 and `GroupAvatarChangeParams.ConversationKeyVersion` may be left unset. A
 value that is passed is used as is.
+
+## Public keys
+
+A chat verifies events with other users' signing keys and encrypts a new
+conversation key to their identity keys. Both are in the records
+`GET /2/users/{id}/public_keys` returns in `data`: a `PublicKeyRecord`
+unmarshals from one as the API sends it.
+
+Set a hook and the chat asks for the keys it lacks:
+
+```go
+chat.SetResolvePublicKeys(func(userIDs []string) (map[string][]chatxdk.PublicKeyRecord, error) {
+    records := make(map[string][]chatxdk.PublicKeyRecord)
+    for _, userID := range userIDs {
+        // GET /2/users/{userID}/public_keys with your X API client.
+        var response struct {
+            Data []chatxdk.PublicKeyRecord `json:"data"`
+        }
+        if err := getJSON("/2/users/"+userID+"/public_keys", &response); err != nil {
+            continue // a user left out is reported as still missing
+        }
+        records[userID] = response.Data
+    }
+    return records, nil
+})
+```
+
+With a hook set:
+
+- `DecryptEvents`, when `SigningKeys` is nil, calls the hook for the senders
+  whose signing keys the batch lacked, stores what it returns, and decrypts
+  the batch once more. What is still missing is in the result's
+  `MissingSigningKeys`.
+- `PrepareConversationKeyChange`, `PrepareGroupCreate`,
+  `PrepareGroupMembersChange` and `PrepareGroupMembersRemove`, when
+  `PublicKeys` is nil, call the hook for the members with no stored key and
+  encrypt the new key to the stored keys. The members are the users in
+  `MemberIDs` and `AdminIDs` for a create, in `CurrentMemberIDs` and
+  `NewMemberIDs` for a member add, in `RemainingMemberIDs` for a removal, and
+  in `MemberIDs` for a key change; a key change of a one-to-one needs only
+  its `ConversationID`. A member who still has no stored key fails the call
+  with an error that names the user.
+
+Setting a hook turns the key cache on (`SetCacheKeys`). An error the hook
+returns is returned by the call that ran it. A lookup is not repeated for a
+minute: a user the hook was called for and whose key did not arrive is left
+out of the next calls until then.
+
+Without a hook, the same steps are calls of their own:
+
+```go
+batch, _ := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64List})
+userIDs, _ := chat.MissingPublicKeys(batch) // the users to fetch, once a minute each
+records, _ := fetchPublicKeys(userIDs)      // the hook's function, called by hand
+_ = chat.AddPublicKeys(records)
+batch, _ = chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64List})
+```
+
+`AddPublicKeys` adds to the keys `SetSigningKeys` and `AddSigningKeys`
+store. Signing keys and public keys that a call is passed are used as they
+are, and the hook is not called for that call.
 
 ## API
 
