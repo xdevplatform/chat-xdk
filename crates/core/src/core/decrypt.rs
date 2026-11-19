@@ -742,9 +742,32 @@ impl ChatCore {
     ///   this identity could not decrypt, each with why
     /// * `rejected_signing_keys` - The signing keys left out of verification
     ///   because their identity binding does not verify
+    /// * `missing_signing_keys` - The signing keys the batch's events name
+    ///   that were not among the keys the call verified with
+    ///
+    /// With a hook set ([`Self::set_resolve_public_keys`]) and no signing
+    /// keys passed, the call fetches the public keys of
+    /// [`Self::missing_public_keys`] of its result through the hook, adds
+    /// them to the stored keys, and returns the result of decrypting the
+    /// batch once more.
     pub fn decrypt_events(&self, params: &DecryptEventsParams) -> DecryptEventsResult {
         let events: Vec<&str> = params.events.iter().map(String::as_str).collect();
-        self.decrypt_events_with(&events, params.signing_keys.as_deref().unwrap_or_default())
+        let signing_keys = params.signing_keys.as_deref().unwrap_or_default();
+        let result = self.decrypt_events_with(&events, signing_keys);
+        // The hook fills the stored keys, which only a call that is passed
+        // no signing keys verifies with.
+        if !signing_keys.is_empty() {
+            return result;
+        }
+        let Some(resolve) = self.public_keys_hook() else {
+            return result;
+        };
+        let missing = self.missing_public_keys(&result);
+        if missing.is_empty() {
+            return result;
+        }
+        self.add_public_keys(&resolve(&missing));
+        self.decrypt_events_with(&events, signing_keys)
     }
 
     /// [`Self::decrypt_events`] over borrowed inputs.
@@ -785,6 +808,7 @@ impl ChatCore {
             self.apply_ckey_freshness(events, &signing_keys.verified, &keys);
         let conversation_keys = keys.into_result(latest_version, latest_versions);
         let lost = lost_key_versions(&unverified_key_changes, &undecryptable_key_changes);
+        let missing_signing_keys = self.missing_signing_keys(events, &signing_keys);
 
         let mut decrypted = Vec::new();
         let mut errors = HashMap::new();
@@ -833,7 +857,47 @@ impl ChatCore {
             unverified_key_changes,
             undecryptable_key_changes,
             rejected_signing_keys: signing_keys.rejected,
+            missing_signing_keys,
         }
+    }
+
+    /// The signing keys the batch's events name that are not among
+    /// `signing_keys`, by the index of the event: for each event of a kind
+    /// whose signature decrypt checks, its sender's key at the key version
+    /// its signature names, when no key of that sender at that version was
+    /// given. A key that was given and rejected is not missing.
+    fn missing_signing_keys(
+        &self,
+        events: &[&str],
+        signing_keys: &CheckedSigningKeys,
+    ) -> HashMap<usize, MissingSigningKey> {
+        let mut missing = HashMap::new();
+        for (index, event_b64) in events.iter().enumerate() {
+            let Ok(parsed) = Self::parse_event_b64(event_b64) else {
+                continue;
+            };
+            let Some(sender_id) = parsed.sender_id.as_deref() else {
+                continue;
+            };
+            if !parsed.detail.as_ref().is_some_and(has_checked_signature) {
+                continue;
+            }
+            let sender_keys = signing_keys.of_sender(Some(sender_id));
+            let lacks_key = matches!(
+                event_signature(&parsed, &sender_keys),
+                Err(SignatureCheck::MissingSigningKey)
+            );
+            if lacks_key && !signing_keys.rejected_key_of(&parsed) {
+                missing.insert(
+                    index,
+                    MissingSigningKey::new(
+                        sender_id,
+                        signature_key_version(&parsed).unwrap_or_default(),
+                    ),
+                );
+            }
+        }
+        missing
     }
 
     /// The error of a message that found no conversation key although the
@@ -1400,6 +1464,25 @@ impl ChatCore {
                 raw: value.to_string(),
             },
         }
+    }
+}
+
+/// Whether decrypt checks the signature of an event with this detail. A
+/// message without a key version is unencrypted and carries no signature to
+/// check.
+fn has_checked_signature(detail: &MessageEventDetail) -> bool {
+    match detail {
+        MessageEventDetail::MessageCreateEvent(create) => {
+            create.contents.is_some() && create.conversation_key_version.is_some()
+        }
+        MessageEventDetail::ConversationKeyChangeEvent(_)
+        | MessageEventDetail::MarkConversationReadEvent(_)
+        | MessageEventDetail::MarkConversationUnreadEvent(_)
+        | MessageEventDetail::MessageDeleteEvent(_)
+        | MessageEventDetail::ConversationDeleteEvent(_)
+        | MessageEventDetail::GroupChangeEvent(_)
+        | MessageEventDetail::ConversationMetadataChangeEvent(_) => true,
+        _ => false,
     }
 }
 

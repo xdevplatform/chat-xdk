@@ -1,7 +1,7 @@
 //! Removing members, which rotates the conversation key for the members
 //! who stay; leaving; and adding and removing admins.
 
-use crate::core::ChatCore;
+use crate::core::{ChatCore, KeyChangeCall};
 use crate::error::SdkError;
 use crate::params::{
     GroupAdminsAddParams, GroupAdminsRemoveParams, GroupLeaveParams, GroupMembersRemoveParams,
@@ -19,7 +19,9 @@ impl ChatCore {
     /// Sign a group member removal and rotate the conversation key for the
     /// members who stay.
     ///
-    /// `public_keys` are the identity keys of the members who stay. The
+    /// `public_keys` are the identity keys of the members who stay; empty,
+    /// they are the stored public keys of `remaining_member_ids`
+    /// ([`Self::add_public_keys`]). The
     /// result is a [`PreparedConversationChange`]: the new conversation key,
     /// its participant keys, and `action_signatures` in request order — the
     /// removal, which names the new key version; a title and a description
@@ -64,7 +66,7 @@ impl ChatCore {
             "conversation_key_version",
             conversation_key_version,
         )?;
-        let public_keys = &params.public_keys;
+        let public_keys = self.key_change_public_keys(KeyChangeCall::GroupMembersRemove(params))?;
         if public_keys.is_empty() {
             return Err(SdkError::InvalidInput(
                 "public_keys is empty: pass the public keys of the remaining members".into(),
@@ -79,7 +81,7 @@ impl ChatCore {
                     .into(),
             ));
         }
-        let (ckey, participant_keys) = self.build_participant_keys(public_keys)?;
+        let (ckey, participant_keys) = self.build_participant_keys(&public_keys)?;
         let mut action_signatures = vec![sign_member_remove(
             &ctx,
             &params.user_ids,

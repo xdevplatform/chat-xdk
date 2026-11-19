@@ -923,7 +923,10 @@ impl MarkConversationReadParams {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ConversationKeyChangeParams {
-    /// Identity public keys for every participant the new key is encrypted for.
+    /// Identity public keys for every participant the new key is encrypted
+    /// for. Leave it empty to take them from the stored public keys
+    /// ([`crate::ChatCore::add_public_keys`]) of `member_ids`, or, for a
+    /// one-to-one `conversation_id`, of its two users.
     pub public_keys: Vec<PublicKeyInput>,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
@@ -935,17 +938,31 @@ pub struct ConversationKeyChangeParams {
     /// derives the canonical one-to-one id from the two participants; pass
     /// the existing id for a group key rotation.
     pub conversation_id: Option<String>,
+    /// User IDs of every participant the new key is encrypted for, the
+    /// sender included: read only when `public_keys` is empty, to take each
+    /// one's key from the stored public keys.
+    pub member_ids: Vec<String>,
 }
 
 impl ConversationKeyChangeParams {
-    /// Create params with required fields; all optional fields default to `None`.
+    /// Create params with required fields; all optional fields default to
+    /// `None`. An empty `public_keys` takes the keys from the stored public
+    /// keys.
     pub fn new(public_keys: Vec<PublicKeyInput>) -> Self {
         Self {
             public_keys,
             sender_id: None,
             signing_key_version: None,
             conversation_id: None,
+            member_ids: Vec::new(),
         }
+    }
+
+    /// Name every participant the new key is encrypted for, the sender
+    /// included, for a call whose `public_keys` is empty.
+    pub fn with_member_ids(mut self, member_ids: Vec<String>) -> Self {
+        self.member_ids = member_ids;
+        self
     }
 
     /// Set the conversation the change applies to: the existing id of a
@@ -980,6 +997,9 @@ impl ConversationKeyChangeParams {
 #[non_exhaustive]
 pub struct GroupMembersChangeParams {
     /// Identity public keys for every participant of the updated roster.
+    /// Leave it empty to take them from the stored public keys
+    /// ([`crate::ChatCore::add_public_keys`]) of `current_member_ids` and
+    /// `new_member_ids`.
     pub public_keys: Vec<PublicKeyInput>,
     /// ID of the group conversation being changed.
     pub conversation_id: String,
@@ -1094,7 +1114,10 @@ impl GroupMembersChangeParams {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GroupCreateParams {
-    /// Identity public keys for every participant of the new group.
+    /// Identity public keys for every participant of the new group. Leave
+    /// it empty to take them from the stored public keys
+    /// ([`crate::ChatCore::add_public_keys`]) of `member_ids` and
+    /// `admin_ids`.
     pub public_keys: Vec<PublicKeyInput>,
     /// ID of the new group conversation (the `g…` id minted by the
     /// initialize endpoint).
@@ -1177,7 +1200,8 @@ impl GroupCreateParams {
 #[non_exhaustive]
 pub struct GroupMembersRemoveParams {
     /// Identity public keys of the members who stay; the new conversation
-    /// key is encrypted for each of them.
+    /// key is encrypted for each of them. Leave it empty to take them from
+    /// the stored public keys of `remaining_member_ids`.
     pub public_keys: Vec<PublicKeyInput>,
     /// ID of the group conversation.
     pub conversation_id: String,
@@ -1193,10 +1217,16 @@ pub struct GroupMembersRemoveParams {
     /// Version of the signing key used to sign the removal; resolves from
     /// the session identity when unset.
     pub signing_key_version: Option<String>,
+    /// User IDs of the members who stay, the sender included: read only
+    /// when `public_keys` is empty, to take each one's key from the stored
+    /// public keys ([`crate::ChatCore::add_public_keys`]).
+    pub remaining_member_ids: Vec<String>,
 }
 
 impl GroupMembersRemoveParams {
-    /// Create params with required fields; all optional fields default to `None`.
+    /// Create params with required fields; all optional fields default to
+    /// `None`. An empty `public_keys` takes the keys of
+    /// `remaining_member_ids` from the stored public keys.
     pub fn new(
         public_keys: Vec<PublicKeyInput>,
         conversation_id: impl Into<String>,
@@ -1210,7 +1240,15 @@ impl GroupMembersRemoveParams {
             description: None,
             sender_id: None,
             signing_key_version: None,
+            remaining_member_ids: Vec::new(),
         }
+    }
+
+    /// Name the members who stay, the sender included, for a call whose
+    /// `public_keys` is empty.
+    pub fn with_remaining_member_ids(mut self, remaining_member_ids: Vec<String>) -> Self {
+        self.remaining_member_ids = remaining_member_ids;
+        self
     }
 
     /// Set the group's title, to re-encrypt under the new conversation key.

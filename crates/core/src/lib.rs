@@ -149,6 +149,7 @@
 //!   Disable this for WASM builds and use crypto primitives directly.
 
 mod chat;
+mod clock;
 mod core;
 mod features;
 mod params;
@@ -194,7 +195,7 @@ pub mod keys;
 // Public re-exports — the user-facing API.
 #[cfg(feature = "juicebox")]
 pub use chat::Chat;
-pub use core::ChatCore;
+pub use core::{ChatCore, KeyChangeCall, ResolvePublicKeys, PUBLIC_KEYS_RETRY_MS};
 pub use crypto::encryption::{FileDecryptor, FileEncryptor};
 pub use features::{
     FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_REFRESH_MS, FEATURES_TIMEOUT_MS,
@@ -243,6 +244,7 @@ pub mod js {
         JsMessage,
         JsMessageContent,
         JsMessageDeletedEvent,
+        JsMissingSigningKey,
         JsMoneyAttachmentInfo,
         JsPostAttachmentInfo,
         JsPreparedAction,

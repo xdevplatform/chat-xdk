@@ -193,6 +193,14 @@ impl ChatCore {
     /// Omit `conversation_id` for a one-to-one and it is derived from the two
     /// participants; pass the existing id for a group key rotation.
     ///
+    /// With `public_keys` empty, the participants' identity keys come from
+    /// the stored public keys ([`Self::add_public_keys`]): of `member_ids`,
+    /// or of the two users of a one-to-one `conversation_id`. Only a stored
+    /// key whose identity binding verifies is used, and the call fails when
+    /// a participant has none. The other prepare calls that make a
+    /// conversation key read the store the same way for the members their
+    /// params name ([`KeyChangeCall`]).
+    ///
     /// The returned `conversation_key` is the raw key to store locally for
     /// encrypting messages. While the key cache is on
     /// ([`Self::set_cache_keys`]) the call caches it as the conversation's
@@ -218,6 +226,8 @@ impl ChatCore {
             "conversation_key_version",
             conversation_key_version,
         )?;
+        let public_keys =
+            self.key_change_public_keys(KeyChangeCall::ConversationKeyChange(params))?;
         // An empty id means "derive": FFI layers cannot express Option and
         // send "" for "not set".
         let conversation_id = match params
@@ -229,9 +239,9 @@ impl ChatCore {
             // bare recipient id) so the signature covers the id the backend
             // fans out.
             Some(id) => crate::pipeline::canonical_conversation_id(id, &sender_id).into_owned(),
-            None => Self::derive_one_to_one_conversation_id(&params.public_keys)?,
+            None => Self::derive_one_to_one_conversation_id(&public_keys)?,
         };
-        let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
+        let (ckey, participant_keys) = self.build_participant_keys(&public_keys)?;
         let signature = self.sign_key_change(
             &signing_key_version,
             &sender_id,
@@ -416,7 +426,8 @@ impl ChatCore {
 
         crate::pipeline::validate_user_ids("member_ids", &params.member_ids)?;
         crate::pipeline::validate_user_ids("admin_ids", &params.admin_ids)?;
-        let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
+        let public_keys = self.key_change_public_keys(KeyChangeCall::GroupCreate(params))?;
+        let (ckey, participant_keys) = self.build_participant_keys(&public_keys)?;
         let encrypted_title = title
             .map(|title| group_actions::encrypt_group_metadata(&ckey, title))
             .transpose()?;
@@ -524,7 +535,8 @@ impl ChatCore {
             "current_pending_member_ids",
             &params.current_pending_member_ids,
         )?;
-        let (ckey, participant_keys) = self.build_participant_keys(&params.public_keys)?;
+        let public_keys = self.key_change_public_keys(KeyChangeCall::GroupMembersChange(params))?;
+        let (ckey, participant_keys) = self.build_participant_keys(&public_keys)?;
         let encrypted_title = current_title
             .map(|title| group_actions::encrypt_group_metadata(&ckey, title))
             .transpose()?;
