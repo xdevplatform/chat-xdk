@@ -63,29 +63,21 @@ async function groupPage(admin, member, readers, conversationId, text) {
   return [keyChange, delivered(body.event_b64, "2100000000000000001")];
 }
 
-test("the chats of two signed-in users fetch the keys of a user they both meet once", async (t) => {
+test("the chats of two signed-in users fetch the keys of a user they both meet once", async () => {
   const [admin, member, alice, bob] = await Promise.all(["5001", "5002", "5003", "5004"].map(party));
   const directory = { [admin.userId]: [admin.record], [member.userId]: [member.record] };
-  const fetched = [];
-  const resolvePublicKeys = sharedPublicKeys(async (userId) => {
-    fetched.push(userId);
-    return directory[userId];
-  });
-  // The users each chat asks the shared function for.
   const asked = [];
-  const chats = new UserChats((userIds) => {
-    asked.push([...userIds]);
-    return resolvePublicKeys(userIds);
-  });
+  const chats = new UserChats(
+    sharedPublicKeys(async (userId) => {
+      asked.push(userId);
+      return directory[userId];
+    }),
+  );
   const events = await groupPage(admin, member, [alice, bob], "g900", "hello group");
-  t.diagnostic(`without keys: ${JSON.stringify(alice.core.decryptBatch(events).missingSigningKeys)}`);
 
   for (const signedIn of [alice, bob]) {
     const chat = await chats.chatFor(signedIn.signIn);
     const page = await chat.decryptBatchAsync(events);
-    t.diagnostic(
-      `page of ${signedIn.userId}: ${JSON.stringify(page.events.map(({ event }) => [event.type, event.senderId]))}`,
-    );
     assert.deepEqual(page.errors, {});
     assert.deepEqual(page.missingSigningKeys, {});
     assert.deepEqual(
@@ -93,13 +85,9 @@ test("the chats of two signed-in users fetch the keys of a user they both meet o
       [null, "hello group"],
     );
   }
-  t.diagnostic(`asked ${JSON.stringify(asked)}, fetched ${JSON.stringify(fetched)}`);
-  // Both chats needed the admin's keys, and they were fetched once: the
-  // second chat took them from the cache the first one filled.
-  assert.equal(asked.length, 2);
-  assert.ok(asked.every((userIds) => userIds.includes(admin.userId)));
-  assert.deepEqual(fetched.filter((userId) => userId === admin.userId), [admin.userId]);
-  assert.equal(new Set(fetched).size, fetched.length);
+  // Each chat needed the keys of the admin and the member: the second chat
+  // took them from the cache the first one filled.
+  assert.deepEqual(asked.sort(), ["5001", "5002"]);
 });
 
 test("a signed-in user has one chat, which serves every conversation of the user", async () => {
