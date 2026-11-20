@@ -188,6 +188,19 @@
   key was dropped: <why>` or `… holds no key this chat can decrypt: <why>`.
   The errors' kinds are unchanged.
 
+### Fixed
+
+- JS: the first chats of a process are separate chats when they are created
+  at the same time. `createChat` loaded the WebAssembly module again on each
+  call until one load had finished. Calls made at the same time before that,
+  such as `Promise.all(users.map(openChat))` when a server starts, each
+  loaded the module, and their chats then shared the memory of one of them:
+  every such chat held the keys and identity of the same chat, so a chat
+  created for one user could sign and decrypt as another. A process whose
+  first `createChat` call returned before it made the next was not affected.
+  `createChat` now loads the module once, in `@xdevplatform/chat-xdk` and in
+  `@xdevplatform/chat-xdk-server`.
+
 ## [0.7.5] - 2026-11-16
 
 ### Changed

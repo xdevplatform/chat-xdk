@@ -1559,7 +1559,10 @@ response. `chats` keeps the promise of each chat, so two requests of one
 user that arrive together share one chat. A chat from
 `@xdevplatform/chat-xdk` unlocks from Juicebox in `openChat` instead
 (`createChat({ juiceboxConfig, getAuthToken, resolvePublicKeys })`, then
-`unlock(pin)`); run those Juicebox calls one chat at a time.
+`unlock(pin)`); run those Juicebox calls one chat at a time. In JavaScript
+before 0.7.6, wait for a process's first `createChat` call to return before
+you make the next: chats created at the same time on first use shared one
+chat's keys and identity.
 
 Each example has the same two pieces as code that runs, with tests:
 

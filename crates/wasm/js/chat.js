@@ -109,7 +109,27 @@ function juiceboxClientConfig(juiceboxConfig) {
   return __juiceboxClientConfig(juiceboxConfig);
 }
 
-async function initWasmModule() {
+// The wasm glue module is a process-wide singleton bound to one wasm
+// instance, and every chat is a pointer into that instance's memory. A second
+// instantiation rebinds the glue, so the chats of the first instance then
+// read and write whatever the second holds at their address: another chat's
+// keys and identity. The glue only skips an instantiation once one has
+// finished, so concurrent first calls must share the same in-flight load.
+// Load once and share the promise across every createChat call. A failed
+// load is not cached so a later call can retry.
+let wasmModulePromise = null;
+
+function initWasmModule() {
+  if (!wasmModulePromise) {
+    wasmModulePromise = initWasmModuleOnce().catch((err) => {
+      wasmModulePromise = null;
+      throw err;
+    });
+  }
+  return wasmModulePromise;
+}
+
+async function initWasmModuleOnce() {
   let wasmModule;
   let init;
   if (isNodeRuntime()) {

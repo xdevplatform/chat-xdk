@@ -197,6 +197,10 @@ response. `chats` keeps the promise of each chat, so two requests of one
 user that arrive together share one chat. When a user signs out, take the
 chat out of `chats` and call `free()` on it.
 
+Before 0.7.6, wait for a process's first `createChat` call to return before
+you make the next. Chats created at the same time on first use shared one
+chat's keys and identity.
+
 [`examples/js/src/multi-user.mjs`](../../../examples/js/src/multi-user.mjs)
 has this pattern as code that runs, with tests. See
 [Many users, many conversations](../../../docs/API.md#many-users-many-conversations)
