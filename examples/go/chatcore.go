@@ -14,6 +14,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"sort"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
@@ -117,6 +118,47 @@ func (c *ChatCore) DecryptBatch(eventsB64 []string, signingKeys []chatxdk.Signin
 		Events:      eventsB64,
 		SigningKeys: signingKeys,
 	})
+}
+
+// DecryptBatchWithSigners is DecryptBatch with the stored signing keys, and
+// it also gets the signing keys its key changes need.
+//
+// A key change is signed by the member who made it, who may have written
+// none of the page's messages, so the keys of the messages' senders do not
+// verify it. Unverified, a recent key change loses its key and the messages
+// under it do not decrypt. When the batch reports key changes whose signer's
+// keys were missing, this calls storeSigningKeysOf with those signers, which
+// fetches their public keys, stores them (SetSigningKeys) and reports whether
+// it stored any, and then decrypts the batch again.
+func (c *ChatCore) DecryptBatchWithSigners(eventsB64 []string, storeSigningKeysOf func(userIDs []string) bool) (*chatxdk.DecryptEventsResult, error) {
+	result, err := c.DecryptBatch(eventsB64, nil)
+	if err != nil {
+		return nil, err
+	}
+	signers := MissingKeyChangeSigners(result)
+	if len(signers) == 0 || !storeSigningKeysOf(signers) {
+		return result, nil
+	}
+	return c.DecryptBatch(eventsB64, nil)
+}
+
+// MissingKeyChangeSigners returns the users whose signing keys a DecryptBatch
+// result lacked to verify a key change, each once: fetch their public keys
+// and decrypt again.
+func MissingKeyChangeSigners(result *chatxdk.DecryptEventsResult) []string {
+	seen := map[string]bool{}
+	var signers []string
+	for _, change := range result.UnverifiedKeyChanges {
+		if change.Reason != chatxdk.UnverifiedKeyChangeMissingSigningKey || change.SenderID == nil {
+			continue
+		}
+		if !seen[*change.SenderID] {
+			seen[*change.SenderID] = true
+			signers = append(signers, *change.SenderID)
+		}
+	}
+	sort.Strings(signers)
+	return signers
 }
 
 // DecryptOne is the single-event path used for each new event after the

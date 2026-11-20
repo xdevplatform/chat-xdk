@@ -39,7 +39,8 @@ use chat_xdk_core::error::{ErrorKind, SdkError};
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
     JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPreparedGroupMetadataChange,
-    JsPublicKeyInput, JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
+    JsPublicKeyInput, JsPublicKeyRegistrationPayload, JsRejectedSigningKey, JsSendPayload,
+    JsSigningKeyEntry, JsUndecryptableKeyChange, JsUnverifiedKeyChange,
 };
 
 // Utility Functions (free functions, not methods)
@@ -460,38 +461,20 @@ impl Chat {
     /// Extract and decrypt conversation keys from raw KeyChange event strings.
     ///
     /// Returns a `ConversationKeyResult` with:
-    /// - `keys`: Object mapping key version strings to `Uint8Array` conversation keys
-    /// - `latestVersion`: The highest key version; signatures are not checked
+    /// - `keys`: Object mapping key version strings to `Uint8Array`
+    ///   conversation keys; a version that key changes of more than one
+    ///   conversation carry is left out
+    /// - `keysByConversation`: Object mapping each conversation id to that
+    ///   conversation's `keys`
+    /// - `latestVersion`: The highest key version when every event belongs
+    ///   to one conversation, null when they belong to more than one;
+    ///   signatures are not checked
+    /// - `latestVersions`: Object mapping each conversation id to its highest
+    ///   key version; signatures are not checked
     #[wasm_bindgen(js_name = extractConversationKeys)]
     pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsValue> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
-        let result = self.inner.extract_conversation_keys(&refs);
-
-        // Build JS object with keys map and latestVersion
-        let obj = js_sys::Object::new();
-
-        // Build the keys map
-        let keys_obj = js_sys::Object::new();
-        for (version, key) in &result.keys {
-            let arr = js_sys::Uint8Array::from(key.encoded());
-            js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| internal_error("Failed to build conversation key map"))?;
-        }
-
-        js_sys::Reflect::set(&obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| internal_error("Failed to set keys"))?;
-
-        js_sys::Reflect::set(
-            &obj,
-            &"latestVersion".into(),
-            &result
-                .latest_version
-                .map(|v| JsValue::from_str(&v))
-                .unwrap_or(JsValue::NULL),
-        )
-        .map_err(|_| internal_error("Failed to set latestVersion"))?;
-
-        Ok(obj.into())
+        conversation_keys_object(&self.inner.extract_conversation_keys(&refs))
     }
 
     /// Decrypt multiple events in batch.
@@ -505,12 +488,21 @@ impl Chat {
     /// optional `signingKeys`, an array of `{ userId, publicKeyVersion,
     /// publicKey, identityPublicKey, identityPublicKeySignature }` objects for
     /// ALL participants in the conversation (pass the X API response
-    /// through). Omitting `signingKeys` falls back to the keys stored via
+    /// through), the members who signed the batch's key changes included.
+    /// Omitting `signingKeys` falls back to the keys stored via
     /// `setSigningKeys`.
     ///
-    /// Returns `{ events, conversationKeys, errors }`. A member removal's
+    /// Returns `{ events, conversationKeys, errors, unverifiedKeyChanges,
+    /// undecryptableKeyChanges, rejectedSigningKeys }`. A member removal's
     /// title and description, re-encrypted under the new key, aren't
-    /// changes: they land in `errors`.
+    /// changes: they land in `errors`. Like `errors`, the last three are
+    /// objects keyed by index. `unverifiedKeyChanges` holds, by its index in
+    /// `events`, each key change whose signature did not verify: why, the
+    /// sender and signing-key version to fetch, and whether its key was
+    /// dropped. `undecryptableKeyChanges` holds, by its index in `events`,
+    /// each key change whose key this chat could not decrypt, and why.
+    /// `rejectedSigningKeys` holds, by its index in the signing keys, each
+    /// one left out because its identity binding does not verify.
     #[wasm_bindgen(js_name = decryptEvents)]
     pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
@@ -540,28 +532,12 @@ impl Chat {
         js_sys::Reflect::set(&obj, &"events".into(), &events.into())
             .map_err(|_| internal_error("Failed to set events"))?;
 
-        // Convert conversation keys
-        let conv_keys_obj = js_sys::Object::new();
-        let keys_obj = js_sys::Object::new();
-        for (version, key) in &result.conversation_keys.keys {
-            let arr = js_sys::Uint8Array::from(key.encoded());
-            js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| internal_error("Failed to build conversation key map"))?;
-        }
-        js_sys::Reflect::set(&conv_keys_obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| internal_error("Failed to set keys"))?;
         js_sys::Reflect::set(
-            &conv_keys_obj,
-            &"latestVersion".into(),
-            &result
-                .conversation_keys
-                .latest_version
-                .map(|v| JsValue::from_str(&v))
-                .unwrap_or(JsValue::NULL),
+            &obj,
+            &"conversationKeys".into(),
+            &conversation_keys_object(&result.conversation_keys)?,
         )
-        .map_err(|_| internal_error("Failed to set latestVersion"))?;
-        js_sys::Reflect::set(&obj, &"conversationKeys".into(), &conv_keys_obj.into())
-            .map_err(|_| internal_error("Failed to set conversationKeys"))?;
+        .map_err(|_| internal_error("Failed to set conversationKeys"))?;
 
         // Convert errors
         let errors_obj = js_sys::Object::new();
@@ -575,6 +551,39 @@ impl Chat {
         }
         js_sys::Reflect::set(&obj, &"errors".into(), &errors_obj.into())
             .map_err(|_| internal_error("Failed to set errors"))?;
+
+        let unverified = result
+            .unverified_key_changes
+            .into_iter()
+            .map(|(index, change)| (index, JsUnverifiedKeyChange::from(change)));
+        js_sys::Reflect::set(
+            &obj,
+            &"unverifiedKeyChanges".into(),
+            &indexed_object(unverified)?,
+        )
+        .map_err(|_| internal_error("Failed to set unverifiedKeyChanges"))?;
+
+        let undecryptable = result
+            .undecryptable_key_changes
+            .into_iter()
+            .map(|(index, change)| (index, JsUndecryptableKeyChange::from(change)));
+        js_sys::Reflect::set(
+            &obj,
+            &"undecryptableKeyChanges".into(),
+            &indexed_object(undecryptable)?,
+        )
+        .map_err(|_| internal_error("Failed to set undecryptableKeyChanges"))?;
+
+        let rejected = result
+            .rejected_signing_keys
+            .into_iter()
+            .map(|(index, key)| (index, JsRejectedSigningKey::from(key)));
+        js_sys::Reflect::set(
+            &obj,
+            &"rejectedSigningKeys".into(),
+            &indexed_object(rejected)?,
+        )
+        .map_err(|_| internal_error("Failed to set rejectedSigningKeys"))?;
 
         Ok(obj.into())
     }
@@ -1348,6 +1357,100 @@ impl FileDecryptor {
 /// versions come from JavaScript's `Date.now()` instead.
 fn now_millis() -> String {
     (js_sys::Date::now() as u64).to_string()
+}
+
+/// A `ConversationKeyResult` as the object `extractConversationKeys` returns
+/// and `decryptEvents` returns as `conversationKeys`.
+fn conversation_keys_object(
+    result: &chat_xdk_core::ConversationKeyResult,
+) -> Result<JsValue, JsValue> {
+    let latest_version = result
+        .latest_version
+        .as_deref()
+        .map(JsValue::from_str)
+        .unwrap_or(JsValue::NULL);
+    let object = js_sys::Object::new();
+    for (name, value) in [
+        ("keys", key_map_object(&result.keys)?),
+        (
+            "keysByConversation",
+            keys_by_conversation_object(&result.keys_by_conversation)?,
+        ),
+        ("latestVersion", latest_version),
+        (
+            "latestVersions",
+            latest_versions_object(&result.latest_versions)?,
+        ),
+    ] {
+        js_sys::Reflect::set(&object, &JsValue::from_str(name), &value)
+            .map_err(|_| internal_error("Failed to build conversation keys"))?;
+    }
+    Ok(object.into())
+}
+
+/// A key map: a plain object mapping each key version to its key bytes.
+fn key_map_object(keys: &HashMap<String, XChatConversationKey>) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (version, key) in keys {
+        let bytes = js_sys::Uint8Array::from(key.encoded());
+        js_sys::Reflect::set(&object, &JsValue::from_str(version), &bytes.into())
+            .map_err(|_| internal_error("Failed to build conversation key map"))?;
+    }
+    Ok(object.into())
+}
+
+/// A result's `keysByConversation`: a plain object mapping each conversation
+/// id to that conversation's key map.
+fn keys_by_conversation_object(
+    keys: &HashMap<String, HashMap<String, XChatConversationKey>>,
+) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (conversation_id, keys) in keys {
+        // Assigning an object to `__proto__` would replace the map's
+        // prototype instead of adding an entry. No conversation has that id.
+        if conversation_id == "__proto__" {
+            continue;
+        }
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_str(conversation_id),
+            &key_map_object(keys)?,
+        )
+        .map_err(|_| internal_error("Failed to build conversation key map"))?;
+    }
+    Ok(object.into())
+}
+
+/// Entries keyed by an index: a plain object mapping each index, as a string
+/// key, to its entry, the shape of a result's `errors`.
+fn indexed_object<T: serde::Serialize>(
+    entries: impl IntoIterator<Item = (usize, T)>,
+) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (index, entry) in entries {
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_f64(index as f64),
+            &to_js_value(&entry)?,
+        )
+        .map_err(|_| internal_error("Failed to build index map"))?;
+    }
+    Ok(object.into())
+}
+
+/// A result's `latestVersions`: a plain object mapping each conversation id
+/// to that conversation's latest key version.
+fn latest_versions_object(latest_versions: &HashMap<String, String>) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (conversation_id, version) in latest_versions {
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_str(conversation_id),
+            &JsValue::from_str(version),
+        )
+        .map_err(|_| internal_error("Failed to build latest version map"))?;
+    }
+    Ok(object.into())
 }
 
 /// Parse a params object's `conversationKeys`, a plain object mapping key

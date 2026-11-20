@@ -58,6 +58,21 @@ foreach (var dm in batch.Events)
         Console.WriteLine(dm.Event.GetProperty("sender_id").GetString());
 }
 
+// A key change verifies with the signing keys of the member who made it. One
+// that did not verify is here, by its index in the batch; when its key was
+// dropped, the messages under it are in batch.Errors. For MissingSigningKey,
+// add the public keys of change.SenderId (GET /2/users/{id}/public_keys) and
+// decrypt again.
+foreach (var (index, change) in batch.UnverifiedKeyChanges)
+    Console.WriteLine($"{index} {change.Reason} {change.SenderId} {change.KeyDropped}");
+// Key changes whose key this chat could not decrypt, and signing keys left
+// out because their identity binding does not verify, are reported the same
+// way: batch.UndecryptableKeyChanges, batch.RejectedSigningKeys.
+
+// The version to encrypt with: for a batch of one conversation,
+// batch.ConversationKeys.LatestVersion; for any batch,
+// batch.ConversationKeys.LatestVersions[conversationId].
+
 // Individual events: the empty key map and unset signing keys resolve from
 // the session stores (pass conversation/signing keys explicitly to override).
 var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, new Dictionary<string, byte[]>()));

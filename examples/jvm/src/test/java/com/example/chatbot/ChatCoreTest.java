@@ -5,15 +5,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.x.chatxdk.ChatXdkException;
 import com.x.chatxdk.ChatXdkUtilities;
+import com.x.chatxdk.Types.ActionSignature;
 import com.x.chatxdk.Types.AttachmentDescriptor;
+import com.x.chatxdk.Types.DecryptEventsResult;
+import com.x.chatxdk.Types.DecryptedEvent;
 import com.x.chatxdk.Types.EntityDescriptor;
+import com.x.chatxdk.Types.MessageEventSignature;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
+import com.x.chatxdk.Types.PublicKeyRegistration;
 import com.x.chatxdk.Types.PublicKeys;
+import com.x.chatxdk.Types.SigningKeyEntry;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -113,6 +121,123 @@ class ChatCoreTest {
             assertFalse(body.encodedMessageEventSignature().isEmpty());
             assertFalse(body.messageId().isEmpty());
             assertFalse(body.xdkVersion().isEmpty());
+        }
+    }
+
+    /** A Thrift string field: its id, then the value's length and bytes. */
+    private static void writeString(ByteArrayOutputStream out, int id, String value) {
+        byte[] data = value.getBytes(StandardCharsets.UTF_8);
+        out.write(11);
+        out.write(id >> 8);
+        out.write(id);
+        out.write(data.length >> 24);
+        out.write(data.length >> 16);
+        out.write(data.length >> 8);
+        out.write(data.length);
+        out.writeBytes(data);
+    }
+
+    /** The event as delivered: {@code eventB64} with the sequence id the server assigns, prepended as Thrift string field 1. */
+    private static String delivered(String eventB64, String sequenceId) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeString(out, 1, sequenceId);
+        out.writeBytes(Base64.getDecoder().decode(eventB64));
+        return Base64.getEncoder().encodeToString(out.toByteArray());
+    }
+
+    /**
+     * A signed action as delivered: the event the server relays for {@code action}, an entry
+     * of a prepared change's action signatures, from {@code senderId} in {@code conversationId},
+     * with the sequence id the server assigns.
+     */
+    private static String deliveredAction(
+            ActionSignature action, String senderId, String conversationId, String sequenceId) {
+        MessageEventSignature signed = action.messageEventSignature;
+        ByteArrayOutputStream event = new ByteArrayOutputStream();
+        writeString(event, 1, sequenceId);
+        writeString(event, 2, action.messageId);
+        writeString(event, 3, senderId);
+        writeString(event, 4, conversationId);
+        event.writeBytes(new byte[] {12, 0, 7});
+        event.writeBytes(Base64.getDecoder().decode(action.encodedMessageEventDetail));
+        event.writeBytes(new byte[] {12, 0, 9});
+        writeString(event, 1, signed.signature);
+        writeString(event, 2, signed.publicKeyVersion);
+        writeString(event, 3, signed.signatureVersion);
+        event.writeBytes(new byte[] {0, 0});
+        return Base64.getEncoder().encodeToString(event.toByteArray());
+    }
+
+    /** A core with fresh keys as a user, and the keys others hold for it. */
+    private static final class Party implements AutoCloseable {
+        final ChatCore core = new ChatCore();
+        final String userId;
+        final SigningKeyEntry signingKey;
+        final PublicKeyInput publicKey;
+
+        Party(String userId) throws Exception {
+            this.userId = userId;
+            ChatCore.Generated generated = core.generateAndRegister();
+            core.loadKeys(generated.privateKeysB64(), "1");
+            core.setIdentity(userId);
+            PublicKeyRegistration registration = generated.registration().publicKey;
+            signingKey = new SigningKeyEntry(
+                    userId,
+                    "1",
+                    registration.signingPublicKey,
+                    registration.publicKey,
+                    registration.identityPublicKeySignature);
+            publicKey = new PublicKeyInput(userId, registration.publicKey, "1");
+        }
+
+        @Override
+        public void close() {
+            core.close();
+        }
+    }
+
+    @Test
+    void decryptBatchWithSignersGetsTheKeysOfTheMemberWhoMadeAKeyChange() throws Exception {
+        // An admin rotates a group's key and a member sends a message under
+        // it. The bot holds the member's signing keys: the member is the only
+        // sender on the page.
+        try (Party admin = new Party("5001");
+                Party member = new Party("5002");
+                Party bot = new Party("5003")) {
+            PreparedConversationChange prepared = admin.core.prepareConversationKeyChange(
+                    List.of(admin.publicKey, member.publicKey, bot.publicKey), "g900");
+            String keyChange =
+                    deliveredAction(prepared.actionSignatures.get(0), admin.userId, "g900", "2100000000000000000");
+            ChatCore.SendBody body = member.core.encryptReply(
+                    "g900", "hello group", prepared.conversationKey, prepared.conversationKeyVersion);
+            List<String> events = List.of(keyChange, delivered(body.eventB64(), "2100000000000000001"));
+
+            // Without the admin's keys the key change does not verify: its key
+            // is dropped and the message does not decrypt.
+            DecryptEventsResult unverified = bot.core.decryptBatch(events, List.of(member.signingKey));
+            assertTrue(unverified.events.isEmpty());
+            assertEquals(List.of("5001"), ChatCore.missingKeyChangeSigners(unverified));
+
+            List<SigningKeyEntry> signingKeys = new ArrayList<>(List.of(member.signingKey));
+            List<String> asked = new ArrayList<>();
+            DecryptEventsResult result = bot.core.decryptBatchWithSigners(events, signingKeys, userIds -> {
+                asked.addAll(userIds);
+                return List.of(admin.signingKey);
+            });
+            assertEquals(List.of("5001"), asked);
+            assertTrue(result.errors.isEmpty(), result.errors.toString());
+            assertTrue(ChatCore.missingKeyChangeSigners(result).isEmpty());
+            List<String> texts = new ArrayList<>();
+            for (DecryptedEvent decrypted : result.events) {
+                texts.add(ChatCore.messageText(decrypted.event));
+            }
+            assertEquals(Arrays.asList(null, "hello group"), texts);
+            assertEquals(2, signingKeys.size());
+
+            // With every signer's keys there is nothing to fetch.
+            bot.core.decryptBatchWithSigners(events, signingKeys, userIds -> {
+                throw new AssertionError("asked for the keys of " + userIds);
+            });
         }
     }
 

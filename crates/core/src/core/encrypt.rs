@@ -905,10 +905,10 @@ impl ChatCore {
                 .collect(),
             None => return ReplyPreviewValidation::Invalid,
         };
-        if !matches!(
-            self.verify_event_signature(raw, raw_detail, &sender_keys, None),
-            Ok(true)
-        ) {
+        if !self
+            .check_event_signature(raw, raw_detail, &sender_keys, None)
+            .is_verified()
+        {
             return ReplyPreviewValidation::Invalid;
         }
 
@@ -960,10 +960,10 @@ impl ChatCore {
                 if !matches!(edit_detail, MessageEventDetail::MessageCreateEvent(_)) {
                     return ReplyPreviewValidation::Invalid;
                 }
-                if !matches!(
-                    self.verify_event_signature(edit, edit_detail, &sender_keys, None),
-                    Ok(true)
-                ) {
+                if !self
+                    .check_event_signature(edit, edit_detail, &sender_keys, None)
+                    .is_verified()
+                {
                     return ReplyPreviewValidation::Invalid;
                 }
                 let Ok((edit_plaintext, _)) = self.open_quoted_event(

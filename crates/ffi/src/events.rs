@@ -4,24 +4,44 @@ use super::*;
 
 // Event decryption
 
+/// A key map as a JSON object: each key version to its base64 key.
+fn json_key_map(keys: &HashMap<String, XChatConversationKey>) -> serde_json::Value {
+    let keys = keys
+        .iter()
+        .map(|(version, key)| {
+            (
+                version.clone(),
+                serde_json::Value::String(BASE64.encode(key.encoded())),
+            )
+        })
+        .collect();
+    serde_json::Value::Object(keys)
+}
+
 pub(crate) fn json_conversation_key_bundle(
     ckr: &chat_xdk_core::ConversationKeyResult,
 ) -> Result<serde_json::Value, serde_json::Error> {
-    let mut keys = serde_json::Map::new();
-    for (v, k) in &ckr.keys {
-        keys.insert(
-            v.clone(),
-            serde_json::Value::String(BASE64.encode(k.encoded())),
-        );
-    }
+    let keys_by_conversation = ckr
+        .keys_by_conversation
+        .iter()
+        .map(|(conversation_id, keys)| (conversation_id.clone(), json_key_map(keys)))
+        .collect();
     let mut o = serde_json::Map::new();
-    o.insert("keys".into(), serde_json::Value::Object(keys));
+    o.insert("keys".into(), json_key_map(&ckr.keys));
+    o.insert(
+        "keys_by_conversation".into(),
+        serde_json::Value::Object(keys_by_conversation),
+    );
     o.insert(
         "latest_version".into(),
         match &ckr.latest_version {
             Some(v) => serde_json::Value::String(v.clone()),
             None => serde_json::Value::Null,
         },
+    );
+    o.insert(
+        "latest_versions".into(),
+        serde_json::to_value(&ckr.latest_versions)?,
     );
     Ok(serde_json::Value::Object(o))
 }
@@ -52,11 +72,32 @@ pub(crate) fn json_decrypt_events_result(
         json_conversation_key_bundle(&r.conversation_keys)?,
     );
     root.insert("errors".into(), serde_json::Value::Object(errors));
+    root.insert(
+        "unverified_key_changes".into(),
+        serde_json::to_value(&r.unverified_key_changes)?,
+    );
+    root.insert(
+        "undecryptable_key_changes".into(),
+        serde_json::to_value(&r.undecryptable_key_changes)?,
+    );
+    root.insert(
+        "rejected_signing_keys".into(),
+        serde_json::to_value(&r.rejected_signing_keys)?,
+    );
     serde_json::to_string(&serde_json::Value::Object(root))
 }
 
 /// `events_json`: JSON array of base64-encoded event strings.
-/// Returns JSON `{"keys":{version: key_b64,...},"latest_version": string|null}`.
+/// Returns JSON `{"keys":{version: key_b64,...},
+/// "keys_by_conversation":{conversation_id: {version: key_b64,...},...},
+/// "latest_version": string|null,
+/// "latest_versions":{conversation_id: version,...}}`. Signatures are not
+/// checked. `keys_by_conversation` holds each key under its conversation;
+/// `keys` holds them by version alone, less a version that key changes of
+/// more than one conversation carry. `latest_versions` holds each
+/// conversation's highest key version; `latest_version` is the batch's
+/// highest when every event belongs to one conversation, and null when they
+/// belong to more than one.
 #[no_mangle]
 pub extern "C" fn chat_xdk_extract_conversation_keys(
     handle: *const ChatHandle,
@@ -93,10 +134,32 @@ pub extern "C" fn chat_xdk_extract_conversation_keys(
 /// optional `signing_keys` (`[{"user_id","public_key_version","public_key",
 /// "identity_public_key","identity_public_key_signature"},...]`); absent or
 /// empty falls back to the keys stored via `chat_xdk_set_signing_keys`.
+/// They must include the keys of every member who signed a key change in
+/// the batch.
 ///
 /// The result's `errors` maps the index of each event left out of `events`,
 /// as a string, to its error: one that failed, or one decrypt drops, such as
 /// a member removal's title or description re-encrypted under the new key.
+/// Its `conversation_keys` holds `keys`, `keys_by_conversation`,
+/// `latest_version` and `latest_versions`, as
+/// `chat_xdk_extract_conversation_keys` returns them, except that
+/// `latest_versions` holds the newest verified key version of each
+/// conversation, and `latest_version` that version when every event belongs
+/// to one conversation (null for a batch of more than one).
+///
+/// Three more objects are keyed by index, as a string, like `errors`, and
+/// are `{}` when they have nothing to report. `unverified_key_changes` maps
+/// the index of each key change whose signature did not verify to
+/// `{"reason","key_dropped","conversation_id","conversation_key_version",
+/// "sender_id","public_key_version"}`, where `reason` is `MissingSigningKey`,
+/// `RejectedSigningKey`, `InvalidSignature` or `Unverifiable`.
+/// `undecryptable_key_changes` maps the index of each key change whose
+/// conversation key this identity could not decrypt to
+/// `{"reason","conversation_id","conversation_key_version","sender_id"}`,
+/// where `reason` is `Locked`, `NotARecipient`, `OtherKeyVersion` or
+/// `DecryptionFailed`. `rejected_signing_keys` maps the index, among the
+/// signing keys the call verified with, of each one left out because its
+/// identity binding does not verify to `{"user_id","public_key_version"}`.
 #[no_mangle]
 pub extern "C" fn chat_xdk_decrypt_events(
     handle: *const ChatHandle,

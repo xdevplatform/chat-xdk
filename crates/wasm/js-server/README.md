@@ -83,6 +83,45 @@ key is loaded, and `importKeys` one of kind `invalidInput` for bytes that
 aren't keys. The SDK zeroizes its own copy of the bytes `importKeys` takes;
 zero yours with `fill(0)`.
 
+## Signing keys for key changes
+
+The signing keys a chat verifies with (`setSigningKeys`, or `signingKeys` on
+a decrypt call) must include those of every member who made a key change in
+the events you decrypt, not only of the members whose messages you read. A
+group's key changes are signed by whoever created the group, changed its
+members or rotated its key, and a recent key change that does not verify has
+its key dropped: every message under it then lands in `errors`.
+
+`decryptEvents` reports each key change whose signature did not verify in
+`unverifiedKeyChanges`, keyed by the key change's index in the batch as
+`errors` is, with the `senderId` and `publicKeyVersion` of the signing key it
+needs. Fetch that member's public keys from `GET /2/users/{id}/public_keys`
+and decrypt again:
+
+```typescript
+let result = chat.decryptEvents({ events });
+const missing = Object.values(result.unverifiedKeyChanges)
+  .filter((change) => change.reason === "missingSigningKey")
+  .map((change) => change.senderId);
+if (missing.length > 0) {
+  signingKeys.push(...(await fetchSigningKeys(missing))); // GET /2/users/{id}/public_keys
+  chat.setSigningKeys(signingKeys);
+  result = chat.decryptEvents({ events });
+}
+```
+
+Two more maps report what else the batch could not use:
+`undecryptableKeyChanges`, the key changes whose key this chat could not
+decrypt (by event index), and `rejectedSigningKeys`, the signing keys left out
+because their identity binding does not verify (by signing key index).
+
+The keys and the version to encrypt with are reported per conversation, by
+the conversation id events carry: `result.conversationKeys.keysByConversation`
+and `result.conversationKeys.latestVersions`. `conversationKeys.keys` and
+`conversationKeys.latestVersion` hold the same for a batch of one
+conversation; `latestVersion` is `null` for a batch of more than one. See
+[`docs/API.md`](../../../docs/API.md#signing-keys-for-key-changes).
+
 ## API
 
 Every other call is that of `@xdevplatform/chat-xdk`: see its

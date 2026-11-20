@@ -9,10 +9,12 @@ import com.x.chatxdk.FileEncryptor;
 import com.x.chatxdk.Types.*;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * Crypto core for the JVM chat-xdk example bot.
@@ -25,7 +27,8 @@ import java.util.Map;
  *   <li>key management     -&gt; loadKeys / setIdentity / generateAndRegister</li>
  *   <li>conversation keys  -&gt; prepareConversationKeyChange / decryptConversationKey</li>
  *   <li>message encryption -&gt; encryptReply, then encryptMedia for its files</li>
- *   <li>event decryption   -&gt; decryptBatch (decryptEvents) and decryptOne (decryptEvent)</li>
+ *   <li>event decryption   -&gt; decryptBatch / decryptBatchWithSigners (decryptEvents) and
+ *       decryptOne (decryptEvent)</li>
  * </ul>
  */
 public final class ChatCore implements AutoCloseable {
@@ -105,6 +108,53 @@ public final class ChatCore implements AutoCloseable {
         DecryptEventsParams params = new DecryptEventsParams(eventsB64);
         params.signingKeys = signingKeys;
         return chat.decryptEvents(params);
+    }
+
+    /** Fetches the signing keys of users: the public keys the X API returns for each. */
+    @FunctionalInterface
+    public interface SigningKeyFetcher {
+        List<SigningKeyEntry> fetch(List<String> userIds) throws Exception;
+    }
+
+    /**
+     * Batch path that also gets the signing keys its key changes need.
+     *
+     * <p>A key change is signed by the member who made it, who may have written
+     * none of the page's messages, so the keys of the messages' senders do not
+     * verify it. Unverified, a recent key change loses its key and the messages
+     * under it do not decrypt. When the batch reports key changes whose signer's
+     * keys were missing, this calls {@code fetchSigningKeys} with those signers,
+     * adds the keys it returns to {@code signingKeys}, and decrypts the batch
+     * again.
+     */
+    public DecryptEventsResult decryptBatchWithSigners(
+            List<String> eventsB64, List<SigningKeyEntry> signingKeys, SigningKeyFetcher fetchSigningKeys)
+            throws Exception {
+        DecryptEventsResult result = decryptBatch(eventsB64, signingKeys);
+        List<String> signers = missingKeyChangeSigners(result);
+        if (signers.isEmpty()) {
+            return result;
+        }
+        List<SigningKeyEntry> fetched = fetchSigningKeys.fetch(signers);
+        if (fetched.isEmpty()) {
+            return result;
+        }
+        signingKeys.addAll(fetched);
+        return decryptBatch(eventsB64, signingKeys);
+    }
+
+    /**
+     * The users whose signing keys a {@link #decryptBatch} result lacked to
+     * verify a key change, each once: fetch their public keys and decrypt again.
+     */
+    public static List<String> missingKeyChangeSigners(DecryptEventsResult result) {
+        TreeSet<String> signers = new TreeSet<>();
+        for (UnverifiedKeyChange change : result.unverifiedKeyChanges.values()) {
+            if (change.reason == UnverifiedKeyChangeReason.MissingSigningKey && change.senderId != null) {
+                signers.add(change.senderId);
+            }
+        }
+        return new ArrayList<>(signers);
     }
 
     /** Single-event path — used for each new event after the initial load. */

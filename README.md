@@ -47,6 +47,15 @@ Python/Rust, PascalCase in .NET/Go):
    keys by user automatically. Per-event errors are collected in the result;
    only invalid params throw. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
+   The signing keys must include those of every member who made a key change
+   (`GET /2/users/{id}/public_keys`), not only of the members whose messages
+   you read: a key change that does not verify is reported in the result's
+   `unverifiedKeyChanges`, with the member whose keys are missing, and a
+   recent one has its key dropped, so the messages under it land in `errors`
+   ([API.md](docs/API.md#signing-keys-for-key-changes)). For a batch of more
+   than one conversation, read the keys and the version to encrypt with by
+   conversation id: `conversationKeys.keysByConversation` and
+   `conversationKeys.latestVersions`.
 4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
    decrypts one event (webhook / poll). Throws on failure.
 5. **Reply** — `encryptMessage({conversationId, text})` or

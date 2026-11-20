@@ -160,13 +160,21 @@ feature switches again for the sender's bucket, the last four digits of the
 user id (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-switches)).
 
 `decrypt_events`
-reports as `latest_version` (the version to encrypt with) the newest key
-change of the batch's conversations whose signature verified, and holds it
-monotonic for the lifetime of the instance, so neither a replayed older key
-change nor one the SDK could not verify sets what you encrypt with. Only key
-changes signed at version ≥ 6 (whose signed payload embeds the plaintext key)
-can verify; until one does, `latest_version` is null. Keys from key changes
-that did not verify still decrypt messages.
+reports the version to encrypt with per conversation, in `latest_versions`:
+the newest key change of each of the batch's conversations whose signature
+verified, held monotonic for the lifetime of the instance, so neither a
+replayed older key change nor one the SDK could not verify sets what you
+encrypt with. Only key changes signed at version ≥ 6 (whose signed payload
+embeds the plaintext key) can verify; until one does, a conversation has no
+entry. `latest_version` is that version when every event of the batch belongs
+to one conversation, and null when it has none. It is also null for a batch
+whose events belong to more than one conversation, where one version cannot
+name each conversation's key: read `latest_versions[conversation_id]`. The
+keys follow the same pattern: `keys_by_conversation` holds each conversation's
+keys, and `keys` the batch's keys by version alone. A key change that did not
+verify never sets the version to encrypt with, and is reported in
+`unverified_key_changes` (see
+[decrypt_events](#decrypt_events--batch-self-contained)).
 
 PINs passed to `setup`/`change_pin` must be at least 4 characters and must
 not be a single repeated character or a sequential digit run; `unlock`
@@ -255,7 +263,8 @@ unset or empty key fields and fall back to two opt-in session stores:
   in its own batch whose signature verified. `extract_conversation_keys`
   never feeds it: that method adopts every decryptable key without signature
   checks, and the cache holds verified keys only. To use its result, pass
-  the returned key map to `decrypt_event` explicitly.
+  the returned key map (`keys`, or the event's conversation's entry in
+  `keys_by_conversation`) to `decrypt_event` explicitly.
 
 An explicit non-empty value always wins over the stores. The stores do not
 change the two decrypt contracts: `decrypt_events` collects per-event errors
@@ -274,9 +283,9 @@ on failure.
 | Real-time stream where events arrive one at a time | `decryptEvent` with cached keys |
 
 **Typical flow:**
-1. Once per instance: `setSigningKeys(allParticipantKeys)` and `setCacheKeys(true)`
-2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains each conversation's latest verified key)
-3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64 })` — the omitted key map and signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keys` client-side and pass it as `conversationKeys`.
+1. Once per instance: `setSigningKeys(allParticipantKeys)` and `setCacheKeys(true)`. "All participants" includes every member who made a key change, whether or not they wrote a message you are decrypting (see [Signing keys for key changes](#signing-keys-for-key-changes))
+2. Use `decryptEvents({ events })` on first load — it extracts conversation keys and returns them (and, with caching on, retains each conversation's latest verified key). Check `unverifiedKeyChanges`, `undecryptableKeyChanges` and `rejectedSigningKeys` on the result: an entry means a key change did not verify, a key change's key could not be decrypted, or a signing key was left out
+3. When new events arrive individually (webhooks, polling), use `decryptEvent({ eventB64 })` — the omitted key map and signing keys resolve from the session stores. Alternatively, cache `result.conversationKeys.keysByConversation[conversationId]` client-side (or `result.conversationKeys.keys`, for a batch of one conversation) and pass it as `conversationKeys`.
 
 ---
 
@@ -894,7 +903,9 @@ Scans an array of raw events for KeyChange events and decrypts the conversation 
 // JS
 interface ConversationKeyResult {
   keys: { [version: string]: Uint8Array };  // version → raw conversation key
-  latestVersion: string | null;             // highest version; signatures are not checked
+  keysByConversation: { [conversationId: string]: { [version: string]: Uint8Array } };
+  latestVersion: string | null;             // the batch's one conversation's version, else null
+  latestVersions: { [conversationId: string]: string };  // each conversation's version
 }
 ```
 
@@ -902,9 +913,35 @@ interface ConversationKeyResult {
 # Python
 {
     "keys": { "1": b"...", "2": b"..." },   # version → raw bytes
-    "latest_version": "2"                    # or None
+    "keys_by_conversation": { "111:222": { "1": b"...", "2": b"..." } },
+    "latest_version": "2",                   # or None
+    "latest_versions": { "111:222": "2" },   # conversation id → its version
 }
 ```
+
+The result has two views of the same data. `keys_by_conversation` and
+`latest_versions` are keyed by conversation id; `keys` and `latest_version`
+leave the conversation id out, for a batch whose events all belong to one
+conversation.
+
+| Field | Keyed by | Holds |
+|---|---|---|
+| `keys_by_conversation` | conversation id, then key version | Each key under the conversation of the key change that carries it. |
+| `keys` | key version | Every key of the batch. A version that key changes of more than one conversation carry is left out: a lookup by version alone cannot say which conversation's key it wants. |
+| `latest_versions` | conversation id | The version to encrypt with in each conversation. |
+| `latest_version` | — | That version when every event of the batch belongs to one conversation. Null for a batch whose events belong to more than one conversation. |
+
+Conversation ids have the form events carry (the `conversation_id` of a
+decrypted event): a group's `g…` id, and a one-to-one's two user ids ordered
+numerically and colon-separated (`111:222`). If you hold a one-to-one's id in
+the hyphen form of a URL path, or as the other user's id, convert it before a
+lookup.
+
+This call checks no signature: its versions are the highest in the batch,
+verified or not. For the version to encrypt with, use `decrypt_events`, which
+reports only versions whose key change verified. This call does not report
+the key changes it skips either; `decrypt_events` does, in
+`undecryptable_key_changes`.
 
 ---
 
@@ -919,15 +956,133 @@ Decrypts multiple events in one call. Handles everything internally:
 | Field | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
 | events | `events: string[]` | `events: list[str]` | `events: Vec<String>` | `Events []string` | `List<String> events` | `IReadOnlyList<string> Events` | All base64-encoded raw events. **Must include KeyChange events** — without them, messages depending on those keys will land in `errors`. The events endpoint returns KeyChange events in **`meta.conversation_key_events`**, separate from the `data` array; concatenate both into this field. |
-| signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **all participants**. The SDK extracts each event's `senderId` internally and filters to the matching keys. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
+| signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **all participants**, including every member who **signed a key change** in the batch, whether or not that member sent a message in it (see [Signing keys for key changes](#signing-keys-for-key-changes)). The SDK extracts each event's `senderId` internally and filters to the matching keys. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails decryption and lands in `errors`. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
 **Returns: `DecryptEventsResult`.** An event that fails is collected in
 `errors` rather than thrown; the call throws (raises) only for invalid params,
 such as a malformed signing key entry. `events` holds the events that
-decrypted, of every event type. `conversation_keys.latest_version`, the
-version to encrypt with, is the newest version whose key change verified,
-monotonic for the chat's lifetime, and null until a key change verifies; a
-key change that doesn't verify still adds its key to `conversation_keys.keys`.
+decrypted, of every event type.
+
+`conversation_keys` is a `ConversationKeyResult`, as
+[extract_conversation_keys](#extract_conversation_keys) returns it, with
+verified versions:
+
+- `latest_versions` maps each conversation of the batch to the version to
+  encrypt with there: the newest version whose key change verified, monotonic
+  for the chat's lifetime. A conversation without a verified key change has
+  no entry.
+- `latest_version` is that version when every event of the batch belongs to
+  one conversation, and null until that conversation has one. It is null for
+  a batch whose events belong to more than one conversation, whichever of
+  them have a verified version: the value names no conversation, so for any
+  other conversation of the batch it would be the wrong key version. Read
+  `latest_versions[conversation_id]`.
+- `keys_by_conversation` holds each key under the conversation of its key
+  change. `keys` holds the batch's keys by version alone; a version that two
+  conversations of the batch both use is left out of it. The SDK decrypts
+  each message with its own conversation's key either way.
+
+The key cache (`set_cache_keys`) is per conversation.
+
+Three more fields say what the call could not use. Like `errors`, each is a
+map keyed by an index, as a string in the bindings where `errors` is, and
+empty when it has nothing to report:
+
+| Field | Keyed by | One entry per |
+|---|---|---|
+| `errors` | event index | Event left out of `events`. |
+| `unverified_key_changes` | event index | Key change whose key this identity decrypted but whose signature did not verify. |
+| `undecryptable_key_changes` | event index | Key change whose conversation key this identity could not decrypt. |
+| `rejected_signing_keys` | signing key index | Signing key the call left out because its identity binding does not verify. |
+
+An entry of `unverified_key_changes` has:
+
+| Field | Meaning |
+|---|---|
+| `reason` | `MissingSigningKey`: none of the signing keys the call verified with is the sender's at the key version the signature names. `RejectedSigningKey`: that key was among the signing keys, but its identity binding does not verify, so the call left it out; it is in `rejected_signing_keys`, and fetching the same entry again changes nothing. `InvalidSignature`: the signature does not verify against the sender's signing key. `Unverifiable`: the key change carries no signature, or one the SDK cannot check (an unsupported signature version, or one below 6, the first whose payload a recipient can rebuild). |
+| `key_dropped` | Whether the key was left out of `conversation_keys`. A dropped key decrypts nothing: every message of its conversation under that key version lands in `errors`. A key that was kept decrypts messages, but never becomes the version to encrypt with. |
+| `conversation_id` | The conversation the key change belongs to. |
+| `conversation_key_version` | The conversation key version the key change carries. |
+| `sender_id` | The user who signed the key change: the member who made it. |
+| `public_key_version` | The version of that user's signing key the signature names. |
+
+An entry of `undecryptable_key_changes` has `conversation_id`,
+`conversation_key_version`, `sender_id` and a `reason`:
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `Locked` | No identity key is loaded. | Load or unlock the keys, then decrypt again. |
+| `NotARecipient` | The key change holds no key for this chat's user, the user `set_identity` names (without a session identity: it holds no key at all). | Nothing: the user was not a member when the key change was made, and its messages are not theirs to read. |
+| `OtherKeyVersion` | The key change holds keys for this chat's user (without a session identity: for some user), but none at this chat's key version. | Check the key version given to `set_identity` or `import_keys`. If it is right, the key change was made for an earlier registration of the user's keys, which this device does not hold. |
+| `DecryptionFailed` | A key the key change holds for this chat's key version does not decrypt under the loaded identity key. | The loaded private key is not the one registered at that version: load the right keys. |
+
+Such a key change gives the batch no key, so each message of its conversation
+under its key version lands in `errors`, with a message that names the key
+change and the reason. Expect entries for history from before the user joined
+a group; they matter when a message you need is among those errors.
+
+An entry of `rejected_signing_keys` has the `user_id` and
+`public_key_version` of the signing key, and its key is the entry's index in
+the signing keys the call verified with: its `signing_keys`, or the stored
+ones when it was given none. A signing key is rejected when its
+`identity_public_key_signature` is not its signature over its
+`identity_public_key`. Check that the entry carries the fields the X API
+returned, each in the right place; if it does, the key the API returned for
+that user is not bound to their identity key, and events signed with it must
+not be trusted.
+
+JS spells the fields in camelCase and the reasons in camelCase too
+(`'missingSigningKey'`, `'notARecipient'`). Python, Go and the C ABI carry
+each reason as the string above (Go as constants named for it, such as
+`UnverifiedKeyChangeMissingSigningKey` and
+`UndecryptableKeyChangeNotARecipient`); Rust, .NET and the JVM as the
+`UnverifiedKeyChangeReason` and `UndecryptableKeyChangeReason` enums.
+
+##### Signing keys for key changes
+
+A key change is signed by the member who made it: the member who created the
+conversation, added or removed someone, or rotated the key. That member need
+not have written any message in the batch, and the events endpoint returns
+key changes as opaque base64 in `meta.conversation_key_events`, so collecting
+signing keys from the senders of the messages you see is not enough.
+
+A key change sequenced since late June 2026 (`sequence_id` ≥
+`2070276095283454002`) must verify for its key to be used. If it does not,
+under either reject-unverified setting, its key is dropped: the key change is
+in `unverified_key_changes` with `key_dropped: true`, and each message under
+that key lands in `errors`, with a message that names the key change and why
+it did not verify. Older key changes, and those signed below
+signature version 6, keep their key, so stored history stays readable, but an
+unverified one still never sets the version to encrypt with.
+
+To get the keys, fetch the member's public keys from the X API
+(`GET /2/users/{id}/public_keys`) and pass every entry it returns, as a
+`SigningKeyEntry` each. Either fetch them for every member of the
+conversation up front, or decrypt, read `unverified_key_changes`, fetch the
+keys of each `sender_id` whose `reason` is `MissingSigningKey`, and decrypt
+again:
+
+```typescript
+let result = chat.decryptEvents({ events, signingKeys });
+const missing = Object.values(result.unverifiedKeyChanges).filter(
+  (change) => change.reason === "missingSigningKey",
+);
+if (missing.length > 0) {
+  for (const senderId of new Set(missing.map((change) => change.senderId))) {
+    signingKeys.push(...(await fetchSigningKeys(senderId)));  // GET /2/users/{id}/public_keys
+  }
+  result = chat.decryptEvents({ events, signingKeys });
+}
+for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
+  // rejectedSigningKey, invalidSignature or unverifiable: the same on a retry
+  console.warn(`key change ${index} did not verify: ${change.reason}`);
+}
+```
+
+`RejectedSigningKey`, `InvalidSignature` and `Unverifiable` do not change on
+a retry with the same keys. `InvalidSignature` also results from passing the
+wrong user's keys under the signer's user id, so check the entries you passed
+before treating the key change as forged.
 
 A member removal re-encrypts the group's title and description under the
 new key, as title and description changes marked `for_key_rotation`. They
@@ -944,11 +1099,35 @@ interface DecryptEventsResult {
   events: DecryptedEvent[];                 // the events that decrypted, of every type
   conversationKeys: ConversationKeyResult;  // extracted keys (cache these)
   errors: { [index: string]: string };      // event index (string key) → error message
+  unverifiedKeyChanges: { [index: string]: UnverifiedKeyChange };        // by event index
+  undecryptableKeyChanges: { [index: string]: UndecryptableKeyChange };  // by event index
+  rejectedSigningKeys: { [index: string]: RejectedSigningKey };          // by signing key index
 }
 
 interface DecryptedEvent {
   event: Event;           // the decrypted event (same type as decryptEvent returns)
   originalB64?: string;   // the raw input string, for reference
+}
+
+interface UnverifiedKeyChange {
+  reason: 'missingSigningKey' | 'rejectedSigningKey' | 'invalidSignature' | 'unverifiable';
+  keyDropped: boolean;              // true: its key decrypts nothing in this batch
+  conversationId: string | null;
+  conversationKeyVersion: string;
+  senderId: string | null;          // the member who made the key change
+  publicKeyVersion: string | null;  // the version of that member's signing key
+}
+
+interface UndecryptableKeyChange {
+  reason: 'locked' | 'notARecipient' | 'otherKeyVersion' | 'decryptionFailed';
+  conversationId: string | null;
+  conversationKeyVersion: string;
+  senderId: string | null;
+}
+
+interface RejectedSigningKey {
+  userId: string;
+  publicKeyVersion: string;
 }
 ```
 
@@ -959,16 +1138,65 @@ interface DecryptedEvent {
         { "event": { "type": "Message", ... }, "original_b64": "SGVsbG8..." },
         ...
     ],
-    "conversation_keys": { "keys": { ... }, "latest_version": "3" },
-    "errors": { "2": "Missing conversation key for version 4" }
+    "conversation_keys": {
+        "keys": { ... },
+        "keys_by_conversation": { "g123": { ... } },
+        "latest_version": "3",
+        "latest_versions": { "g123": "3" },
+    },
+    "errors": { "2": "Missing conversation key for version 4" },
+    "unverified_key_changes": {
+        "0": {
+            "reason": "MissingSigningKey",   # or "RejectedSigningKey", "InvalidSignature", "Unverifiable"
+            "key_dropped": True,
+            "conversation_id": "g123",
+            "conversation_key_version": "4",
+            "sender_id": "111",
+            "public_key_version": "2",
+        }
+    },
+    "undecryptable_key_changes": {
+        "1": {
+            "reason": "NotARecipient",   # or "Locked", "OtherKeyVersion", "DecryptionFailed"
+            "conversation_id": "g123",
+            "conversation_key_version": "1",
+            "sender_id": "111",
+        }
+    },
+    "rejected_signing_keys": {
+        "3": { "user_id": "222", "public_key_version": "1" },
+    },
 }
 ```
 
-**Rule out a missing-key-events batch first.** The most common cause of
-`Message encrypted with key version '…' but no matching key found` is caller
-input: the KeyChange events were left out of the batch (they arrive in
-`meta.conversation_key_events`, not `data` — see the events argument above).
-That case is fixed by re-batching with the key events included.
+**Rule out caller input first.** Two causes of
+`Message encrypted with key version '…' but no matching key found` are fixed
+by calling again with more input:
+
+- The KeyChange events were left out of the batch (they arrive in
+  `meta.conversation_key_events`, not `data` — see the events argument
+  above). Re-batch with the key events included.
+- The key change is in the batch but its signer's keys were not among the
+  signing keys, so its key was dropped. The error then continues `the key
+  change for that version, event N of the batch, did not verify, so its key
+  was dropped: no signing key for sender … at public_key_version …`, and
+  `unverified_key_changes` holds the key change with reason
+  `MissingSigningKey`. Add that user's public keys and decrypt again (see
+  [Signing keys for key changes](#signing-keys-for-key-changes)).
+
+A third cause is fixed by loading the right keys or identity: the key change
+is in the batch but this chat could not decrypt its key. The error then
+continues `the key change for that version, event N of the batch, holds no
+key this chat can decrypt: …`, and `undecryptable_key_changes` holds the key
+change with the reason. `Locked`, `OtherKeyVersion` and `DecryptionFailed`
+point at the chat's keys or key version; `NotARecipient` is permanent.
+
+`… could not be verified: no signing key for sender … at public_key_version …`
+on any event is the same input problem for that event's sender: pass that
+user's public keys as signing keys. `… could not be verified: the signing key
+given for sender … at public_key_version … was rejected: its identity binding
+does not verify` means the key was passed and left out: see
+`rejected_signing_keys`.
 
 **The remaining per-event errors are permanent.** Signatures are immutable and
 verified by rebuilding the signed payload from the event, so an event whose
@@ -979,9 +1207,10 @@ failures:
 
 | Error | Meaning |
 |---|---|
-| `…signature missing or no matching signing key` on a KeyChange | The key change was never signed (or signed with an unpublished key). Its key still decrypts messages, but never becomes the version to encrypt with. |
-| `ECDSA mismatch: key_version=…` | The signer fed different bytes into the signature than the event carries (e.g. a non-canonical conversation id). |
-| `Message encrypted with key version '…' but no matching key found` (key events included in the batch) | No key change in the batch gives this device the message's key: none names that version, or none is encrypted to this device's key version. |
+| `… could not be verified: the event carries no signature` on a KeyChange | The key change was never signed. Sequenced before late June 2026, its key still decrypts messages, but never becomes the version to encrypt with; sequenced since, its key is dropped. |
+| `ECDSA mismatch: key_version=…` | The signer fed different bytes into the signature than the event carries (e.g. a non-canonical conversation id), or the signing key passed for the sender is not the one that signed. |
+| `Message encrypted with key version '…' but no matching key found` (key events included in the batch, no key change named) | No key change of the message's conversation in the batch names that version. |
+| `KeyChange signature could not be verified: it signs the conversation key, which this chat could not decrypt from the event` | The key change is in `undecryptable_key_changes`: its signature covers a key this chat cannot decrypt, so it cannot be checked. Permanent for `NotARecipient`. |
 
 New messages are unaffected: rotating the key starts a clean, verifiable
 history from that point forward. (Verifiability only — rotation does not
@@ -1012,6 +1241,8 @@ for (const dm of result.events) {
 // Keep the conversation keys for later decryptEvent calls
 const cachedKeys = result.conversationKeys;
 console.log(cachedKeys.latestVersion); // "3": the newest verified key change, null until one verifies
+// For a batch of more than one conversation, read by conversation id instead:
+// cachedKeys.latestVersions[conversationId], cachedKeys.keysByConversation[conversationId]
 ```
 
 **Python example:**
@@ -1093,7 +1324,7 @@ Decrypts a single event using conversation keys you already have — cached from
 | Field | JS | Python | Rust | Go | JVM | .NET | Description |
 |---|---|---|---|---|---|---|---|
 | event_b64 | `eventB64: string` | `event_b64: str` | `event_b64: String` | `EventB64 string` | `String eventB64` | `string EventB64` | One base64-encoded raw event. |
-| conversation_keys | `conversationKeys?: ConversationKeyMap \| null` | `conversation_keys: dict[str, bytes] \| None = None` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` (or the one-argument constructor) | `IReadOnlyDictionary<string, byte[]>? ConversationKeys` (optional constructor argument) | Pre-extracted keys: **version → raw 32-byte key**. Every binding passes raw key bytes. Optional everywhere but Rust, where the map may be empty: omitted or empty, the keys come from the opt-in key cache (`setCacheKeys`), and non-message events (typing, read receipts) need no keys at all. |
+| conversation_keys | `conversationKeys?: ConversationKeyMap \| null` | `conversation_keys: dict[str, bytes] \| None = None` | `conversation_keys: HashMap<String, XChatConversationKey>` | `ConversationKeys map[string][]byte` | `Map<String, byte[]> conversationKeys` (or the one-argument constructor) | `IReadOnlyDictionary<string, byte[]>? ConversationKeys` (optional constructor argument) | Pre-extracted keys: **version → raw 32-byte key**, the event's conversation's entry in `keys_by_conversation` of a batch result (or its `keys`, when the batch was one conversation's). Every binding passes raw key bytes. Optional everywhere but Rust, where the map may be empty: omitted or empty, the keys come from the opt-in key cache (`setCacheKeys`), and non-message events (typing, read receipts) need no keys at all. |
 | signing_keys | `signingKeys?: SigningKeyEntry[] \| null` | `signing_keys: list[dict] \| None` (keyword) | `signing_keys: Option<Vec<SigningKeyEntry>>` | `SigningKeys []SigningKeyEntry` (nil = unset) | `List<SigningKeyEntry> signingKeys` (null = unset) | `IReadOnlyList<SigningKeyEntry>? SigningKeys` | Signing keys for **the event's sender**. The SDK matches by `publicKeyVersion` against the version in the event's signature. Leaving it unset (or empty) falls back to the keys stored via `setSigningKeys`; if none are stored either, under the default reject-unverified policy every **signed** event fails with an error. Only after `setRejectUnverified(false)` are such events returned with `verified: false`. |
 
 **Returns: `Event`** directly — or **throws/raises** on failure (unlike `decryptEvents` which collects errors). It also throws an invalid-input error for an event decrypt drops: a member removal's title or description re-encryption, marked `for_key_rotation` (see [decrypt_events](#decrypt_events--batch-self-contained)). A loop over single events catches the error and moves on to the next event, as it does for an unverified one.
@@ -1199,7 +1430,8 @@ if (eventJson.GetProperty("type").GetString() == "Message")
 | **A removal's title and description re-encryptions** | Throws an invalid-input error | Left out of `events`, recorded in `errors` |
 | **Return type** | `Event` (flat) | `DecryptEventsResult` wrapping `DecryptedEvent[]` |
 | **Returns original b64** | No | Yes (`originalB64` on each message) |
-| **Returns conv keys** | No | Yes (`conversationKeys` with `latestVersion`) |
+| **A key change that does not verify** | Throws, unless `setRejectUnverified(false)`; the error says whether the event is unsigned, its sender's signing key is missing or was rejected, or its signature is invalid | Recorded in `errors`, unless `setRejectUnverified(false)`; under either setting, reported in `unverifiedKeyChanges` with why and whether its key was dropped |
+| **Returns conv keys** | No | Yes (`conversationKeys`: `keys` and `latestVersion`, and per conversation `keysByConversation` and `latestVersions`) |
 | **Parses each event** | 1× | multiple passes (key extraction → key-change signature enforcement → freshness pinning → senderId extraction → decrypt) |
 | **Requires KeyChange in input** | No — you bring your own keys | Yes — or keyless messages end up in `errors` |
 
@@ -1235,7 +1467,7 @@ The SDK verifies each entry's identity binding (`identityPublicKeySignature`)
 before trusting it for signature verification, so all fields are required.
 In Rust, `SigningKeyEntry::new` takes them in the order above.
 
-**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file decrypt params, and the `keys` field of `ConversationKeyResult`:
+**ConversationKeyMap** — the `conversationKeys` field of `DecryptEventParams` and of the file decrypt params, the `keys` field of `ConversationKeyResult`, and each conversation's entry in its `keysByConversation`:
 ```typescript
 // JS
 type ConversationKeyMap = { [version: string]: Uint8Array };

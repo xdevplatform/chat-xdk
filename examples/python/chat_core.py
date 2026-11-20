@@ -10,14 +10,14 @@ The four core feature touchpoints of the chat-xdk flow are all here:
 * key management        -> ``load_keys`` / ``generate_and_register``
 * conversation keys     -> ``prepare_conversation_key_change`` / ``decrypt_conversation_key``
 * message encryption    -> ``encrypt_reply``, then ``encrypt_media`` for its files
-* event decryption      -> ``decrypt_batch`` (decrypt_events) and
-                           ``decrypt_one`` (decrypt_event)
+* event decryption      -> ``decrypt_batch`` / ``decrypt_batch_with_signers``
+                           (decrypt_events) and ``decrypt_one`` (decrypt_event)
 """
 
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import Any, Callable
 
 from chat_xdk import (
     Chat,
@@ -208,7 +208,32 @@ class ChatCore:
             "events": events,
             "conversation_keys": result.get("conversation_keys", {}),
             "errors": result.get("errors", {}),
+            "unverified_key_changes": result.get("unverified_key_changes", {}),
+            "undecryptable_key_changes": result.get("undecryptable_key_changes", {}),
+            "rejected_signing_keys": result.get("rejected_signing_keys", {}),
         }
+
+    def decrypt_batch_with_signers(
+        self,
+        events_b64: list[str],
+        store_signing_keys_of: Callable[[list[str]], bool],
+    ) -> dict[str, Any]:
+        """Batch path that also gets the signing keys its key changes need.
+
+        A key change is signed by the member who made it, who may have written
+        none of the page's messages, so the keys of the messages' senders do
+        not verify it. Unverified, a recent key change loses its key and the
+        messages under it do not decrypt. When the batch reports key changes
+        whose signer's keys were missing, this calls
+        ``store_signing_keys_of(user_ids)`` with those signers, which fetches
+        their public keys, stores them (``set_signing_keys``) and returns
+        whether it stored any, and then decrypts the batch again.
+        """
+        batch = self.decrypt_batch(events_b64)
+        signers = missing_key_change_signers(batch)
+        if not signers or not store_signing_keys_of(signers):
+            return batch
+        return self.decrypt_batch(events_b64)
 
     def decrypt_one(
         self,
@@ -485,6 +510,18 @@ class ChatCore:
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
         """Decrypt a group title or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
+
+
+def missing_key_change_signers(batch: dict[str, Any]) -> list[str]:
+    """The users whose signing keys a ``decrypt_batch`` result lacked to
+    verify a key change, each once: fetch their public keys and decrypt
+    again."""
+    signers = [
+        change["sender_id"]
+        for change in batch["unverified_key_changes"].values()
+        if change["reason"] == "MissingSigningKey" and change["sender_id"]
+    ]
+    return list(dict.fromkeys(signers))
 
 
 def message_text(event: dict[str, Any]) -> str | None:

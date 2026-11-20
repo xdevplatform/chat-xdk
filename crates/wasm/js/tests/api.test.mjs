@@ -12,6 +12,7 @@ import init, {
   encryptedFileSize,
 } from "../pkg/chat_xdk_wasm.js";
 import { featureServer, keepOffline, reading, v1Chat, waitForV1 } from "./feature_server.mjs";
+import { keyChangeSignerTests } from "./key_change_signers.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
 const withKey = ({ conversationKeys, ...rest }) => {
@@ -1455,6 +1456,10 @@ async function main() {
   assert.equal(thrown(() => locked.exportKeys()).kind, "invalidState");
   assert.equal(thrown(() => locked.importKeys({ keys: new Uint8Array(5) })).kind, "invalidInput");
   locked.free();
+
+  // 7. decryptEvents names the key changes whose signature did not verify,
+  // and reports the version to encrypt with per conversation.
+  await keyChangeSignerTests(() => new Chat());
 
   console.log("api.test.mjs: all assertions passed");
 }

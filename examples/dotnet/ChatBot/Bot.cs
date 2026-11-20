@@ -64,24 +64,31 @@ public sealed class Bot
                 .ToList()
             : new List<string>();
 
-    private async Task<List<SigningKeyEntry>> SigningKeysForAsync(IEnumerable<JsonElement> events)
+    /// <summary>The signing keys of the senders of <paramref name="events"/>.</summary>
+    private Task<List<SigningKeyEntry>> SigningKeysForAsync(IEnumerable<JsonElement> events)
     {
         var senders = events
             .Select(e => e.TryGetProperty("sender_id", out var s) ? s.GetString() : null)
-            .Where(id => !string.IsNullOrEmpty(id) && id != _botUserId)
+            .OfType<string>()
+            .Where(id => id.Length > 0 && id != _botUserId)
             .Distinct()
             .ToList();
+        return SigningKeysOfAsync(senders);
+    }
 
+    /// <summary>The signing keys of <paramref name="userIds"/>, fetched from the X API.</summary>
+    private async Task<List<SigningKeyEntry>> SigningKeysOfAsync(IEnumerable<string> userIds)
+    {
         var keys = new List<SigningKeyEntry>();
-        foreach (var senderId in senders)
+        foreach (var userId in userIds)
         {
             try
             {
-                foreach (var pk in await _api.GetPublicKeysAsync(senderId!))
+                foreach (var pk in await _api.GetPublicKeysAsync(userId))
                 {
                     keys.Add(new SigningKeyEntry
                     {
-                        UserId = senderId!,
+                        UserId = userId,
                         PublicKeyVersion = pk.TryGetProperty("public_key_version", out var v) ? v.GetString() ?? "" : "",
                         PublicKey = pk.TryGetProperty("signing_public_key", out var sp) ? sp.GetString() ?? "" : "",
                         IdentityPublicKey = pk.TryGetProperty("public_key", out var p) ? p.GetString() ?? "" : "",
@@ -91,10 +98,34 @@ public sealed class Bot
             }
             catch
             {
-                Console.Error.WriteLine($"public_keys_fetch_failed sender={senderId}");
+                Console.Error.WriteLine($"public_keys_fetch_failed user={userId}");
             }
         }
         return keys;
+    }
+
+    /// <summary>
+    /// Batch-decrypt <paramref name="eventsB64"/>, adding to
+    /// <paramref name="signingKeys"/> the keys of the members who made their
+    /// key changes: they sign them, and may have sent none of the page's
+    /// messages. Logs what the batch still could not use.
+    /// </summary>
+    private async Task<DecryptEventsResult> DecryptBatchAsync(
+        string conversationId, IReadOnlyList<string> eventsB64, List<SigningKeyEntry> signingKeys)
+    {
+        var result = await _core.DecryptBatchWithSignersAsync(
+            eventsB64, signingKeys, userIds => SigningKeysOfAsync(userIds));
+        foreach (var (index, change) in result.UnverifiedKeyChanges)
+            Console.Error.WriteLine(
+                $"key_change_unverified conv={conversationId} event={index} reason={change.Reason} "
+                + $"signer={change.SenderId} key_dropped={change.KeyDropped}");
+        foreach (var (index, change) in result.UndecryptableKeyChanges)
+            Console.Error.WriteLine(
+                $"key_change_undecryptable conv={conversationId} event={index} reason={change.Reason}");
+        foreach (var (index, key) in result.RejectedSigningKeys)
+            Console.Error.WriteLine(
+                $"signing_key_rejected index={index} user={key.UserId} version={key.PublicKeyVersion}");
+        return result;
     }
 
     /// <summary>
@@ -114,7 +145,8 @@ public sealed class Bot
             .Where(s => !string.IsNullOrEmpty(s))
             .Select(s => s!));
 
-        var result = _core.DecryptBatch(eventsB64, await SigningKeysForAsync(raw));
+        var signingKeys = await SigningKeysForAsync(raw);
+        var result = await DecryptBatchAsync(conversationId, eventsB64, signingKeys);
         st.PaginationToken = NextToken(page);
         Console.WriteLine($"backlog_loaded conv={conversationId} messages={result.Events.Count} keys={result.ConversationKeys.Keys.Count}");
     }
@@ -131,10 +163,11 @@ public sealed class Bot
 
         // Key changes for this page arrive in meta, not data; only the batch
         // path feeds the key cache, so route them through it before
-        // decrypting the messages that need them.
+        // decrypting the messages that need them. The batch fetches the keys
+        // of the members who made them.
         var pageKeyEvents = KeyEvents(page);
         if (pageKeyEvents.Count > 0)
-            _core.DecryptBatch(pageKeyEvents, signingKeys);
+            await DecryptBatchAsync(conversationId, pageKeyEvents, signingKeys);
 
         foreach (var item in raw)
         {
@@ -157,7 +190,7 @@ public sealed class Bot
                 // Only the batch path adopts keys into the cache; replay the
                 // key change through it so the rotated key becomes the
                 // sending key.
-                _core.DecryptBatch(new[] { eventB64 }, signingKeys);
+                await DecryptBatchAsync(conversationId, new[] { eventB64 }, signingKeys);
                 continue;
             }
             await MaybeReplyAsync(conversationId, decrypted, eventB64);

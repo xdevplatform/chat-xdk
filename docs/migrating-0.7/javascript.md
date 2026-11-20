@@ -944,11 +944,18 @@ newest version whose key change verified, and it never moves back for the
 chat's lifetime. A key change verifies only against its sender's signing
 key, so give the chat every participant's signing keys, your own included,
 before you decrypt. It's `null` until a key change verifies: a key change
-the SDK can't verify still adds its key to `result.conversationKeys.keys`,
-for decrypting, but never becomes the version you encrypt with. Where 0.5.x
-returned the batch's highest version, 0.7.x can return `null`: fetch the
-missing signing keys or the conversation's key-change events and decrypt
-again, rather than encrypting under the highest key in `keys`:
+the SDK can't verify never becomes the version you encrypt with, and one
+sequenced since late June 2026 also has its key left out of
+`result.conversationKeys.keys`, so the messages under it don't decrypt;
+`result.unverifiedKeyChanges` holds each such key change, by its index in the
+batch, with the signing key it needs. A batch whose events belong to more
+than one conversation reports each one's version in
+`result.conversationKeys.latestVersions` and each one's keys in
+`result.conversationKeys.keysByConversation`, and its `latestVersion` is
+`null`. Where 0.5.x returned the batch's
+highest version, 0.7.x can return `null`: fetch the missing signing keys or
+the conversation's key-change events and decrypt again, rather than
+encrypting under the highest key in `keys`:
 
 ```js
 // 0.5.x

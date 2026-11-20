@@ -135,6 +135,122 @@ public class ChatCoreTests
         Assert.False(string.IsNullOrEmpty(body.XdkVersion));
     }
 
+    /// <summary>A Thrift string field: its id, then the value's length and bytes.</summary>
+    private static byte[] ThriftString(int id, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var header = new byte[]
+        {
+            11, (byte)(id >> 8), (byte)id,
+            (byte)(bytes.Length >> 24), (byte)(bytes.Length >> 16), (byte)(bytes.Length >> 8), (byte)bytes.Length,
+        };
+        return header.Concat(bytes).ToArray();
+    }
+
+    /// <summary>The event as delivered: <paramref name="eventB64"/> with the
+    /// sequence id the server assigns, prepended as Thrift string field 1.</summary>
+    private static string Delivered(string eventB64, string sequenceId) =>
+        Convert.ToBase64String(ThriftString(1, sequenceId).Concat(Convert.FromBase64String(eventB64)).ToArray());
+
+    /// <summary>A signed action as delivered: the event the server relays for
+    /// <paramref name="action"/>, an entry of a prepared change's action
+    /// signatures, from <paramref name="senderId"/> in
+    /// <paramref name="conversationId"/>, with the sequence id the server
+    /// assigns.</summary>
+    private static string DeliveredAction(ActionSignature action, string senderId, string conversationId, string sequenceId)
+    {
+        var signed = action.MessageEventSignature;
+        var delivered = ThriftString(1, sequenceId)
+            .Concat(ThriftString(2, action.MessageId))
+            .Concat(ThriftString(3, senderId))
+            .Concat(ThriftString(4, conversationId))
+            .Concat(new byte[] { 12, 0, 7 })
+            .Concat(Convert.FromBase64String(action.EncodedMessageEventDetail))
+            .Concat(new byte[] { 12, 0, 9 })
+            .Concat(ThriftString(1, signed.Signature))
+            .Concat(ThriftString(2, signed.PublicKeyVersion))
+            .Concat(ThriftString(3, signed.SignatureVersion))
+            .Concat(new byte[] { 0, 0 })
+            .ToArray();
+        return Convert.ToBase64String(delivered);
+    }
+
+    /// <summary>A core with fresh keys as a user, and the keys others hold for it.</summary>
+    private sealed class Party : IDisposable
+    {
+        public Party(string userId)
+        {
+            UserId = userId;
+            var (registration, privateKeysB64) = Core.GenerateAndRegister();
+            Core.LoadKeys(privateKeysB64, "1");
+            Core.SetIdentity(userId);
+            var key = registration.PublicKey;
+            SigningKey = new SigningKeyEntry
+            {
+                UserId = userId,
+                PublicKeyVersion = "1",
+                PublicKey = key.SigningPublicKey,
+                IdentityPublicKey = key.PublicKey,
+                IdentityPublicKeySignature = key.IdentityPublicKeySignature,
+            };
+            PublicKey = new PublicKeyInput
+            {
+                UserId = userId,
+                IdentityPublicKey = key.PublicKey,
+                PublicKeyVersion = "1",
+            };
+        }
+
+        public ChatCore Core { get; } = new();
+        public string UserId { get; }
+        public SigningKeyEntry SigningKey { get; }
+        public PublicKeyInput PublicKey { get; }
+
+        public void Dispose() => Core.Dispose();
+    }
+
+    [Fact]
+    public async Task DecryptBatchWithSigners_Gets_The_Keys_Of_The_Member_Who_Made_A_Key_Change()
+    {
+        // An admin rotates a group's key and a member sends a message under
+        // it. The bot holds the member's signing keys: the member is the only
+        // sender on the page.
+        using var admin = new Party("5001");
+        using var member = new Party("5002");
+        using var bot = new Party("5003");
+        var prepared = admin.Core.PrepareConversationKeyChange(
+            new[] { admin.PublicKey, member.PublicKey, bot.PublicKey }, "g900");
+        var keyChange = DeliveredAction(prepared.ActionSignatures[0], admin.UserId, "g900", "2100000000000000000");
+        var body = member.Core.EncryptReply(
+            "g900", "hello group", prepared.ConversationKey, prepared.ConversationKeyVersion);
+        var events = new[] { keyChange, Delivered(body.EventB64, "2100000000000000001") };
+
+        // Without the admin's keys the key change does not verify: its key is
+        // dropped and the message does not decrypt.
+        var unverified = bot.Core.DecryptBatch(events, new[] { member.SigningKey });
+        Assert.Empty(unverified.Events);
+        Assert.Equal(new[] { "5001" }, EventHelpers.MissingKeyChangeSigners(unverified));
+
+        var signingKeys = new List<SigningKeyEntry> { member.SigningKey };
+        var asked = new List<string>();
+        var result = await bot.Core.DecryptBatchWithSignersAsync(events, signingKeys, userIds =>
+        {
+            asked.AddRange(userIds);
+            return Task.FromResult(new List<SigningKeyEntry> { admin.SigningKey });
+        });
+        Assert.Equal(new[] { "5001" }, asked);
+        Assert.Empty(result.Errors);
+        Assert.Empty(EventHelpers.MissingKeyChangeSigners(result));
+        Assert.Equal(
+            new[] { null, "hello group" },
+            result.Events.Select(decrypted => EventHelpers.MessageText(decrypted.Event)));
+        Assert.Equal(2, signingKeys.Count);
+
+        // With every signer's keys there is nothing to fetch.
+        await bot.Core.DecryptBatchWithSignersAsync(events, signingKeys, userIds =>
+            throw new InvalidOperationException($"asked for the keys of {string.Join(",", userIds)}"));
+    }
+
     [Fact]
     public void DecryptBatch_Empty_Is_Safe()
     {

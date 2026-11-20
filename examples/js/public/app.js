@@ -97,20 +97,28 @@ $("compose").addEventListener("keydown", async (ev) => {
   await sendMessage(text);
 });
 
-/** Fetch signing keys for unseen senders and refresh the SDK's store. */
+/** Fetch signing keys for the unseen senders of `events` and refresh the SDK's store. */
 async function storeSigningKeysFor(events) {
-  const senders = new Set(
-    events.map((e) => String(e.senderId ?? e.sender_id ?? "")).filter((id) => id && id !== botUserId),
-  );
+  const senders = events
+    .map((e) => String(e.senderId ?? e.sender_id ?? ""))
+    .filter((id) => id && id !== botUserId);
+  await storeSigningKeysOf(senders);
+}
+
+/**
+ * Fetch the signing keys of the users among `userIds` not fetched yet and
+ * refresh the SDK's store. Resolves to whether it stored any.
+ */
+async function storeSigningKeysOf(userIds) {
   let changed = false;
-  for (const senderId of senders) {
-    if (state.signingKeys.has(senderId)) continue;
+  for (const userId of new Set(userIds)) {
+    if (state.signingKeys.has(userId)) continue;
     try {
-      const resp = await api(`/api/public-keys?user_id=${encodeURIComponent(senderId)}`);
+      const resp = await api(`/api/public-keys?user_id=${encodeURIComponent(userId)}`);
       state.signingKeys.set(
-        senderId,
+        userId,
         (resp.data ?? []).map((pk) => ({
-          userId: senderId,
+          userId,
           publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
           publicKey: pk.signingPublicKey ?? pk.signing_public_key ?? "",
           identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
@@ -124,16 +132,47 @@ async function storeSigningKeysFor(events) {
     }
   }
   if (changed) chat.setSigningKeys([...state.signingKeys.values()].flat());
+  return changed;
+}
+
+/**
+ * Batch-decrypt `eventsB64`, fetching the signing keys of the members who
+ * made its key changes: they sign them, and may have sent none of the page's
+ * messages. Without a signer's keys a recent key change loses its key, and
+ * the messages under it do not decrypt.
+ */
+async function decryptBatch(eventsB64) {
+  let batch = chat.decryptEvents({ events: eventsB64 });
+  const signers = Object.values(batch.unverifiedKeyChanges)
+    .filter((change) => change.reason === "missingSigningKey" && change.senderId)
+    .map((change) => change.senderId);
+  if (signers.length && (await storeSigningKeysOf(signers))) {
+    batch = chat.decryptEvents({ events: eventsB64 });
+  }
+  for (const [index, change] of Object.entries(batch.unverifiedKeyChanges)) {
+    log(`key change ${index} did not verify: ${change.reason}`);
+  }
+  for (const [index, change] of Object.entries(batch.undecryptableKeyChanges)) {
+    log(`key change ${index} could not be decrypted: ${change.reason}`);
+  }
+  return batch;
+}
+
+/** The key changes of a page of events: they arrive in meta, separate from data. */
+function keyEventsOf(page) {
+  return page.meta?.conversationKeyEvents ?? page.meta?.conversation_key_events ?? [];
 }
 
 async function loadBacklog() {
   const page = await api(`/api/events?conversation_id=${encodeURIComponent(state.conversationId)}`);
   const raw = page.data ?? [];
-  const eventsB64 = raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean);
+  // The key changes must go into the same batch as the messages: they carry
+  // the conversation keys the messages decrypt under.
+  const eventsB64 = [...keyEventsOf(page), ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean)];
   await storeSigningKeysFor(raw);
   // Signing keys come from the store; the verified conversation keys land in
   // the SDK's key cache for encryptMessage to resolve later.
-  const batch = chat.decryptEvents({ events: eventsB64 });
+  const batch = await decryptBatch(eventsB64);
   state.paginationToken = page.meta?.next_token;
   for (const m of batch.events) renderMessage(m.event);
   log(`backlog: ${batch.events.length} messages, ${Object.keys(batch.conversationKeys.keys ?? {}).length} keys`);
@@ -147,6 +186,10 @@ async function poll() {
     );
     const raw = page.data ?? [];
     await storeSigningKeysFor(raw);
+    // Only the batch path feeds the key cache, so route the page's key
+    // changes through it before decrypting the messages that need them.
+    const keyEventsB64 = keyEventsOf(page);
+    if (keyEventsB64.length) await decryptBatch(keyEventsB64);
     for (const item of raw) {
       const eventB64 = item.encodedEvent ?? item.encoded_event;
       if (!eventB64) continue;
@@ -162,7 +205,7 @@ async function poll() {
       if (event.type === "keyChange") {
         // Only the batch path feeds the key cache, so route key changes back
         // through it to adopt the rotated key.
-        chat.decryptEvents({ events: [eventB64] });
+        await decryptBatch([eventB64]);
         continue;
       }
       renderMessage(event);

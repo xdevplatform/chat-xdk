@@ -64,23 +64,33 @@ class ChatBot:
         return self.state.setdefault(conversation_id, ConversationState())
 
     def _register_signing_keys(self, events: list[dict[str, Any]]) -> None:
-        """Fetch new senders' public keys into the SDK's signing-key store.
+        """Fetch the public keys of the new senders of ``events`` into the
+        SDK's signing-key store."""
+        self._register_signing_keys_of(
+            [
+                str(e.get("sender_id"))
+                for e in events
+                if e.get("sender_id") and str(e.get("sender_id")) != self.bot_user_id
+            ]
+        )
 
-        Pulled from the X API per unique sender. Each entry must carry the
+    def _register_signing_keys_of(self, user_ids: list[str]) -> bool:
+        """Fetch the public keys of the users among ``user_ids`` not fetched
+        yet into the SDK's signing-key store. Returns whether it stored any.
+
+        Pulled from the X API per unique user. Each entry must carry the
         identity public key + its binding signature for verification. The
         store is replaced wholesale, so the accumulated roster is re-sent.
         """
-        senders = {
-            str(e.get("sender_id"))
-            for e in events
-            if e.get("sender_id") and str(e.get("sender_id")) != self.bot_user_id
-        } - self._known_senders
-        for sender_id in senders:
+        stored = False
+        for user_id in dict.fromkeys(user_ids):
+            if user_id in self._known_senders:
+                continue
             try:
-                for pk in self.api.get_public_keys(sender_id):
+                for pk in self.api.get_public_keys(user_id):
                     self._signing_keys.append(
                         {
-                            "user_id": sender_id,
+                            "user_id": user_id,
                             "public_key_version": str(pk.get("public_key_version") or ""),
                             "public_key": pk.get("signing_public_key") or "",
                             "identity_public_key": pk.get("public_key") or "",
@@ -90,11 +100,44 @@ class ChatBot:
                             or "",
                         }
                     )
-                self._known_senders.add(sender_id)
+                self._known_senders.add(user_id)
+                stored = True
             except Exception:
-                logger.warning("public_keys_fetch_failed sender=%s", sender_id)
-        if senders:
+                logger.warning("public_keys_fetch_failed user=%s", user_id)
+        if stored:
             self.core.set_signing_keys(self._signing_keys)
+        return stored
+
+    def _decrypt_batch(self, conversation_id: str, events_b64: list[str]) -> dict[str, Any]:
+        """Batch-decrypt ``events_b64``, fetching the signing keys of the
+        members who made its key changes: they sign them, and may have sent
+        none of the page's messages. Logs what the batch still could not use.
+        """
+        batch = self.core.decrypt_batch_with_signers(events_b64, self._register_signing_keys_of)
+        for index, change in batch["unverified_key_changes"].items():
+            logger.warning(
+                "key_change_unverified conv=%s event=%s reason=%s signer=%s key_dropped=%s",
+                conversation_id,
+                index,
+                change["reason"],
+                change["sender_id"],
+                change["key_dropped"],
+            )
+        for index, change in batch["undecryptable_key_changes"].items():
+            logger.warning(
+                "key_change_undecryptable conv=%s event=%s reason=%s",
+                conversation_id,
+                index,
+                change["reason"],
+            )
+        for index, key in batch["rejected_signing_keys"].items():
+            logger.warning(
+                "signing_key_rejected index=%s user=%s version=%s",
+                index,
+                key["user_id"],
+                key["public_key_version"],
+            )
+        return batch
 
     def load_backlog(self, conversation_id: str) -> None:
         """Initial load: batch-decrypt the backlog (decrypt_events path)."""
@@ -111,7 +154,7 @@ class ChatBot:
         ]
         self._register_signing_keys(raw)
 
-        batch = self.core.decrypt_batch(events_b64)
+        batch = self._decrypt_batch(conversation_id, events_b64)
         keys = batch["conversation_keys"].get("keys") or {}
         st.conversation_keys.update(keys)
         st.pagination_token = page.get("meta", {}).get("next_token")
@@ -136,12 +179,13 @@ class ChatBot:
         self._register_signing_keys(raw)
         # Key changes for this page arrive in meta, not data; route them
         # through the batch path so the rotated keys are verified and cached
-        # before this loop decrypts the messages that need them. This runs
-        # after the signing keys are registered: a key change from a sender
-        # missing from the store would fail verification and be dropped.
+        # before this loop decrypts the messages that need them. The batch
+        # fetches the keys of the members who made them: a key change whose
+        # signer is missing from the store would fail verification and be
+        # dropped.
         key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
         if key_events_b64:
-            rotated = self.core.decrypt_batch(list(key_events_b64))
+            rotated = self._decrypt_batch(conversation_id, list(key_events_b64))
             st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
 
         for item in raw:
@@ -159,7 +203,7 @@ class ChatBot:
             # (used by the encrypt calls), and returns the decrypted key for
             # this loop's own decrypt_one lookups.
             if event.get("type") == "KeyChange":
-                rotated = self.core.decrypt_batch([event_b64])
+                rotated = self._decrypt_batch(conversation_id, [event_b64])
                 st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
                 continue
 

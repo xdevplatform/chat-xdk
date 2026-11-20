@@ -96,14 +96,37 @@ type PublicKeyInput struct {
 	PublicKeyVersion string `json:"public_key_version"`
 }
 
-// ConversationKeyBundle holds decrypted conversation key material keyed by version.
-// Keys maps version string -> raw 32-byte conversation key. LatestVersion is
-// the version to encrypt with: from DecryptEvents, the newest version whose
-// key change verified (nil until one verifies); from ExtractConversationKeys,
-// the batch's highest version.
+// ConversationKeyBundle holds the conversation keys a batch's key changes
+// carry, and the key version to encrypt with.
+//
+// KeysByConversation and LatestVersions are keyed by conversation id, in the
+// form events carry: a group's "g…" id, and a one-to-one's two user ids
+// ordered numerically and colon-separated. Keys and LatestVersion hold the
+// same without the conversation id, for a batch whose events all belong to
+// one conversation.
+//
+// Keys maps version string -> raw 32-byte conversation key, over every
+// conversation of the batch. A version that key changes of more than one
+// conversation carry is left out of it, because a lookup by version alone
+// cannot say which conversation's key it wants: read KeysByConversation,
+// which holds each key under the conversation of the key change that carries
+// it.
+//
+// LatestVersions maps each conversation to the version to encrypt with
+// there. From DecryptEvents it holds the newest version whose key change
+// verified; a conversation without one has no entry. From
+// ExtractConversationKeys, which checks no signature, it holds each
+// conversation's highest version in the batch.
+//
+// LatestVersion is that version when every event of the batch belongs to one
+// conversation, and nil when that conversation has none. It is nil for a
+// batch whose events belong to more than one conversation, where one version
+// cannot name each conversation's key: read LatestVersions.
 type ConversationKeyBundle struct {
-	Keys          map[string][]byte `json:"keys"`
-	LatestVersion *string           `json:"latest_version"`
+	Keys               map[string][]byte            `json:"keys"`
+	KeysByConversation map[string]map[string][]byte `json:"keys_by_conversation"`
+	LatestVersion      *string                      `json:"latest_version"`
+	LatestVersions     map[string]string            `json:"latest_versions"`
 }
 
 // DecryptedEvent is one event DecryptEvents decrypted, of any event type.
@@ -114,14 +137,125 @@ type DecryptedEvent struct {
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
-// DecryptEventsResult is the batch decrypt API. Errors maps the index of each
-// event left out of Events, as a string, to its error: one that failed, or one
-// decrypt drops, such as a member removal's title or description re-encrypted
-// under the new key.
+// UnverifiedKeyChangeReason is why a key change's signature did not verify.
+type UnverifiedKeyChangeReason string
+
+const (
+	// UnverifiedKeyChangeMissingSigningKey: none of the signing keys the call
+	// verified with is the sender's at the key version the signature names.
+	// Pass that user's public keys as signing keys and decrypt again.
+	UnverifiedKeyChangeMissingSigningKey UnverifiedKeyChangeReason = "MissingSigningKey"
+	// UnverifiedKeyChangeRejectedSigningKey: the sender's signing key at that
+	// key version was among the signing keys, but its identity binding does
+	// not verify, so the call left it out: it is in RejectedSigningKeys.
+	// Fetching the same entry again changes nothing.
+	UnverifiedKeyChangeRejectedSigningKey UnverifiedKeyChangeReason = "RejectedSigningKey"
+	// UnverifiedKeyChangeInvalidSignature: the signature does not verify
+	// against the sender's signing key.
+	UnverifiedKeyChangeInvalidSignature UnverifiedKeyChangeReason = "InvalidSignature"
+	// UnverifiedKeyChangeUnverifiable: the key change carries no signature,
+	// or one this SDK cannot check: an unsupported signature version, or one
+	// below the first whose payload a recipient can rebuild.
+	UnverifiedKeyChangeUnverifiable UnverifiedKeyChangeReason = "Unverifiable"
+)
+
+// UnverifiedKeyChange is a key change in a DecryptEvents batch whose key this
+// identity decrypted but whose signature did not verify.
+type UnverifiedKeyChange struct {
+	// Reason is why its signature did not verify.
+	Reason UnverifiedKeyChangeReason `json:"reason"`
+	// KeyDropped is whether its key was left out of ConversationKeys, so the
+	// messages of its conversation under that key version did not decrypt. A
+	// key that was kept decrypts messages but never becomes the version to
+	// encrypt with.
+	KeyDropped bool `json:"key_dropped"`
+	// ConversationID is the conversation the key change belongs to.
+	ConversationID *string `json:"conversation_id"`
+	// ConversationKeyVersion is the conversation key version the key change
+	// carries.
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	// SenderID is the user who signed the key change: the member who made it.
+	SenderID *string `json:"sender_id"`
+	// PublicKeyVersion is the version of that user's signing key the
+	// signature names.
+	PublicKeyVersion *string `json:"public_key_version"`
+}
+
+// UndecryptableKeyChangeReason is why this identity could not decrypt the
+// conversation key a key change carries.
+type UndecryptableKeyChangeReason string
+
+const (
+	// UndecryptableKeyChangeLocked: no identity key is loaded. Load or unlock
+	// the keys, then decrypt again.
+	UndecryptableKeyChangeLocked UndecryptableKeyChangeReason = "Locked"
+	// UndecryptableKeyChangeNotARecipient: the key change holds no key for
+	// this chat's user, the user SetIdentity names; without a session
+	// identity, it holds no key at all. The user was not a member when the
+	// key change was made.
+	UndecryptableKeyChangeNotARecipient UndecryptableKeyChangeReason = "NotARecipient"
+	// UndecryptableKeyChangeOtherKeyVersion: the key change holds keys for
+	// this chat's user, or for some user when no session identity names one,
+	// but none at this chat's key version: it was made for another
+	// registration of the user's keys. Check the key version given to
+	// SetIdentity or ImportKeys.
+	UndecryptableKeyChangeOtherKeyVersion UndecryptableKeyChangeReason = "OtherKeyVersion"
+	// UndecryptableKeyChangeDecryptionFailed: a key the key change holds for
+	// this chat's key version does not decrypt under the loaded identity key:
+	// the loaded private key is not the one registered at that version.
+	UndecryptableKeyChangeDecryptionFailed UndecryptableKeyChangeReason = "DecryptionFailed"
+)
+
+// UndecryptableKeyChange is a key change in a DecryptEvents batch whose
+// conversation key this identity could not decrypt.
+type UndecryptableKeyChange struct {
+	// Reason is why its key could not be decrypted.
+	Reason UndecryptableKeyChangeReason `json:"reason"`
+	// ConversationID is the conversation the key change belongs to.
+	ConversationID *string `json:"conversation_id"`
+	// ConversationKeyVersion is the conversation key version the key change
+	// carries.
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	// SenderID is the user who made the key change.
+	SenderID *string `json:"sender_id"`
+}
+
+// RejectedSigningKey is a signing key a DecryptEvents call left out of
+// verification because its identity binding does not verify:
+// IdentityPublicKeySignature is not the signing key's signature over
+// IdentityPublicKey.
+type RejectedSigningKey struct {
+	// UserID is the entry's UserID.
+	UserID string `json:"user_id"`
+	// PublicKeyVersion is the entry's PublicKeyVersion.
+	PublicKeyVersion string `json:"public_key_version"`
+}
+
+// DecryptEventsResult is the batch decrypt API.
+//
+// Errors, UnverifiedKeyChanges and UndecryptableKeyChanges are keyed by an
+// event's index in the batch, as a string, and RejectedSigningKeys by a
+// signing key's index, as a string. Each is empty when it has nothing to
+// report.
+//
+// Errors holds the error of each event left out of Events: one that failed,
+// or one decrypt drops, such as a member removal's title or description
+// re-encrypted under the new key. UnverifiedKeyChanges holds each key change
+// whose signature did not verify, with why and whether its key was dropped.
+// UndecryptableKeyChanges holds each key change whose conversation key this
+// identity could not decrypt, with why; such a key change gives the batch no
+// key, so the messages of its conversation under its key version did not
+// decrypt. RejectedSigningKeys holds each of the signing keys the call
+// verified with (SigningKeys, or the stored ones when it was given none)
+// that it left out because its identity binding does not verify; an event
+// signed with such a key does not verify.
 type DecryptEventsResult struct {
-	Events           []DecryptedEvent      `json:"events"`
-	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
-	Errors           map[string]string     `json:"errors"`
+	Events                  []DecryptedEvent                  `json:"events"`
+	ConversationKeys        ConversationKeyBundle             `json:"conversation_keys"`
+	Errors                  map[string]string                 `json:"errors"`
+	UnverifiedKeyChanges    map[string]UnverifiedKeyChange    `json:"unverified_key_changes"`
+	UndecryptableKeyChanges map[string]UndecryptableKeyChange `json:"undecryptable_key_changes"`
+	RejectedSigningKeys     map[string]RejectedSigningKey     `json:"rejected_signing_keys"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,

@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 
 import init, { __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as browser from "../../js/index.js";
+import { keyChangeSignerTests } from "../../js/tests/key_change_signers.mjs";
 import * as server from "../index.js";
 
 const { ChatWithJuicebox, ChatXdkError, ServerChat, bytesToBase64, createChat } = server;
@@ -195,6 +196,9 @@ async function main() {
   await exportImportRoundTripTests();
   await fixtureKeysTests(v);
   await juiceboxThenImportTests();
+  // A ServerChat's decryptEvents names the key changes whose signature did
+  // not verify, and reports the version to encrypt with per conversation.
+  await keyChangeSignerTests(() => createChat());
   console.log("server.test.mjs: all assertions passed");
 }
 

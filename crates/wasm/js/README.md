@@ -108,6 +108,22 @@ for (const dm of result.events) {
   }
 }
 
+// A key change verifies with the signing keys of the member who made it. One
+// that did not verify is here, by its index in the batch; when its key was
+// dropped, the messages under it are in result.errors. For
+// "missingSigningKey", add the public keys of change.senderId
+// (GET /2/users/{id}/public_keys) and decrypt again.
+for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
+  console.warn(index, change.reason, change.senderId, change.keyDropped);
+}
+// Key changes whose key this chat could not decrypt, and signing keys left
+// out because their identity binding does not verify, are reported the same
+// way: result.undecryptableKeyChanges, result.rejectedSigningKeys.
+
+// The version to encrypt with: for a batch of one conversation,
+// result.conversationKeys.latestVersion; for any batch,
+// result.conversationKeys.latestVersions[conversationId].
+
 // Individual events after the initial load: the empty key map resolves from
 // the cache and the unset signing keys from the store (pass either
 // explicitly to override).

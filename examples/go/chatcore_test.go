@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -509,5 +511,159 @@ func TestCachedKeyReplyFlow(t *testing.T) {
 	}
 	if body.MessageID == "" || body.EncodedMessageCreateEvent == "" {
 		t.Errorf("incomplete send body: %+v", body)
+	}
+}
+
+// thriftString is a Thrift string field: its id, then the value's length and
+// bytes.
+func thriftString(id uint16, value string) []byte {
+	field := binary.BigEndian.AppendUint16([]byte{11}, id)
+	field = binary.BigEndian.AppendUint32(field, uint32(len(value)))
+	return append(field, value...)
+}
+
+// deliveredEvent is eventB64 as delivered: with the sequence id the server
+// assigns, prepended as Thrift string field 1.
+func deliveredEvent(t *testing.T, eventB64, sequenceID string) string {
+	t.Helper()
+	event, err := base64.StdEncoding.DecodeString(eventB64)
+	if err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(append(thriftString(1, sequenceID), event...))
+}
+
+// deliveredAction is a signed action as delivered: the event the server
+// relays for action, an entry of a prepared change's ActionSignatures, from
+// senderID in conversationID, with the sequence id the server assigns.
+func deliveredAction(t *testing.T, action chatxdk.ActionSignature, senderID, conversationID, sequenceID string) string {
+	t.Helper()
+	detail, err := base64.StdEncoding.DecodeString(action.EncodedMessageEventDetail)
+	if err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	signed := action.MessageEventSignature
+	var event []byte
+	event = append(event, thriftString(1, sequenceID)...)
+	event = append(event, thriftString(2, action.MessageID)...)
+	event = append(event, thriftString(3, senderID)...)
+	event = append(event, thriftString(4, conversationID)...)
+	event = append(event, 12, 0, 7)
+	event = append(event, detail...)
+	event = append(event, 12, 0, 9)
+	event = append(event, thriftString(1, signed.Signature)...)
+	event = append(event, thriftString(2, signed.PublicKeyVersion)...)
+	event = append(event, thriftString(3, signed.SignatureVersion)...)
+	event = append(event, 0, 0)
+	return base64.StdEncoding.EncodeToString(event)
+}
+
+// party is a core with fresh keys as a user, and the keys others hold for it.
+type party struct {
+	core       *ChatCore
+	userID     string
+	signingKey chatxdk.SigningKeyEntry
+	publicKey  chatxdk.PublicKeyInput
+}
+
+func newParty(t *testing.T, userID string) *party {
+	t.Helper()
+	core := NewChatCore()
+	t.Cleanup(core.Close)
+	payload, privateKeysB64, err := core.GenerateAndRegister()
+	if err != nil {
+		t.Fatalf("GenerateAndRegister: %v", err)
+	}
+	if err := core.LoadKeys(privateKeysB64, "1"); err != nil {
+		t.Fatalf("LoadKeys: %v", err)
+	}
+	if err := core.SetIdentity(userID); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	registration := payload.PublicKey
+	return &party{
+		core:   core,
+		userID: userID,
+		signingKey: chatxdk.SigningKeyEntry{
+			UserID:                     userID,
+			PublicKeyVersion:           "1",
+			PublicKey:                  registration.SigningPublicKey,
+			IdentityPublicKey:          registration.PublicKey,
+			IdentityPublicKeySignature: registration.IdentityPublicKeySignature,
+		},
+		publicKey: chatxdk.PublicKeyInput{
+			UserID:            userID,
+			IdentityPublicKey: registration.PublicKey,
+			PublicKeyVersion:  "1",
+		},
+	}
+}
+
+func TestDecryptBatchWithSignersGetsTheKeysOfTheMemberWhoMadeAKeyChange(t *testing.T) {
+	// An admin rotates a group's key and a member sends a message under it.
+	// The bot holds the member's signing keys: the member is the only sender
+	// on the page.
+	admin, member, bot := newParty(t, "5001"), newParty(t, "5002"), newParty(t, "5003")
+	prepared, err := admin.core.PrepareConversationKeyChange(
+		[]chatxdk.PublicKeyInput{admin.publicKey, member.publicKey, bot.publicKey}, "g900")
+	if err != nil {
+		t.Fatalf("PrepareConversationKeyChange: %v", err)
+	}
+	keyChange := deliveredAction(t, prepared.ActionSignatures[0], admin.userID, "g900", "2100000000000000000")
+	body, err := member.core.EncryptReply("g900", "hello group", &ReplyOptions{
+		ConversationKey:        prepared.ConversationKey,
+		ConversationKeyVersion: prepared.ConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply: %v", err)
+	}
+	events := []string{keyChange, deliveredEvent(t, body.EventB64, "2100000000000000001")}
+	if err := bot.core.SetSigningKeys([]chatxdk.SigningKeyEntry{member.signingKey}); err != nil {
+		t.Fatalf("SetSigningKeys: %v", err)
+	}
+
+	// Without the admin's keys the key change does not verify: its key is
+	// dropped and the message does not decrypt.
+	unverified, err := bot.core.DecryptBatch(events, nil)
+	if err != nil {
+		t.Fatalf("DecryptBatch: %v", err)
+	}
+	if len(unverified.Events) != 0 {
+		t.Errorf("expected no decrypted events, got %d", len(unverified.Events))
+	}
+	if signers := MissingKeyChangeSigners(unverified); !reflect.DeepEqual(signers, []string{"5001"}) {
+		t.Errorf("missing signers %v, want [5001]", signers)
+	}
+
+	var asked []string
+	result, err := bot.core.DecryptBatchWithSigners(events, func(userIDs []string) bool {
+		asked = append(asked, userIDs...)
+		if err := bot.core.SetSigningKeys([]chatxdk.SigningKeyEntry{member.signingKey, admin.signingKey}); err != nil {
+			t.Fatalf("SetSigningKeys: %v", err)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatalf("DecryptBatchWithSigners: %v", err)
+	}
+	if !reflect.DeepEqual(asked, []string{"5001"}) {
+		t.Errorf("asked for the keys of %v, want [5001]", asked)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected decrypt errors: %v", result.Errors)
+	}
+	if signers := MissingKeyChangeSigners(result); len(signers) != 0 {
+		t.Errorf("signers still missing: %v", signers)
+	}
+	if len(result.Events) != 2 || MessageText(&result.Events[1].Event) != "hello group" {
+		t.Fatalf("expected the key change and the message, got %+v", result.Events)
+	}
+
+	// With every signer's keys stored there is nothing to fetch.
+	if _, err := bot.core.DecryptBatchWithSigners(events, func(userIDs []string) bool {
+		t.Errorf("asked for the keys of %v", userIDs)
+		return false
+	}); err != nil {
+		t.Fatalf("DecryptBatchWithSigners: %v", err)
 	}
 }

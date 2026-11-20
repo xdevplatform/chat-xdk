@@ -248,6 +248,9 @@ func (c *Chat) ImportKeys(params ImportKeysParams) error {
 }
 
 // ExtractConversationKeys extracts conversation keys from KeyChange events.
+// Signatures are not checked. The bundle's LatestVersion is the batch's
+// highest key version when every event belongs to one conversation, and nil
+// when they belong to more than one: read LatestVersions by conversation id.
 func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle, error) {
 	defer runtime.KeepAlive(c)
 	eventsJSON, err := json.Marshal(events)
@@ -275,6 +278,21 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // under the default reject-unverified policy. A member removal's title and
 // description, re-encrypted under the new key, aren't changes: they land in
 // Errors under either policy.
+//
+// The signing keys must include those of every member who signed a key
+// change in the batch, whether or not that member sent a message in it.
+// Under either policy, a recent key change whose signature does not verify
+// has its key dropped, and every message under that key then lands in
+// Errors. The result's UnverifiedKeyChanges holds each such key change with
+// why it did not verify and, when its signer's key was missing, the SenderID
+// and PublicKeyVersion to fetch: add that user's public keys and decrypt
+// again. Its UndecryptableKeyChanges holds each key change whose key this
+// chat could not decrypt, and its RejectedSigningKeys each signing key left
+// out because its identity binding does not verify.
+//
+// For a batch whose events belong to more than one conversation, read
+// ConversationKeys.KeysByConversation and ConversationKeys.LatestVersions by
+// conversation id: ConversationKeys.LatestVersion is nil for such a batch.
 func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, error) {
 	defer runtime.KeepAlive(c)
 	params.Events = orEmpty(params.Events)

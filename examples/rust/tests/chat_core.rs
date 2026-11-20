@@ -9,8 +9,12 @@ use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput};
-use chatbot_rs::chat_core::{prep_to_request, removal_to_request, ChatCore, ReplyOptions};
+use chat_xdk_core::signatures::ActionSignature;
+use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput, SigningKeyEntry};
+use chatbot_rs::chat_core::{
+    message_text, missing_key_change_signers, prep_to_request, removal_to_request, ChatCore,
+    ReplyOptions,
+};
 use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
@@ -411,4 +415,141 @@ fn media_from_the_fixture_message_opens() {
             b64(format!("media_{name}_plaintext_b64")),
         );
     }
+}
+
+/// A Thrift string field: its id, then the value's length and bytes.
+fn thrift_string(id: u16, value: &str) -> Vec<u8> {
+    let mut field = vec![11];
+    field.extend(id.to_be_bytes());
+    field.extend((value.len() as u32).to_be_bytes());
+    field.extend(value.as_bytes());
+    field
+}
+
+/// `event_b64` as delivered: with the sequence id the server assigns,
+/// prepended as Thrift string field 1.
+fn delivered(event_b64: &str, sequence_id: &str) -> String {
+    let mut event = thrift_string(1, sequence_id);
+    event.extend(B64.decode(event_b64).unwrap());
+    B64.encode(event)
+}
+
+/// A signed action as delivered: the event the server relays for `action`,
+/// an entry of a prepared change's `action_signatures`, from `sender_id` in
+/// `conversation_id`, with the sequence id the server assigns.
+fn delivered_action(
+    action: &ActionSignature,
+    sender_id: &str,
+    conversation_id: &str,
+    sequence_id: &str,
+) -> String {
+    let signed = &action.message_event_signature;
+    let mut event = thrift_string(1, sequence_id);
+    event.extend(thrift_string(2, &action.message_id));
+    event.extend(thrift_string(3, sender_id));
+    event.extend(thrift_string(4, conversation_id));
+    event.extend([12, 0, 7]);
+    event.extend(B64.decode(&action.encoded_message_event_detail).unwrap());
+    event.extend([12, 0, 9]);
+    event.extend(thrift_string(1, &signed.signature));
+    event.extend(thrift_string(2, &signed.public_key_version));
+    event.extend(thrift_string(3, &signed.signature_version));
+    event.extend([0, 0]);
+    B64.encode(event)
+}
+
+/// A core with fresh keys as a user, and the keys others hold for it.
+struct Party {
+    core: ChatCore,
+    user_id: String,
+    signing_key: SigningKeyEntry,
+    public_key: PublicKeyInput,
+}
+
+fn party(user_id: &str) -> Party {
+    let mut core = ChatCore::new();
+    let (payload, private_keys_b64) = core.generate_and_register().expect("generate_and_register");
+    core.load_keys(&private_keys_b64, "1").expect("load_keys");
+    core.set_identity(user_id).expect("set_identity");
+    let registration = payload.public_key;
+    Party {
+        core,
+        user_id: user_id.to_string(),
+        signing_key: SigningKeyEntry::new(
+            user_id,
+            "1",
+            registration.signing_public_key.as_str(),
+            registration.public_key.as_str(),
+            registration.identity_public_key_signature.as_str(),
+        ),
+        public_key: PublicKeyInput::new(user_id, registration.public_key.as_str(), "1"),
+    }
+}
+
+#[test]
+fn decrypt_batch_with_signers_gets_the_keys_of_the_member_who_made_a_key_change() {
+    // An admin rotates a group's key and a member sends a message under it.
+    // The bot holds the member's signing keys: the member is the only sender
+    // on the page.
+    let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
+    let members = [
+        admin.public_key.clone(),
+        member.public_key.clone(),
+        bot.public_key.clone(),
+    ];
+    let prepared = admin
+        .core
+        .prepare_conversation_key_change(&members, Some("g900"))
+        .expect("prepare_conversation_key_change");
+    let key = prepared
+        .conversation_key
+        .as_ref()
+        .expect("conversation key");
+    let key_change = delivered_action(
+        &prepared.action_signatures[0],
+        &admin.user_id,
+        "g900",
+        "2100000000000000000",
+    );
+    let options =
+        ReplyOptions::default().with_conversation_key(key, &prepared.conversation_key_version);
+    let body = member
+        .core
+        .encrypt_reply("g900", "hello group", options)
+        .expect("encrypt_reply");
+    let message = delivered(&body.event_b64, "2100000000000000001");
+    let events = [key_change.as_str(), message.as_str()];
+
+    // Without the admin's keys the key change does not verify: its key is
+    // dropped and the message does not decrypt.
+    let unverified = bot
+        .core
+        .decrypt_batch(&events, std::slice::from_ref(&member.signing_key));
+    assert!(unverified.events.is_empty());
+    assert_eq!(missing_key_change_signers(&unverified), ["5001"]);
+
+    let mut signing_keys = vec![member.signing_key.clone()];
+    let mut asked: Vec<String> = Vec::new();
+    let result = bot
+        .core
+        .decrypt_batch_with_signers(&events, &mut signing_keys, |user_ids| {
+            asked.extend(user_ids.iter().cloned());
+            vec![admin.signing_key.clone()]
+        });
+    assert_eq!(asked, ["5001"]);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert!(missing_key_change_signers(&result).is_empty());
+    let texts: Vec<Option<&str>> = result
+        .events
+        .iter()
+        .map(|decrypted| message_text(&decrypted.event))
+        .collect();
+    assert_eq!(texts, [None, Some("hello group")]);
+    assert_eq!(signing_keys.len(), 2);
+
+    // With every signer's keys there is nothing to fetch.
+    bot.core
+        .decrypt_batch_with_signers(&events, &mut signing_keys, |user_ids| {
+            panic!("asked for the keys of {user_ids:?}")
+        });
 }

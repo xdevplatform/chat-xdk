@@ -124,11 +124,34 @@ class PublicKeyInput(TypedDict):
     public_key_version: str
 
 class ConversationKeyResult(TypedDict):
-    """Conversation keys by version, and the version to encrypt with: the
-    newest key change whose signature verified, or ``None``."""
+    """The conversation keys a batch's key changes carry, and the key version
+    to encrypt with.
+
+    ``keys_by_conversation`` and ``latest_versions`` are keyed by
+    conversation id, in the form events carry: a group's ``g…`` id, and a
+    one-to-one's two user ids ordered numerically and colon-separated.
+    ``keys`` and ``latest_version`` hold the same without the conversation
+    id, for a batch whose events all belong to one conversation.
+
+    ``keys`` maps key version to key over every conversation of the batch; a
+    version that key changes of more than one conversation carry is left out
+    of it, because a lookup by version alone cannot say which conversation's
+    key it wants. ``keys_by_conversation`` holds each key under the
+    conversation of the key change that carries it.
+
+    ``latest_versions`` maps each conversation to the version to encrypt
+    with there: from ``decrypt_events``, the newest version whose key change
+    verified, with no entry for a conversation without one; from
+    ``extract_conversation_keys``, which checks no signature, the
+    conversation's highest version in the batch. ``latest_version`` is that
+    version when every event of the batch belongs to one conversation,
+    ``None`` when that conversation has none, and ``None`` for a batch whose
+    events belong to more than one conversation."""
 
     keys: dict[str, bytes]
+    keys_by_conversation: dict[str, dict[str, bytes]]
     latest_version: Optional[str]
+    latest_versions: dict[str, str]
 
 class DecryptedEvent(TypedDict, total=False):
     """One event of a ``decrypt_events`` batch: the decrypted ``event`` and,
@@ -137,15 +160,85 @@ class DecryptedEvent(TypedDict, total=False):
     event: dict[str, Any]
     original_b64: str
 
+class UnverifiedKeyChange(TypedDict):
+    """A key change in a ``decrypt_events`` batch whose key this identity
+    decrypted but whose signature did not verify.
+
+    ``reason`` is ``"MissingSigningKey"`` when none of the signing keys the
+    call verified with is the sender's at the key version the signature names
+    (pass the public keys of ``sender_id`` as signing keys and decrypt
+    again), ``"RejectedSigningKey"`` when that key was among the signing
+    keys but its identity binding does not verify (it is in
+    ``rejected_signing_keys``, and fetching the same entry again changes
+    nothing), ``"InvalidSignature"`` when the signature does not verify
+    against the sender's signing key, and ``"Unverifiable"`` when the key
+    change carries no signature or one this SDK cannot check.
+    ``key_dropped`` says whether its key was left out of
+    ``conversation_keys``, so the messages of its conversation under that
+    key version did not decrypt; a key that was kept decrypts messages but
+    never becomes the version to encrypt with.
+    """
+
+    reason: Literal[
+        "MissingSigningKey", "RejectedSigningKey", "InvalidSignature", "Unverifiable"
+    ]
+    key_dropped: bool
+    conversation_id: Optional[str]
+    conversation_key_version: str
+    sender_id: Optional[str]
+    public_key_version: Optional[str]
+
+class UndecryptableKeyChange(TypedDict):
+    """A key change in a ``decrypt_events`` batch whose conversation key this
+    identity could not decrypt.
+
+    ``reason`` is ``"Locked"`` when no identity key is loaded,
+    ``"NotARecipient"`` when the key change holds no key for this chat's
+    user (the user ``set_identity`` names; without a session identity, it
+    holds no key at all), ``"OtherKeyVersion"`` when it holds keys for that
+    user but none at this chat's key version (check the key version given to
+    ``set_identity`` or ``import_keys``), and ``"DecryptionFailed"`` when a
+    key it holds for this chat's key version does not decrypt under the
+    loaded identity key.
+    """
+
+    reason: Literal["Locked", "NotARecipient", "OtherKeyVersion", "DecryptionFailed"]
+    conversation_id: Optional[str]
+    conversation_key_version: str
+    sender_id: Optional[str]
+
+class RejectedSigningKey(TypedDict):
+    """A signing key a ``decrypt_events`` call left out of verification
+    because its identity binding does not verify:
+    ``identity_public_key_signature`` is not the signing key's signature
+    over ``identity_public_key``."""
+
+    user_id: str
+    public_key_version: str
+
 class DecryptEventsResult(TypedDict):
-    """What ``decrypt_events`` returns. ``errors`` maps the index of each
-    event left out of ``events``, as a string, to its error: one that
-    failed, or one decrypt drops, such as a member removal's title or
-    description re-encrypted under the new key."""
+    """What ``decrypt_events`` returns.
+
+    ``errors``, ``unverified_key_changes`` and ``undecryptable_key_changes``
+    are keyed by an event's index in the batch, as a string, and
+    ``rejected_signing_keys`` by a signing key's index, as a string. Each is
+    empty when it has nothing to report.
+
+    ``errors`` holds the error of each event left out of ``events``: one
+    that failed, or one decrypt drops, such as a member removal's title or
+    description re-encrypted under the new key. ``unverified_key_changes``
+    holds each key change whose signature did not verify,
+    ``undecryptable_key_changes`` each key change whose conversation key
+    this identity could not decrypt, and ``rejected_signing_keys`` each of
+    the signing keys the call verified with that it left out because its
+    identity binding does not verify."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult
     errors: dict[str, str]
+    unverified_key_changes: dict[str, UnverifiedKeyChange]
+    undecryptable_key_changes: dict[str, UndecryptableKeyChange]
+    rejected_signing_keys: dict[str, RejectedSigningKey]
 
 class MessageEventSignature(TypedDict):
     """The signature of an action, as requests carry it."""

@@ -84,9 +84,24 @@ chat.set_signing_keys([
 # come from the store; the verified conversation keys populate the cache.
 result = chat.decrypt_events(DecryptEventsParams(raw_events))
 
-for dm in result["messages"]:
+for dm in result["events"]:
     if dm["event"]["type"] == "Message":
         print(dm["event"]["sender_id"], dm["event"]["content"]["text"])
+
+# A key change verifies with the signing keys of the member who made it. One
+# that did not verify is here, by its index in the batch; when its key was
+# dropped, the messages under it are in result["errors"]. For
+# "MissingSigningKey", add the public keys of change["sender_id"]
+# (GET /2/users/{id}/public_keys) and decrypt again.
+for index, change in result["unverified_key_changes"].items():
+    print(index, change["reason"], change["sender_id"], change["key_dropped"])
+# Key changes whose key this chat could not decrypt, and signing keys left
+# out because their identity binding does not verify, are reported the same
+# way: result["undecryptable_key_changes"], result["rejected_signing_keys"].
+
+# The version to encrypt with: for a batch of one conversation,
+# result["conversation_keys"]["latest_version"]; for any batch,
+# result["conversation_keys"]["latest_versions"][conversation_id].
 
 # Individual events after the initial load: the empty key map resolves from
 # the cache and the unset signing keys from the store (pass either
