@@ -198,16 +198,23 @@ impl Chat {
         self.inner.set_identity(params)
     }
     /// Enable or disable the conversation-key cache (off by default). While
-    /// enabled, `decrypt_events` caches each conversation's verified latest
-    /// key and the encrypt methods resolve an omitted key/version pair from it.
+    /// enabled, the decrypt calls cache the key of each key change that
+    /// verifies, the prepare calls cache the keys they make, and a call that
+    /// omits its conversation key reads it from the cache; see
+    /// [`crate::ChatCore::set_cache_keys`].
     pub fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
     }
     /// Store signing keys to use when a decrypt call omits its `signing_keys`
-    /// argument. Only this call populates the store; each call replaces the
-    /// previous set.
+    /// argument. Each call replaces the previous set; see
+    /// [`Self::add_signing_keys`] to keep it.
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.set_signing_keys(entries);
+    }
+    /// Add signing keys to the stored set, keeping the keys it holds: an
+    /// entry replaces the stored entry of the same user and key version.
+    pub fn add_signing_keys(&self, entries: &[SigningKeyEntry]) {
+        self.inner.add_signing_keys(entries);
     }
     /// The URL of this chat's feature switches; see
     /// [`crate::ChatCore::feature_switches_url`].

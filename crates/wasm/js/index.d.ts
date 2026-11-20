@@ -797,8 +797,12 @@ export interface GroupAvatarChangeParams {
   conversationId: string;
   /** The media URL of the group's new avatar image, signed and sent as is. */
   newAvatarUrl: string;
-  /** Version of the conversation key the avatar image is encrypted under. */
-  conversationKeyVersion: string;
+  /**
+   * Version of the conversation key the avatar image is encrypted under.
+   * Omitted, null or empty, it is the version of the conversation's newest
+   * key in the opt-in key cache (setCacheKeys).
+   */
+  conversationKeyVersion?: string | null;
   /** User ID of the sender; resolves from the session identity when omitted. */
   senderId?: string | null;
   /** Version of the signing key; resolves from the session identity when omitted. */
@@ -1001,7 +1005,10 @@ export interface DecryptEventParams {
    * the keys from the opt-in key cache (setCacheKeys).
    */
   conversationKeys?: ConversationKeyMap | null;
-  /** Signing keys to verify the event with; the keys stored via setSigningKeys are used when omitted or empty. */
+  /**
+   * Signing keys to verify the event with; the keys stored via
+   * setSigningKeys and addSigningKeys are used when omitted or empty.
+   */
   signingKeys?: SigningKeyEntry[] | null;
 }
 
@@ -1016,10 +1023,10 @@ export interface DecryptEventsParams {
   events: string[];
   /**
    * Signing keys for all participants, the members who signed the batch's key
-   * changes included; the keys stored via setSigningKeys are used when
-   * omitted or empty. A key change whose signature does not verify is in the
-   * result's `unverifiedKeyChanges`, and a signing key whose identity binding
-   * does not verify in its `rejectedSigningKeys`.
+   * changes included; the keys stored via setSigningKeys and addSigningKeys
+   * are used when omitted or empty. A key change whose signature does not
+   * verify is in the result's `unverifiedKeyChanges`, and a signing key whose
+   * identity binding does not verify in its `rejectedSigningKeys`.
    */
   signingKeys?: SigningKeyEntry[] | null;
 }
@@ -1071,8 +1078,13 @@ export interface DecryptFileParams {
   encrypted: Uint8Array;
   /** The base64 event of the message that carries the file, as passed to decryptEvent. */
   eventB64: string;
-  /** The conversation's key map, as passed to decryptEvent; it must hold the key for the message's version. */
-  conversationKeys: ConversationKeyMap;
+  /**
+   * The conversation's key map, as passed to decryptEvent; a map that is
+   * passed must hold the key for the message's version. Omit it, or pass
+   * null or `{}`, to take the conversation's keys from the opt-in key cache
+   * (setCacheKeys).
+   */
+  conversationKeys?: ConversationKeyMap | null;
   /**
    * The file's media hash key from the decrypted message: a media
    * attachment, a link card's banner or favicon, or media quoted in its
@@ -1088,8 +1100,13 @@ export interface DecryptFileParams {
 export interface FileDecryptorParams {
   /** The base64 event of the message that carries the file, as passed to decryptEvent. */
   eventB64: string;
-  /** The conversation's key map, as passed to decryptEvent; it must hold the key for the message's version. */
-  conversationKeys: ConversationKeyMap;
+  /**
+   * The conversation's key map, as passed to decryptEvent; a map that is
+   * passed must hold the key for the message's version. Omit it, or pass
+   * null or `{}`, to take the conversation's keys from the opt-in key cache
+   * (setCacheKeys).
+   */
+  conversationKeys?: ConversationKeyMap | null;
   /**
    * The file's media hash key from the decrypted message: a media
    * attachment, a link card's banner or favicon, or media quoted in its
@@ -1475,20 +1492,37 @@ interface ChatCrypto {
   /**
    * Enable or disable the conversation-key cache (off by default).
    *
-   * While enabled, decryptEvents caches, per conversation, the key whose key
-   * change carried a valid signature at the highest version seen, and the
-   * encrypt methods resolve an omitted `conversationKey` /
-   * `conversationKeyVersion` pair from it. Disabling clears the cache.
+   * While enabled, the cache keeps, per conversation, the key of every key
+   * change whose signature verified in decryptEvents or decryptEvent, and
+   * the key of every key change this chat prepared
+   * (prepareConversationKeyChange, prepareGroupCreate,
+   * prepareGroupMembersChange or prepareGroupMembersRemove). A call that
+   * omits its conversation key reads it from there: the encrypt methods and
+   * the title, description and avatar changes use the conversation's newest
+   * key, and decryptEvent, decryptFile and fileDecryptor the key at the
+   * version the event names. Disabling clears the cache.
+   *
+   * A prepared key is cached when the prepare call returns, before its
+   * request is sent. If the X API rejects the request, no one else holds
+   * that key: prepare the change again, or pass the key to encrypt with
+   * explicitly, until a newer key change verifies.
    */
   setCacheKeys(enabled: boolean): void;
 
   /**
    * Store signing keys to use when a decrypt call omits its `signingKeys`
-   * argument. Only this explicit call populates the store — a key carried
-   * inside an event is never trusted for verification. Each call replaces
-   * the previous set.
+   * argument. Only this call and addSigningKeys populate the store — a key
+   * carried inside an event is never trusted for verification. Each call
+   * replaces the previous set; addSigningKeys keeps it.
    */
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+
+  /**
+   * Add signing keys to the store setSigningKeys sets, keeping the keys it
+   * holds: an entry replaces the stored entry of the same `userId` and
+   * `publicKeyVersion`, and any other is added.
+   */
+  addSigningKeys(signingKeys: SigningKeyEntry[]): void;
 
   /** Get current public keys. */
   getPublicKeys(): PublicKeys;
@@ -1525,11 +1559,11 @@ interface ChatCrypto {
    * 3. Decrypts the message using the appropriate conversation key
    *
    * Under the default reject-unverified policy, no signing keys (passed or
-   * stored via `setSigningKeys`) makes every signed event land in `errors`;
-   * only after `setRejectUnverified(false)` are such events returned with
-   * `verified: false`. A member removal's title and description,
-   * re-encrypted under the new key, aren't changes: they land in `errors`
-   * under either policy.
+   * stored via `setSigningKeys` or `addSigningKeys`) makes every signed
+   * event land in `errors`; only after `setRejectUnverified(false)` are such
+   * events returned with `verified: false`. A member removal's title and
+   * description, re-encrypted under the new key, aren't changes: they land
+   * in `errors` under either policy.
    *
    * The signing keys must include those of every member who signed a key
    * change in the batch, whether or not that member sent a message in it.
@@ -1553,11 +1587,15 @@ interface ChatCrypto {
    * Decrypt a raw webhook event payload.
    *
    * Under the default reject-unverified policy, no signing keys (passed or
-   * stored via `setSigningKeys`) makes every signed event throw; only after
-   * `setRejectUnverified(false)` are such events returned with
-   * `verified: false`. A member removal's title and description,
-   * re-encrypted under the new key, aren't changes: they throw a
-   * `ChatXdkError` of kind `'invalidInput'` under either policy.
+   * stored via `setSigningKeys` or `addSigningKeys`) makes every signed
+   * event throw; only after `setRejectUnverified(false)` are such events
+   * returned with `verified: false`. A member removal's title and
+   * description, re-encrypted under the new key, aren't changes: they throw
+   * a `ChatXdkError` of kind `'invalidInput'` under either policy.
+   *
+   * A key change that verifies is recorded as decryptEvents records it: its
+   * version is the conversation's newest verified one unless a newer is
+   * known, and while the key cache is on (setCacheKeys) its key is cached.
    */
   decryptEvent(params: DecryptEventParams): Event;
 
@@ -1630,6 +1668,10 @@ interface ChatCrypto {
   /**
    * Decrypt an encrypted file, as downloaded.
    *
+   * With `params.conversationKeys` omitted, null or `{}`, the conversation's
+   * keys come from the opt-in key cache (setCacheKeys); a key map that is
+   * passed is the only source.
+   *
    * Throws, saying what to pass instead, when the key version is missing,
    * the event is not an encrypted message with this file, or `encrypted` is
    * not the file's complete encrypted bytes.
@@ -1639,7 +1681,8 @@ interface ChatCrypto {
   /**
    * Create an incremental decryptor for an encrypted file too large to hold
    * in memory. Takes the params of `decryptFile` apart from the encrypted
-   * bytes, which are fed to the decryptor.
+   * bytes, which are fed to the decryptor, and reads the key cache as
+   * `decryptFile` does when `params.conversationKeys` is omitted.
    */
   fileDecryptor(params: FileDecryptorParams): FileDecryptor;
 
@@ -1686,6 +1729,10 @@ interface ChatCrypto {
    * derived from the two participants); pass the existing id for a group key
    * rotation.
    *
+   * While the key cache is on (setCacheKeys), the call caches the new key as
+   * the conversation's newest key, as every prepare call that makes a
+   * conversation key does.
+   *
    * @returns PreparedConversationChange ready to POST to the API
    */
   prepareConversationKeyChange(params: ConversationKeyChangeParams): PreparedConversationChange;
@@ -1698,7 +1745,9 @@ interface ChatCrypto {
    * prepareConversationKeyChange.
    *
    * `currentTitle` and `currentDescription` are plaintext: the call encrypts
-   * each under the new conversation key and signs the ciphertext.
+   * each under the new conversation key and signs the ciphertext. While the
+   * key cache is on (setCacheKeys), the call caches the new key as the
+   * conversation's newest key.
    *
    * @returns PreparedConversationChange with two action signatures (the
    * conversation-key change and the member add), and `encryptedTitle` and
@@ -1716,7 +1765,8 @@ interface ChatCrypto {
    *
    * `title` is plaintext: the call encrypts it under the new conversation key
    * and signs the ciphertext. A create sets no avatar; set it afterwards with
-   * prepareGroupAvatarChange.
+   * prepareGroupAvatarChange. While the key cache is on (setCacheKeys), the
+   * call caches the new key as the conversation's newest key.
    *
    * @returns PreparedConversationChange with two action signatures (the
    * conversation-key change and the group create), and `encryptedTitle` for a
@@ -1726,7 +1776,9 @@ interface ChatCrypto {
 
   /**
    * Sign a group member removal and rotate the conversation key for the
-   * members who stay (`publicKeys`).
+   * members who stay (`publicKeys`). While the key cache is on
+   * (setCacheKeys), the call caches the new key as the conversation's newest
+   * key.
    *
    * @returns PreparedConversationChange with the new key and the action
    * signatures: the removal, a title and a description change for each one
@@ -1743,7 +1795,11 @@ interface ChatCrypto {
 
   /**
    * Sign a group avatar change: the avatar image's media URL, as is, and the
-   * version of the key the image is encrypted under.
+   * version of the key the image is encrypted under. With
+   * `params.conversationKeyVersion` omitted, null or empty, the change signs
+   * the version of the conversation's newest key in the opt-in key cache
+   * (setCacheKeys), and throws a `ChatXdkError` of kind `invalidState` when
+   * no key is cached.
    */
   prepareGroupAvatarChange(params: GroupAvatarChangeParams): PreparedAction;
 
@@ -1787,6 +1843,7 @@ declare class Chat implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  addSigningKeys(signingKeys: SigningKeyEntry[]): void;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;
@@ -1872,6 +1929,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   setIdentity(params: SetIdentityParams): void;
   setCacheKeys(enabled: boolean): void;
   setSigningKeys(signingKeys: SigningKeyEntry[]): void;
+  addSigningKeys(signingKeys: SigningKeyEntry[]): void;
   getPublicKeys(): PublicKeys;
   getPublicKeyFingerprint(): string;
   isUnlocked(): boolean;

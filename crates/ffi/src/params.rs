@@ -167,7 +167,8 @@ pub(crate) struct FfiGroupTitleChangeParams {
 pub(crate) struct FfiGroupAvatarChangeParams {
     pub(crate) conversation_id: String,
     pub(crate) new_avatar_url: String,
-    pub(crate) conversation_key_version: String,
+    #[serde(default)]
+    pub(crate) conversation_key_version: Option<String>,
     #[serde(default)]
     pub(crate) sender_id: Option<String>,
     #[serde(default)]
@@ -339,7 +340,9 @@ pub(crate) struct FfiGroupCreateParams {
 }
 
 // The receive and file params carry `conversation_keys` as
-// `{"version": "base64 raw 32-byte key"}` and byte fields as base64.
+// `{"version": "base64 raw 32-byte key"}` and byte fields as base64. The
+// file-decryption params take an absent or null `conversation_keys` as an
+// empty map, which core resolves from the opt-in key cache.
 
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiSetIdentityParams {
@@ -394,7 +397,8 @@ pub(crate) struct FfiFileEncryptorParams {
 pub(crate) struct FfiDecryptFileParams {
     pub(crate) encrypted: String,
     pub(crate) event_b64: String,
-    pub(crate) conversation_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub(crate) conversation_keys: Option<HashMap<String, String>>,
     pub(crate) media_hash_key: String,
 }
 
@@ -414,7 +418,8 @@ pub(crate) struct FfiDecryptFileWithKeyParams {
 #[derive(serde::Deserialize)]
 pub(crate) struct FfiFileParams {
     pub(crate) event_b64: String,
-    pub(crate) conversation_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub(crate) conversation_keys: Option<HashMap<String, String>>,
     pub(crate) media_hash_key: String,
 }
 

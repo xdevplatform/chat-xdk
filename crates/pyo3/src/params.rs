@@ -882,12 +882,14 @@ impl GroupTitleChangeParams {
 /// A group's avatar URL is not encrypted. ``new_avatar_url`` is the media
 /// URL of the avatar image, which the app encrypts under the conversation
 /// key and uploads first; ``conversation_key_version`` is the version of the
-/// key the image is encrypted under.
+/// key the image is encrypted under. Leave it ``None``, or pass ``""``, to
+/// sign the version of the conversation's newest key in the opt-in key
+/// cache.
 #[pyclass(get_all, set_all)]
 pub struct GroupAvatarChangeParams {
     pub(crate) conversation_id: String,
     pub(crate) new_avatar_url: String,
-    pub(crate) conversation_key_version: String,
+    pub(crate) conversation_key_version: Option<String>,
     pub(crate) sender_id: Option<String>,
     pub(crate) signing_key_version: Option<String>,
 }
@@ -895,11 +897,11 @@ pub struct GroupAvatarChangeParams {
 #[pymethods]
 impl GroupAvatarChangeParams {
     #[new]
-    #[pyo3(signature = (conversation_id, new_avatar_url, conversation_key_version, *, sender_id=None, signing_key_version=None))]
+    #[pyo3(signature = (conversation_id, new_avatar_url, conversation_key_version=None, *, sender_id=None, signing_key_version=None))]
     pub(crate) fn new(
         conversation_id: String,
         new_avatar_url: String,
-        conversation_key_version: String,
+        conversation_key_version: Option<String>,
         sender_id: Option<String>,
         signing_key_version: Option<String>,
     ) -> Self {
@@ -918,7 +920,7 @@ impl GroupAvatarChangeParams {
         let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
             self.conversation_id.as_str(),
             self.new_avatar_url.as_str(),
-            self.conversation_key_version.as_str(),
+            self.conversation_key_version.clone().unwrap_or_default(),
         );
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
@@ -1468,7 +1470,7 @@ pub struct DecryptEventParams {
     /// Signing-key dicts ``{"user_id", "public_key_version", "public_key",
     /// "identity_public_key", "identity_public_key_signature"}``, straight
     /// from the X API public keys response. ``None`` or empty uses the keys
-    /// stored via ``Chat.set_signing_keys``.
+    /// stored via ``Chat.set_signing_keys`` and ``Chat.add_signing_keys``.
     pub(crate) signing_keys: Option<Py<PyAny>>,
 }
 
@@ -1491,12 +1493,10 @@ impl DecryptEventParams {
 
 impl DecryptEventParams {
     pub(crate) fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::DecryptEventParams> {
-        let conversation_keys = match &self.conversation_keys {
-            Some(keys) => conversation_keys_field(py, keys)?,
-            None => HashMap::new(),
-        };
-        let mut params =
-            chat_xdk_core::DecryptEventParams::new(self.event_b64.as_str(), conversation_keys);
+        let mut params = chat_xdk_core::DecryptEventParams::new(
+            self.event_b64.as_str(),
+            optional_conversation_keys_field(py, &self.conversation_keys)?,
+        );
         params.signing_keys = signing_keys_field(py, &self.signing_keys)?;
         Ok(params)
     }
@@ -1510,7 +1510,7 @@ pub struct DecryptEventsParams {
     pub(crate) events: Py<PyAny>,
     /// Signing-key dicts for all participants, as in
     /// ``DecryptEventParams.signing_keys``. ``None`` or empty uses the keys
-    /// stored via ``Chat.set_signing_keys``.
+    /// stored via ``Chat.set_signing_keys`` and ``Chat.add_signing_keys``.
     pub(crate) signing_keys: Option<Py<PyAny>>,
 }
 
@@ -1645,29 +1645,32 @@ pub struct DecryptFileParams {
     /// ``decrypt_event``.
     pub(crate) event_b64: String,
     /// The conversation's key map, as passed to ``decrypt_event``. It must
-    /// hold the key for the message's version.
-    pub(crate) conversation_keys: Py<PyAny>,
+    /// hold the key for the message's version. Leave it ``None``, or pass
+    /// ``{}``, to take the conversation's keys from the opt-in key cache.
+    pub(crate) conversation_keys: Option<Py<PyAny>>,
     /// The file's media hash key from the decrypted message: a media
     /// attachment, a link card's banner or favicon, or media quoted in its
-    /// reply preview.
+    /// reply preview. Required; pass it by keyword when the key map is left
+    /// out.
     pub(crate) media_hash_key: String,
 }
 
 #[pymethods]
 impl DecryptFileParams {
     #[new]
+    #[pyo3(signature = (encrypted, event_b64, conversation_keys=None, media_hash_key=None))]
     pub(crate) fn new(
         encrypted: Vec<u8>,
         event_b64: String,
-        conversation_keys: Py<PyAny>,
-        media_hash_key: String,
-    ) -> Self {
-        Self {
+        conversation_keys: Option<Py<PyAny>>,
+        media_hash_key: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
             encrypted,
             event_b64,
             conversation_keys,
-            media_hash_key,
-        }
+            media_hash_key: required(media_hash_key, "media_hash_key")?,
+        })
     }
 }
 
@@ -1676,7 +1679,7 @@ impl DecryptFileParams {
         Ok(chat_xdk_core::DecryptFileParams::new(
             self.encrypted.clone(),
             self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
+            optional_conversation_keys_field(py, &self.conversation_keys)?,
             self.media_hash_key.as_str(),
         ))
     }
@@ -1690,27 +1693,30 @@ pub struct FileDecryptorParams {
     /// ``decrypt_event``.
     pub(crate) event_b64: String,
     /// The conversation's key map, as passed to ``decrypt_event``. It must
-    /// hold the key for the message's version.
-    pub(crate) conversation_keys: Py<PyAny>,
+    /// hold the key for the message's version. Leave it ``None``, or pass
+    /// ``{}``, to take the conversation's keys from the opt-in key cache.
+    pub(crate) conversation_keys: Option<Py<PyAny>>,
     /// The file's media hash key from the decrypted message: a media
     /// attachment, a link card's banner or favicon, or media quoted in its
-    /// reply preview.
+    /// reply preview. Required; pass it by keyword when the key map is left
+    /// out.
     pub(crate) media_hash_key: String,
 }
 
 #[pymethods]
 impl FileDecryptorParams {
     #[new]
+    #[pyo3(signature = (event_b64, conversation_keys=None, media_hash_key=None))]
     pub(crate) fn new(
         event_b64: String,
-        conversation_keys: Py<PyAny>,
-        media_hash_key: String,
-    ) -> Self {
-        Self {
+        conversation_keys: Option<Py<PyAny>>,
+        media_hash_key: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
             event_b64,
             conversation_keys,
-            media_hash_key,
-        }
+            media_hash_key: required(media_hash_key, "media_hash_key")?,
+        })
     }
 }
 
@@ -1718,7 +1724,7 @@ impl FileDecryptorParams {
     pub(crate) fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::FileDecryptorParams> {
         Ok(chat_xdk_core::FileDecryptorParams::new(
             self.event_b64.as_str(),
-            conversation_keys_field(py, &self.conversation_keys)?,
+            optional_conversation_keys_field(py, &self.conversation_keys)?,
             self.media_hash_key.as_str(),
         ))
     }

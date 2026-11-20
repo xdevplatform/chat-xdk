@@ -27,10 +27,10 @@ class KeyChangeSignerTest {
     /** A sequence id before the cut-over, where the key is kept. */
     private static final String UNENFORCED_SEQUENCE = "100";
 
-    private static final String GROUP = "g900";
+    static final String GROUP = "g900";
     private static final String OTHER_GROUP = "g901";
     private static final String THIRD_GROUP = "g902";
-    private static final String KEY_VERSION = "1";
+    static final String KEY_VERSION = "1";
 
     @BeforeAll
     static void keepFeatureFetchesOffline() {
@@ -91,7 +91,7 @@ class KeyChangeSignerTest {
     }
 
     /** A chat with fresh keys as a user, and the keys others hold for it. */
-    private static final class Party implements AutoCloseable {
+    static final class Party implements AutoCloseable {
         final Chat chat = new Chat();
         final String userId;
         final SigningKeyEntry signingKey;
@@ -116,7 +116,7 @@ class KeyChangeSignerTest {
     }
 
     /** The key change a signer makes in a conversation for its members, as delivered, with its key. */
-    private static final class KeyChange {
+    static final class KeyChange {
         final ActionSignature action;
         final String signerId;
         final String conversationId;
@@ -171,7 +171,7 @@ class KeyChangeSignerTest {
     }
 
     /** The message {@code author} sends in {@code conversationId} under the key of {@code change}, as delivered. */
-    private static String sentMessage(Party author, String conversationId, KeyChange change, String text)
+    static String sentMessage(Party author, String conversationId, KeyChange change, String text)
             throws Exception {
         EncryptMessageParams params = new EncryptMessageParams(conversationId, text);
         params.senderId = author.userId;

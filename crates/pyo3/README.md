@@ -79,9 +79,13 @@ chat.set_signing_keys([
         "identity_public_key_signature": "BASE64...",
     },
 ])
+# set_signing_keys replaces the stored keys; add_signing_keys adds to them,
+# such as the keys of a member who joins later.
+chat.add_signing_keys(new_member_signing_keys)
 
 # Initial load — batch decrypt with automatic key extraction. Signing keys
-# come from the store; the verified conversation keys populate the cache.
+# come from the store; the key of every key change that verifies goes into
+# the cache.
 result = chat.decrypt_events(DecryptEventsParams(raw_events))
 
 for dm in result["events"]:
@@ -105,7 +109,7 @@ for index, change in result["unverified_key_changes"].items():
 
 # Individual events after the initial load: the empty key map resolves from
 # the cache and the unset signing keys from the store (pass either
-# explicitly to override).
+# explicitly to override). A key change that verifies here is cached too.
 event = chat.decrypt_event(DecryptEventParams(new_event_b64, {}))
 
 # Sending resolves the identity and conversation key from the session too.
@@ -119,6 +123,34 @@ Every method with a params object takes a params class (`EncryptMessageParams`,
 `DecryptEventParams`, `EncryptFileParams`, …): required fields are
 positional, optional ones are keywords, and every field is a read/write
 attribute, so a params object can be built once and adjusted.
+
+### The key cache
+
+While `set_cache_keys(True)` is on, the cache keeps, per conversation and by
+key version, the key of every key change that verifies in `decrypt_events`
+or `decrypt_event`, and of every key change this chat prepares
+(`prepare_conversation_key_change`, `prepare_group_create`,
+`prepare_group_members_change`, `prepare_group_members_remove`). A call that
+leaves out its conversation key reads it from there: the encrypt methods and
+the group title and description changes use the conversation's newest key,
+the avatar change signs that key's version, and `decrypt_event`,
+`decrypt_file` and `file_decryptor` use the key at the version the event
+names. So the key map of `DecryptFileParams` and `FileDecryptorParams` and
+the key version of `GroupAvatarChangeParams` can be left out; a value that is
+passed is used as is.
+
+```python
+# media_hash_key goes by keyword when the key map before it is left out.
+photo = chat.decrypt_file(
+    DecryptFileParams(downloaded, file_event_b64, media_hash_key=file_hash_key)
+)
+avatar = chat.prepare_group_avatar_change(GroupAvatarChangeParams(conversation_id, avatar_url))
+```
+
+A prepared key is cached when the prepare call returns, before its request
+is sent. If the X API rejects the request, no one else holds that key:
+prepare the change again, or pass the key to encrypt with explicitly, until
+a newer key change verifies.
 
 ## API
 

@@ -273,6 +273,19 @@ fn conversation_keys_field(
     .map_err(to_py_err)
 }
 
+/// [`conversation_keys_field`] for a key map that may be `None`. `None` is
+/// the empty map, with which a call takes the conversation's keys from the
+/// key cache.
+fn optional_conversation_keys_field(
+    py: Python<'_>,
+    value: &Option<Py<PyAny>>,
+) -> PyResult<HashMap<String, XChatConversationKey>> {
+    match value {
+        Some(keys) => conversation_keys_field(py, keys),
+        None => Ok(HashMap::new()),
+    }
+}
+
 /// Convert a list of ``{user_id, identity_public_key, public_key_version}``
 /// dicts through the core type.
 fn public_keys_field(
@@ -283,8 +296,9 @@ fn public_keys_field(
 }
 
 /// A required argument that follows an optional positional one, as
-/// ``emoji`` follows ``target_event``: missing, it raises the ``TypeError``
-/// Python raises for a missing argument.
+/// ``emoji`` follows ``target_event`` and ``media_hash_key`` follows
+/// ``conversation_keys``: missing, it raises the ``TypeError`` Python raises
+/// for a missing argument.
 fn required<T>(value: Option<T>, name: &str) -> PyResult<T> {
     value.ok_or_else(|| {
         pyo3::exceptions::PyTypeError::new_err(format!("missing required argument: '{name}'"))

@@ -143,10 +143,19 @@ impl Chat {
 
     /// Enable or disable the conversation-key cache (off by default).
     ///
-    /// While enabled, ``decrypt_events`` caches each conversation's latest
-    /// signature-verified key, and the encrypt methods resolve a
-    /// ``conversation_key``/``conversation_key_version`` pair left ``None``
-    /// from it. Disabling clears the cache.
+    /// While enabled, the cache keeps, per conversation, the key of every
+    /// key change whose signature verified in ``decrypt_events`` or
+    /// ``decrypt_event``, and the key of every key change this chat prepared
+    /// (a conversation-key change, a group create, a member add or a member
+    /// removal). A call that leaves its conversation key ``None`` reads it
+    /// from there: the encrypt methods and the title, description and avatar
+    /// changes use the conversation's newest key, and the decrypt methods
+    /// the key at the version the event names. Disabling clears the cache.
+    ///
+    /// A prepared key is cached when the prepare call returns, before its
+    /// request is sent. If the X API rejects the request, no one else holds
+    /// that key: prepare the change again, or pass the key to encrypt with
+    /// explicitly, until a newer key change verifies.
     pub(crate) fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
     }
@@ -156,11 +165,25 @@ impl Chat {
     ///
     /// Args:
     ///     signing_keys: Same list of dicts ``DecryptEventsParams`` takes.
-    ///         Each call replaces the previous set; only this call populates
-    ///         the store — keys carried inside events are never trusted.
+    ///         Each call replaces the previous set; ``add_signing_keys``
+    ///         keeps it. Only these two calls populate the store — keys
+    ///         carried inside events are never trusted.
     pub(crate) fn set_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
         let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
         self.inner.set_signing_keys(&entries);
+        Ok(())
+    }
+
+    /// Add signing keys to the set ``set_signing_keys`` stores, keeping the
+    /// keys it holds.
+    ///
+    /// Args:
+    ///     signing_keys: Same list of dicts ``set_signing_keys`` takes. An
+    ///         entry replaces the stored entry of the same ``user_id`` and
+    ///         ``public_key_version``, and any other is added.
+    pub(crate) fn add_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
+        let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
+        self.inner.add_signing_keys(&entries);
         Ok(())
     }
 
@@ -407,6 +430,11 @@ impl Chat {
 
     /// Decrypt a raw webhook event payload.
     ///
+    /// A key change that verifies is recorded as ``decrypt_events`` records
+    /// it: its version is the conversation's newest verified one unless a
+    /// newer is known, and while the key cache is on (``set_cache_keys``)
+    /// its key is cached.
+    ///
     /// Args:
     ///     params: A ``DecryptEventParams``: the event, the conversation's key
     ///         map, and the signing keys. The SDK picks the sender's key for
@@ -617,7 +645,9 @@ impl Chat {
     /// Decrypt an encrypted file, as downloaded.
     ///
     /// Args:
-    ///     params: A ``DecryptFileParams``.
+    ///     params: A ``DecryptFileParams``. With its ``conversation_keys``
+    ///         left ``None`` or empty, the keys of the message's
+    ///         conversation come from the key cache (``set_cache_keys``).
     ///
     /// Returns:
     ///     Decrypted bytes.
@@ -642,7 +672,8 @@ impl Chat {
 
     /// Create an incremental decryptor for an encrypted file too large to
     /// hold in memory. Takes the params of ``decrypt_file`` apart from the
-    /// encrypted bytes, which are fed to the decryptor.
+    /// encrypted bytes, which are fed to the decryptor; a key map left
+    /// ``None`` or empty reads the key cache as it does there.
     pub(crate) fn file_decryptor(
         &self,
         py: Python<'_>,
@@ -742,6 +773,10 @@ impl Chat {
     /// one-to-one (it is derived from the two participants); pass the
     /// existing id for a group key rotation.
     ///
+    /// While the key cache is on (``set_cache_keys``) the call caches the
+    /// new key as the conversation's newest key, as every prepare call that
+    /// makes a conversation key does.
+    ///
     /// Args:
     ///     params: A ``ConversationKeyChangeParams``.
     ///
@@ -764,7 +799,9 @@ impl Chat {
     ///
     /// Use this when adding members to an existing group. Creating the group
     /// is ``prepare_group_create``; a key rotation without a roster change is
-    /// ``prepare_conversation_key_change``.
+    /// ``prepare_conversation_key_change``. While the key cache is on
+    /// (``set_cache_keys``) the call caches the new key as the conversation's
+    /// newest key.
     ///
     /// Args:
     ///     params: A ``GroupMembersChangeParams``.
@@ -795,7 +832,9 @@ impl Chat {
     /// Use this once, when creating a group (``conversation_id`` is the
     /// g-prefixed id minted by the initialize endpoint). Later key rotations
     /// use ``prepare_conversation_key_change``; roster additions use
-    /// ``prepare_group_members_change``.
+    /// ``prepare_group_members_change``. While the key cache is on
+    /// (``set_cache_keys``) the call caches the new key as the conversation's
+    /// newest key.
     ///
     /// Args:
     ///     params: A ``GroupCreateParams``.
@@ -881,7 +920,9 @@ impl Chat {
     /// The result carries the new key, the remaining members' participant
     /// keys, and the action signatures: the removal (which names the new key
     /// version), a title and a description change for each one the params
-    /// set, re-encrypted under the new key, and the key change.
+    /// set, re-encrypted under the new key, and the key change. While the
+    /// key cache is on (``set_cache_keys``) the call caches the new key as
+    /// the conversation's newest key.
     pub(crate) fn prepare_group_members_remove(
         &self,
         py: Python<'_>,
@@ -929,7 +970,11 @@ impl Chat {
     }
 
     /// Sign a group avatar change: the avatar image's media URL, as is, and
-    /// the version of the key the image is encrypted under.
+    /// the version of the key the image is encrypted under. With
+    /// ``conversation_key_version`` left ``None`` or empty, that is the
+    /// version of the conversation's newest key in the key cache
+    /// (``set_cache_keys``), the key the encrypt methods resolve; with no
+    /// key cached the call raises ``InvalidStateError``.
     ///
     /// Returns a dict with ``action_signatures``, one entry.
     pub(crate) fn prepare_group_avatar_change(

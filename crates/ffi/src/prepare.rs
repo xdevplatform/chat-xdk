@@ -322,10 +322,12 @@ pub extern "C" fn chat_xdk_prepare_group_title_change(
 /// Sign a group avatar change.
 ///
 /// `params_json` — `conversation_id`, `new_avatar_url` (the media URL of
-/// the avatar image, signed and sent as is), `conversation_key_version`
-/// (the version of the key the image is encrypted under), plus optional
-/// `sender_id` / `signing_key_version` (unset resolves from the session
-/// identity).
+/// the avatar image, signed and sent as is), plus optional
+/// `conversation_key_version` (the version of the key the image is
+/// encrypted under; absent, null or empty signs the version of the
+/// conversation's newest key in the opt-in key cache, and fails with an
+/// `invalid_state` error when none is cached) and `sender_id` /
+/// `signing_key_version` (unset resolves from the session identity).
 ///
 /// Returns JSON `PreparedAction`: `action_signatures`, one entry.
 #[no_mangle]
@@ -342,10 +344,11 @@ pub extern "C" fn chat_xdk_prepare_group_avatar_change(
             Ok(p) => p,
             Err(e) => return e,
         };
+        // Core reads an empty version as "sign the newest cached key's".
         let mut params = GroupAvatarChangeParams::new(
             p.conversation_id,
             p.new_avatar_url,
-            p.conversation_key_version,
+            p.conversation_key_version.unwrap_or_default(),
         );
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;

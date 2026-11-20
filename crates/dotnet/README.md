@@ -45,9 +45,14 @@ await chat.UnlockAsync(pinBytes); // the PIN's UTF-8 bytes; zero them afterwards
 
 // Set the session once: your user id + registered signing-key version,
 // the opt-in conversation-key cache, and the participants' signing keys.
+// The cache keeps the key of every key change that verifies in DecryptEvents
+// or DecryptEvent, and of every key change this chat prepares.
 chat.SetIdentity(new SetIdentityParams(myUserId, registeredKeyVersion));
 chat.SetCacheKeys(true);
 chat.SetSigningKeys(signingKeys);
+// SetSigningKeys replaces the stored keys; AddSigningKeys adds to them,
+// such as the keys of a member who joins later.
+chat.AddSigningKeys(newMemberSigningKeys);
 
 // Batch load — signing keys come from the store; the verified conversation
 // keys populate the cache.
@@ -86,6 +91,14 @@ var reaction = chat.EncryptAddReaction(new EncryptReactionParams(eventB64, "👍
 
 var plaintext = chat.Decrypt(encryptedGroupNameB64, convKeyBytes);
 ```
+
+With the key cache on, calls that omit their conversation key read it from
+the cache: the encrypt methods and the group title, description and avatar
+changes use the conversation's newest key, and `DecryptEvent`, `DecryptFile`
+and `FileDecryptor` the key at the version the event names. So
+`DecryptFileParams` and `FileDecryptorParams` can be created without a key
+map, and `GroupAvatarChangeParams` without a key version. A value that is
+passed is used as is.
 
 Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatXdkUtilities`**.
 

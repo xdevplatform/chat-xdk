@@ -648,13 +648,14 @@ type GroupTitleChangeParams struct {
 // A group's avatar URL is not encrypted. NewAvatarURL is the media URL of the
 // avatar image, which the app encrypts under the conversation key and uploads
 // first; ConversationKeyVersion is the version of the key the image is
-// encrypted under.
+// encrypted under. Leave it empty to sign the version of the conversation's
+// newest key in the opt-in key cache (SetCacheKeys).
 type GroupAvatarChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
 	NewAvatarURL           string `json:"new_avatar_url"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	SenderID               string `json:"sender_id,omitempty"`           // empty = session identity
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"` // empty = session identity
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = newest cached key's version
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
 }
 
 // GroupDescriptionChangeParams are the parameters for PrepareGroupDescriptionChange.
@@ -790,7 +791,7 @@ type DecryptEventParams struct {
 	// (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// SigningKeys verify the event; nil or empty uses the keys stored via
-	// SetSigningKeys.
+	// SetSigningKeys and AddSigningKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 
@@ -800,7 +801,7 @@ type DecryptEventsParams struct {
 	// the conversation keys the messages among them are decrypted with.
 	Events []string `json:"events"`
 	// SigningKeys are the signing keys of all participants; nil or empty uses
-	// the keys stored via SetSigningKeys.
+	// the keys stored via SetSigningKeys and AddSigningKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 
@@ -840,7 +841,9 @@ type DecryptFileParams struct {
 	// passed to DecryptEvent.
 	EventB64 string `json:"event_b64"`
 	// ConversationKeys is the conversation's key map, as passed to
-	// DecryptEvent; it must hold the key for the message's version.
+	// DecryptEvent; it must hold the key for the message's version. Leave it
+	// nil (or empty) to take the conversation's keys from the opt-in key
+	// cache (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// MediaHashKey is the file's media hash key from the decrypted message: a
 	// media attachment, a link card's banner or favicon, or media quoted in
@@ -852,7 +855,7 @@ type DecryptFileParams struct {
 // DecryptFile apart from the encrypted file, which is fed to the decryptor.
 type FileDecryptorParams struct {
 	EventB64         string            `json:"event_b64"`
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	ConversationKeys map[string][]byte `json:"conversation_keys"` // nil or empty = key cache
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 

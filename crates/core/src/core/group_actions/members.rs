@@ -105,6 +105,7 @@ impl ChatCore {
             ctx.send_version,
         )?);
 
+        self.cache_prepared_key(&ctx.conversation_id, conversation_key_version, &ckey);
         Ok(PreparedConversationChange {
             conversation_id: ctx.conversation_id,
             conversation_key: Some(ckey),

@@ -337,6 +337,7 @@ mod events;
 mod file_encryption;
 mod group_events;
 mod identity;
+mod key_cache;
 mod key_change_signers;
 mod keys;
 mod messages;

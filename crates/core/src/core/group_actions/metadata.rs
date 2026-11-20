@@ -56,6 +56,10 @@ impl ChatCore {
     /// which the app encrypts under the conversation key and uploads to the
     /// group's media first. The signature covers the version of the key the
     /// image is encrypted under and the URL as is.
+    ///
+    /// An empty `conversation_key_version` is the version of the
+    /// conversation's newest key in the key cache, the key the encrypt
+    /// methods resolve.
     pub fn prepare_group_avatar_change(
         &self,
         params: &GroupAvatarChangeParams,
@@ -66,13 +70,28 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
         )?;
         let avatar_url = require_text("new_avatar_url", &params.new_avatar_url)?;
-        let key_version = params.conversation_key_version.as_str();
-        crate::pipeline::validate_key_version("conversation_key_version", key_version)?;
+        let key_version = match params.conversation_key_version.as_str() {
+            "" => self
+                .newest_cached_key(&ctx.conversation_id)
+                .ok_or_else(|| {
+                    SdkError::InvalidState(format!(
+                        "conversation_key_version is not set and no conversation key is \
+                         cached for '{}': pass the version of the key the avatar image is \
+                         encrypted under, or enable set_cache_keys(true) and decrypt the \
+                         conversation's key-change events first",
+                        ctx.conversation_id
+                    ))
+                })?
+                .version
+                .to_string(),
+            version => version.to_string(),
+        };
+        crate::pipeline::validate_key_version("conversation_key_version", &key_version)?;
         let signature = sign_change(
             &ctx,
             group_detail(GroupChange::GroupAvatarChange(GroupAvatarUrlChange {
                 custom_avatar_url: Some(avatar_url.to_string()),
-                conversation_key_version: Some(key_version.to_string()),
+                conversation_key_version: Some(key_version),
             })),
         )?;
         Ok(one_action(signature))

@@ -31,7 +31,7 @@ use crate::types::*;
 use crate::protocol::safe_reader::BoundedProtocol;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use p256::pkcs8::EncodePublicKey;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use thrift::protocol::{TBinaryInputProtocol, TSerializable};
 
@@ -70,20 +70,21 @@ pub struct ChatCore {
     owner_user_id: std::sync::RwLock<Option<String>>,
     /// Whether the conversation-key cache is enabled (off by default).
     cache_keys: std::sync::atomic::AtomicBool,
-    /// Per-conversation cache of the conversation key at the verified
-    /// high-water version. Keys enter only through the signature-verified
-    /// freshness pass, never from adopted-but-unverified key changes.
-    conversation_key_cache: std::sync::RwLock<HashMap<String, CachedConversationKey>>,
+    /// Per-conversation cache of conversation keys, by key version. A key
+    /// enters from a key change whose signature verified, or from a key
+    /// change this instance prepared, never from an adopted-but-unverified
+    /// key change.
+    conversation_key_cache: std::sync::RwLock<HashMap<String, BTreeMap<u64, XChatConversationKey>>>,
     /// Caller-supplied signing keys used when a decrypt call omits them.
-    /// Populated only by [`Self::set_signing_keys`] — never from event
-    /// contents.
+    /// Populated only by [`Self::set_signing_keys`] and
+    /// [`Self::add_signing_keys`] — never from event contents.
     signing_key_cache: std::sync::RwLock<Vec<SigningKeyEntry>>,
     /// This instance's feature switches from `GET /2/chat/features`; all off
     /// until an answer turns them on.
     features: std::sync::Mutex<crate::features::ChatFeatures>,
 }
 
-/// A cached conversation key pinned to its verified version.
+/// A cached conversation key with its version.
 ///
 /// The key zeroizes on drop via [`XChatConversationKey`]; `Debug` redacts it.
 #[derive(Clone)]
@@ -231,11 +232,20 @@ impl ChatCore {
 
     /// Enable or disable the conversation-key cache (off by default).
     ///
-    /// While enabled, `decrypt_events` caches, per conversation, the key
-    /// whose key change carried a valid signature at the highest version
-    /// seen, and the encrypt methods resolve an omitted
-    /// `conversation_key`/`conversation_key_version` pair from it.
+    /// While enabled, the cache keeps, per conversation, the key of every
+    /// key change whose signature verified in [`Self::decrypt_events`] or
+    /// [`Self::decrypt_event`], and the key of every key change this
+    /// instance prepared (a conversation-key change, a group create, a
+    /// member add or a member removal). A call that omits its conversation
+    /// key reads it from there: the encrypt methods and the title,
+    /// description and avatar changes use the conversation's newest key, and
+    /// the decrypt methods the key at the version the event names.
     /// Disabling clears the cache; the keys zeroize on drop.
+    ///
+    /// A prepared key is cached when the prepare call returns, before its
+    /// request is sent. If the X API rejects the request, no one else holds
+    /// that key: prepare the change again, or pass the key to encrypt with
+    /// explicitly, until a newer key change verifies.
     pub fn set_cache_keys(&self, enabled: bool) {
         self.cache_keys
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -250,14 +260,34 @@ impl ChatCore {
     /// Store signing keys to use when a decrypt call omits its
     /// `signing_keys` argument.
     ///
-    /// Only this explicit call populates the store — a key carried inside an
-    /// event is never trusted for verification. Each call replaces the
-    /// previous set.
+    /// Only this call and [`Self::add_signing_keys`] populate the store — a
+    /// key carried inside an event is never trusted for verification. Each
+    /// call replaces the previous set.
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         *self
             .signing_key_cache
             .write()
             .unwrap_or_else(|e| e.into_inner()) = entries.to_vec();
+    }
+
+    /// Add signing keys to the store [`Self::set_signing_keys`] sets,
+    /// keeping the keys it holds: an entry replaces the stored entry of the
+    /// same user and key version, and any other is added.
+    pub fn add_signing_keys(&self, entries: &[SigningKeyEntry]) {
+        let mut stored = self
+            .signing_key_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        for entry in entries {
+            let existing = stored.iter_mut().find(|stored| {
+                stored.user_id == entry.user_id
+                    && stored.public_key_version == entry.public_key_version
+            });
+            match existing {
+                Some(existing) => *existing = entry.clone(),
+                None => stored.push(entry.clone()),
+            }
+        }
     }
 
     /// Resolve the effective `sender_id`: the explicit override when present,
@@ -299,8 +329,8 @@ impl ChatCore {
     }
 
     /// Resolve the conversation key + version for an encrypt call: the
-    /// explicit pair when present, otherwise the cached verified key for the
-    /// conversation.
+    /// explicit pair when present, otherwise the conversation's newest
+    /// cached key.
     fn resolve_conversation_key(
         &self,
         conversation_key: Option<&[u8]>,
@@ -327,15 +357,8 @@ impl ChatCore {
                         canonical
                     ))
                 };
-                if !self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(no_key());
-                }
-                let cache = self
-                    .conversation_key_cache
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner());
-                let cached = cache.get(canonical.as_ref()).ok_or_else(no_key)?;
-                Ok((cached.key.clone(), cached.version.to_string()))
+                let cached = self.newest_cached_key(&canonical).ok_or_else(no_key)?;
+                Ok((cached.key, cached.version.to_string()))
             }
             _ => Err(SdkError::InvalidInput(
                 "conversation_key and conversation_key_version must be passed together \
@@ -345,22 +368,9 @@ impl ChatCore {
         }
     }
 
-    /// Look up a cached conversation key for a specific conversation and key
-    /// version. Used by the decrypt path when the caller omits its key map.
-    fn cached_key_for(&self, conversation_id: &str, version: &str) -> Option<XChatConversationKey> {
-        if !self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-            return None;
-        }
-        let cache = self
-            .conversation_key_cache
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let cached = cache.get(canonical_event_conversation_id(conversation_id).as_ref())?;
-        (cached.version.to_string() == version).then(|| cached.key.clone())
-    }
-
     /// Resolve the signing keys for a decrypt call: the explicit slice when
-    /// non-empty, otherwise the keys stored via [`Self::set_signing_keys`].
+    /// non-empty, otherwise the keys stored via [`Self::set_signing_keys`]
+    /// and [`Self::add_signing_keys`].
     fn resolve_signing_keys(&self, param: &[SigningKeyEntry]) -> Vec<SigningKeyEntry> {
         if !param.is_empty() {
             return param.to_vec();
@@ -1946,6 +1956,7 @@ mod decrypt;
 mod encrypt;
 mod files;
 mod group_actions;
+mod key_cache;
 mod media;
 mod signing;
 

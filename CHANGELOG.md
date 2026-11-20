@@ -51,8 +51,43 @@
 
   `keys` and `latest_version` hold the same without the conversation id, for
   a batch whose events all belong to one conversation.
+- `add_signing_keys` (`addSigningKeys`, `AddSigningKeys`,
+  `chat_xdk_add_signing_keys`) adds signing keys to the stored set: an entry
+  replaces the stored entry of the same user and key version, and any other
+  is added. `set_signing_keys` still replaces the whole set.
+- The key cache serves more calls. All of it applies only while the cache is
+  on (`set_cache_keys(true)`, off by default), and a key or key version that
+  a call is passed is used as before:
+  - `decrypt_file` and `file_decryptor` take `conversation_keys` as
+    optional. Left out or empty, the key map is the conversation's keys in
+    the cache.
+  - `prepare_group_avatar_change` takes `conversation_key_version` as
+    optional. Left out or empty, it signs the version of the conversation's
+    newest cached key, and fails with an invalid-state error when the cache
+    holds none.
 
 ### Changed
+
+- The key cache is filled on every path and keeps every key version. It was
+  filled by `decrypt_events` alone, with one key per conversation: the
+  newest whose key change verified. While the cache is on:
+  - `decrypt_event` records a key change that verifies as `decrypt_events`
+    does: its version becomes the conversation's newest verified one unless
+    a newer is known, and its key is cached. A chat that receives events one
+    at a time no longer needs a batch call to pick up a new key.
+  - `prepare_conversation_key_change`, `prepare_group_create`,
+    `prepare_group_members_change` and `prepare_group_members_remove` cache
+    the key they make as the conversation's newest. A send that omits its
+    key right after one of them uses the new key; it used the previous key,
+    or failed for a new conversation, until the key change came back in the
+    conversation's events. The key is cached before its request is sent: if
+    the X API rejects the request, prepare the change again or pass the key
+    to encrypt with explicitly.
+  - The cache keeps every key it is given per conversation, by version.
+    Sends use the newest. `decrypt_event` with no key map decrypts a message
+    under an older cached key, which failed before.
+
+  With the cache off, nothing changes.
 
 - `latest_version` is null for a batch whose events belong to more than one
   conversation, from `decrypt_events` and from `extract_conversation_keys`.

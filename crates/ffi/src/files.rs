@@ -52,8 +52,9 @@ pub extern "C" fn chat_xdk_encrypt_file(
 /// `params_json` — single JSON document: `encrypted` (base64, as
 /// downloaded), `event_b64` (the event of the message that carries the
 /// file), `conversation_keys` (`{"version": "base64 raw 32-byte key"}`
-/// holding the key for the message's version), and `media_hash_key` (the
-/// file's media hash key from the decrypted message).
+/// holding the key for the message's version; absent, null or `{}` takes
+/// the conversation's keys from the opt-in key cache), and `media_hash_key`
+/// (the file's media hash key from the decrypted message).
 ///
 /// Returns the decrypted file, base64.
 #[no_mangle]
@@ -74,10 +75,12 @@ pub extern "C" fn chat_xdk_decrypt_file(
             Ok(b) => b,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
-            Ok(k) => k,
-            Err(e) => return e,
-        };
+        // Core reads an empty key map as "take the keys from the key cache".
+        let conversation_keys =
+            match conversation_keys_from_b64(p.conversation_keys.unwrap_or_default()) {
+                Ok(k) => k,
+                Err(e) => return e,
+            };
         let params =
             DecryptFileParams::new(encrypted, p.event_b64, conversation_keys, p.media_hash_key);
         match h.inner.decrypt_file(&params) {
@@ -312,10 +315,12 @@ pub extern "C" fn chat_xdk_file_decryptor_new(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let conversation_keys = match conversation_keys_from_b64(p.conversation_keys) {
-            Ok(k) => k,
-            Err(e) => return e,
-        };
+        // Core reads an empty key map as "take the keys from the key cache".
+        let conversation_keys =
+            match conversation_keys_from_b64(p.conversation_keys.unwrap_or_default()) {
+                Ok(k) => k,
+                Err(e) => return e,
+            };
         let params = FileDecryptorParams::new(p.event_b64, conversation_keys, p.media_hash_key);
         match h.inner.file_decryptor(&params) {
             Ok(dec) => {

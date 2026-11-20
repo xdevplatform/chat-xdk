@@ -259,6 +259,17 @@ async function delegationTests() {
   assert.equal(viaStore.verified, true);
   chat.setSigningKeys([]);
 
+  // addSigningKeys delegation: keys added to the emptied store verify the
+  // same decrypt.
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys }),
+    chatXdkError("verification", /./),
+  );
+  chat.addSigningKeys(signingKeys);
+  const viaAddedKeys = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys });
+  assert.equal(viaAddedKeys.verified, true);
+  chat.setSigningKeys([]);
+
   // setIdentity + setCacheKeys delegations: the session identity and the
   // cached key (populated by the decryptEvents call above re-run with the
   // cache enabled) back an encryptMessage with no explicit identity or key.

@@ -1411,6 +1411,8 @@ pub struct GroupAvatarChangeParams {
     /// The media URL of the group's new avatar image, signed and sent as is.
     pub new_avatar_url: String,
     /// Version of the conversation key the avatar image is encrypted under.
+    /// Leave it empty to sign the version of the conversation's newest key
+    /// in the opt-in key cache.
     pub conversation_key_version: String,
     /// User ID of the sender signing the change; resolves from the session
     /// identity when unset.
@@ -1421,7 +1423,9 @@ pub struct GroupAvatarChangeParams {
 }
 
 impl GroupAvatarChangeParams {
-    /// Create params with required fields; all optional fields default to `None`.
+    /// Create params with required fields; all optional fields default to
+    /// `None`. An empty `conversation_key_version` signs the version of the
+    /// conversation's newest key in the opt-in key cache.
     pub fn new(
         conversation_id: impl Into<String>,
         new_avatar_url: impl Into<String>,
@@ -1944,7 +1948,8 @@ pub struct DecryptEventParams {
     /// key cache.
     pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// Signing keys to verify the event with; the keys stored via
-    /// `set_signing_keys` are used when unset or empty.
+    /// `set_signing_keys` and `add_signing_keys` are used when unset or
+    /// empty.
     pub signing_keys: Option<Vec<SigningKeyEntry>>,
 }
 
@@ -2085,7 +2090,8 @@ pub struct DecryptFileParams {
     /// `decrypt_event`.
     pub event_b64: String,
     /// The conversation's key map (`key version → key`), as passed to
-    /// `decrypt_event`.
+    /// `decrypt_event`. Leave it empty to take the conversation's keys from
+    /// the opt-in key cache.
     pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The file's media hash key from the decrypted message: a media
     /// attachment, a link card's banner or favicon, or media quoted in its
@@ -2094,7 +2100,8 @@ pub struct DecryptFileParams {
 }
 
 impl DecryptFileParams {
-    /// Create params; every field is required.
+    /// Create params. An empty `conversation_keys` takes the conversation's
+    /// keys from the opt-in key cache.
     pub fn new(
         encrypted: Vec<u8>,
         event_b64: impl Into<String>,
@@ -2204,7 +2211,8 @@ pub struct FileDecryptorParams {
     /// `decrypt_event`.
     pub event_b64: String,
     /// The conversation's key map (`key version → key`), as passed to
-    /// `decrypt_event`.
+    /// `decrypt_event`. Leave it empty to take the conversation's keys from
+    /// the opt-in key cache.
     pub conversation_keys: HashMap<String, XChatConversationKey>,
     /// The file's media hash key from the decrypted message: a media
     /// attachment, a link card's banner or favicon, or media quoted in its
@@ -2213,7 +2221,8 @@ pub struct FileDecryptorParams {
 }
 
 impl FileDecryptorParams {
-    /// Create params; every field is required.
+    /// Create params. An empty `conversation_keys` takes the conversation's
+    /// keys from the opt-in key cache.
     pub fn new(
         event_b64: impl Into<String>,
         conversation_keys: HashMap<String, XChatConversationKey>,

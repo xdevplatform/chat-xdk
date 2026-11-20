@@ -52,11 +52,16 @@ func main() {
 
     // Import keys + registered version, then set the session stores once:
     // the identity used to sign, the signing keys used to verify, and the
-    // opt-in conversation-key cache filled by the batch decrypt path.
+    // opt-in conversation-key cache. The cache keeps the key of every key
+    // change that verifies in DecryptEvents or DecryptEvent, and of every
+    // key change this chat prepares.
     _ = chat.ImportKeys(chatxdk.ImportKeysParams{Keys: privateKeyBytes, SigningKeyVersion: registeredKeyVersion})
     chat.SetIdentity(chatxdk.SetIdentityParams{UserID: myUserID, SigningKeyVersion: registeredKeyVersion})
     chat.SetCacheKeys(true)
     _ = chat.SetSigningKeys(signingKeyEntries)
+    // SetSigningKeys replaces the stored keys; AddSigningKeys adds to them,
+    // such as the keys of a member who joins later.
+    _ = chat.AddSigningKeys(newMemberSigningKeyEntries)
 
     // Batch load: decrypt many events at once (unset SigningKeys = stored signing keys)
     batch, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: rawEventB64List})
@@ -108,6 +113,14 @@ func main() {
     _ = payload
 }
 ```
+
+With the key cache on, calls that omit their conversation key read it from
+the cache: the encrypt methods and the group title, description and avatar
+changes use the conversation's newest key, and `DecryptEvent`, `DecryptFile`
+and `FileDecryptor` the key at the version the event names. So
+`DecryptFileParams.ConversationKeys`, `FileDecryptorParams.ConversationKeys`
+and `GroupAvatarChangeParams.ConversationKeyVersion` may be left unset. A
+value that is passed is used as is.
 
 ## API
 

@@ -35,7 +35,7 @@ namespace ChatXdk
     /// chat.SetCacheKeys(true);                                               // opt-in conversation-key cache
     /// chat.SetSigningKeys(participantSigningKeys);                           // default verification keys
     ///
-    /// // Decrypt incoming events (keys are cached from verified KeyChange events)
+    /// // Decrypt incoming events (the key of each KeyChange event that verifies is cached)
     /// var result = chat.DecryptEvents(new DecryptEventsParams(eventsB64));
     /// var evt = chat.DecryptEvent(new DecryptEventParams(eventB64, result.ConversationKeys.Keys));
     /// Console.WriteLine(evt.GetProperty("type").GetString()); // "Message", "KeyChange", …
@@ -283,11 +283,22 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Enable or disable the conversation-key cache (off by default). While enabled,
-        /// <see cref="DecryptEvents"/> caches, per conversation, the key whose key change
-        /// carried a valid signature at the highest version seen, and the encrypt methods
-        /// resolve a null <c>ConversationKey</c>/<c>ConversationKeyVersion</c> pair from it.
-        /// Disabling clears the cache.
+        /// Enable or disable the conversation-key cache (off by default).
+        ///
+        /// <para>While enabled, the cache keeps, per conversation, the key of every key change
+        /// whose signature verified in <see cref="DecryptEvents"/> or <see cref="DecryptEvent"/>,
+        /// and the key of every key change this chat prepared
+        /// (<see cref="PrepareConversationKeyChange"/>, <see cref="PrepareGroupCreate"/>,
+        /// <see cref="PrepareGroupMembersChange"/> or <see cref="PrepareGroupMembersRemove"/>).
+        /// A call that omits its conversation key reads it from there: the encrypt methods and
+        /// the title, description and avatar changes use the conversation's newest key, and
+        /// <see cref="DecryptEvent"/>, <see cref="DecryptFile"/> and <see cref="FileDecryptor"/>
+        /// the key at the version the event names. Disabling clears the cache.</para>
+        ///
+        /// <para>A prepared key is cached when the prepare call returns, before its request is
+        /// sent. If the X API rejects the request, no one else holds that key: prepare the
+        /// change again, or pass the key to encrypt with explicitly, until a newer key change
+        /// verifies.</para>
         /// </summary>
         public void SetCacheKeys(bool enabled)
         {
@@ -298,8 +309,9 @@ namespace ChatXdk
 
         /// <summary>
         /// Store signing keys to use when a decrypt call's params leave <c>SigningKeys</c>
-        /// null (or empty). Only this explicit call populates the store — a key carried inside
-        /// an event is never trusted for verification. Each call replaces the previous set.
+        /// null (or empty). Each call replaces the previous set; add to it with
+        /// <see cref="AddSigningKeys"/>. Only these two calls populate the store — a key carried
+        /// inside an event is never trusted for verification.
         /// </summary>
         public void SetSigningKeys(IReadOnlyList<SigningKeyEntry> keys)
         {
@@ -308,6 +320,22 @@ namespace ChatXdk
             var jsonBytes = Utf8Z(json);
             fixed (byte* jsonPtr = jsonBytes)
                 ConsumeResult(NativeMethods.chat_xdk_set_signing_keys(_handle, jsonPtr));
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>
+        /// Add signing keys to the set <see cref="SetSigningKeys"/> stores, keeping the keys it
+        /// holds: an entry replaces the stored entry of the same
+        /// <see cref="SigningKeyEntry.UserId"/> and <see cref="SigningKeyEntry.PublicKeyVersion"/>,
+        /// and any other is added.
+        /// </summary>
+        public void AddSigningKeys(IReadOnlyList<SigningKeyEntry> keys)
+        {
+            ThrowIfDisposed();
+            var json = JsonSerializer.Serialize(keys, JsonOpts);
+            var jsonBytes = Utf8Z(json);
+            fixed (byte* jsonPtr = jsonBytes)
+                ConsumeResult(NativeMethods.chat_xdk_add_signing_keys(_handle, jsonPtr));
             GC.KeepAlive(this);
         }
 
@@ -552,11 +580,15 @@ namespace ChatXdk
         /// <summary>
         /// Decrypt a webhook event and return it as a <see cref="JsonElement"/>.
         /// Under the default reject-unverified policy, a signed event with no usable signing
-        /// key (passed or stored via <see cref="SetSigningKeys"/>) throws; only after
+        /// key (passed or stored via <see cref="SetSigningKeys"/> and
+        /// <see cref="AddSigningKeys"/>) throws; only after
         /// <see cref="SetRejectUnverified"/>(false) are such events returned with
         /// <c>verified: false</c>. A member removal's title and description, re-encrypted under
         /// the new key, aren't changes: they throw a <see cref="ChatXdkException"/> of kind
         /// <see cref="ChatXdkErrorKind.InvalidInput"/> under either policy.
+        /// A key change that verifies is recorded as <see cref="DecryptEvents"/> records it:
+        /// while the key cache is on (<see cref="SetCacheKeys"/>), its key is cached, so later
+        /// calls that omit their conversation key resolve it.
         /// </summary>
         /// <returns>
         /// A <see cref="JsonElement"/> with a <c>"type"</c> field indicating the event kind
@@ -712,6 +744,8 @@ namespace ChatXdk
         /// Leave <see cref="ConversationKeyChangeParams.ConversationId"/> null for a
         /// one-to-one to derive the canonical id from the two participants; pass the
         /// existing id for a group rotation.
+        /// While the key cache is on (<see cref="SetCacheKeys"/>), the new key is cached when
+        /// the call returns.
         /// </summary>
         public PreparedConversationChange PrepareConversationKeyChange(ConversationKeyChangeParams parameters)
         {
@@ -733,6 +767,8 @@ namespace ChatXdk
         /// <see cref="PreparedConversationChange.EncryptedTitle"/> and
         /// <see cref="PreparedConversationChange.EncryptedDescription"/>. The current avatar URL
         /// is signed as is.
+        /// While the key cache is on (<see cref="SetCacheKeys"/>), the new key is cached when
+        /// the call returns.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersChange(GroupMembersChangeParams parameters)
         {
@@ -753,6 +789,8 @@ namespace ChatXdk
         /// the ciphertext, and returns it as <see cref="PreparedConversationChange.EncryptedTitle"/>,
         /// the <c>group_name</c> the create request sends. A create sets no avatar; set it
         /// afterwards with <see cref="PrepareGroupAvatarChange"/>.
+        /// While the key cache is on (<see cref="SetCacheKeys"/>), the new key is cached when
+        /// the call returns.
         /// </summary>
         public PreparedConversationChange PrepareGroupCreate(GroupCreateParams parameters)
         {
@@ -804,6 +842,8 @@ namespace ChatXdk
         /// stay (<c>PublicKeys</c>). The result carries the new key and the action signatures:
         /// the removal, a title and a description change for each one the params set,
         /// re-encrypted under the new key, and the conversation-key change.
+        /// While the key cache is on (<see cref="SetCacheKeys"/>), the new key is cached when
+        /// the call returns.
         /// </summary>
         public PreparedConversationChange PrepareGroupMembersRemove(GroupMembersRemoveParams parameters)
         {
@@ -823,8 +863,15 @@ namespace ChatXdk
 
         /// <summary>
         /// Sign a group avatar change: the avatar image's media URL, as is, and the version of
-        /// the key the image is encrypted under.
+        /// the key the image is encrypted under. With
+        /// <see cref="GroupAvatarChangeParams.ConversationKeyVersion"/> left out, the call signs
+        /// the version of the conversation's newest key in the opt-in key cache
+        /// (<see cref="SetCacheKeys"/>), the key the encrypt methods resolve.
         /// </summary>
+        /// <exception cref="ChatXdkException">
+        /// <see cref="ChatXdkErrorKind.InvalidState"/>: the key version is left out and no key of
+        /// the conversation is cached.
+        /// </exception>
         public PreparedAction PrepareGroupAvatarChange(GroupAvatarChangeParams parameters)
             => CallAction(BuildPrepareGroupAvatarChangeJson(parameters), NativeMethods.chat_xdk_prepare_group_avatar_change);
 
@@ -1039,7 +1086,9 @@ namespace ChatXdk
         }
 
         /// <summary>
-        /// Decrypt an encrypted file (e.g. an image or video), as downloaded.
+        /// Decrypt an encrypted file (e.g. an image or video), as downloaded. With
+        /// <see cref="DecryptFileParams.ConversationKeys"/> left out or empty, the conversation's
+        /// keys come from the opt-in key cache (<see cref="SetCacheKeys"/>).
         /// </summary>
         /// <returns>Decrypted bytes.</returns>
         /// <exception cref="ChatXdkException">
@@ -1108,7 +1157,7 @@ namespace ChatXdk
         }
 
         private static string FileParamsJson(
-            string eventB64, IReadOnlyDictionary<string, byte[]> conversationKeys, string mediaHashKey)
+            string eventB64, IReadOnlyDictionary<string, byte[]>? conversationKeys, string mediaHashKey)
             => ParamsJson(new Dictionary<string, object?>
             {
                 ["event_b64"] = eventB64,
@@ -1423,7 +1472,8 @@ namespace ChatXdk
             {
                 ["conversation_id"] = p.ConversationId,
                 ["new_avatar_url"] = p.NewAvatarUrl,
-                ["conversation_key_version"] = p.ConversationKeyVersion,
+                // A version left out is omitted, so the core signs the newest cached key's.
+                ["conversation_key_version"] = string.IsNullOrEmpty(p.ConversationKeyVersion) ? null : p.ConversationKeyVersion,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

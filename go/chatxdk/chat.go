@@ -25,8 +25,9 @@
 //	chat.SetSigningKeys(senderSigningKeys)
 //
 //	// Decrypt events. The batch path self-extracts conversation keys from
-//	// KeyChange events (and caches them while SetCacheKeys is on); with nil
-//	// signing keys the stored set is used.
+//	// KeyChange events; while SetCacheKeys is on, both decrypt calls cache
+//	// the key of each key change that verifies. With nil signing keys the
+//	// stored set is used.
 //	result, _ := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: eventsB64})
 //	event, err := chat.DecryptEvent(chatxdk.DecryptEventParams{
 //	    EventB64:         eventB64,
@@ -146,20 +147,31 @@ func (c *Chat) SetIdentity(params SetIdentityParams) error {
 }
 
 // SetCacheKeys enables or disables the conversation-key cache (off by
-// default). While enabled, DecryptEvents caches, per conversation, the key
-// whose key change carried a valid signature at the highest version seen,
-// and the encrypt methods resolve an omitted
-// ConversationKey/ConversationKeyVersion pair from it. Disabling clears the
-// cache.
+// default).
+//
+// While enabled, the cache keeps, per conversation, the key of every key
+// change whose signature verified in DecryptEvents or DecryptEvent, and the
+// key of every key change this Chat prepared (PrepareConversationKeyChange,
+// PrepareGroupCreate, PrepareGroupMembersChange or
+// PrepareGroupMembersRemove). A call that omits its conversation key reads
+// it from there: the encrypt methods and the title, description and avatar
+// changes use the conversation's newest key, and DecryptEvent, DecryptFile
+// and FileDecryptor the key at the version the event names. Disabling clears
+// the cache.
+//
+// A prepared key is cached when the prepare call returns, before its request
+// is sent. If the X API rejects the request, no one else holds that key:
+// prepare the change again, or pass the key to encrypt with explicitly,
+// until a newer key change verifies.
 func (c *Chat) SetCacheKeys(enabled bool) {
 	defer runtime.KeepAlive(c)
 	_ = ffiSetCacheKeys(c.h, enabled)
 }
 
 // SetSigningKeys stores signing keys to use when a decrypt call's params leave
-// SigningKeys nil (or empty). Each call replaces the previous set; only this
-// call populates the store — a key carried inside an event is never trusted
-// for verification.
+// SigningKeys nil (or empty). Each call replaces the previous set; add to it
+// with AddSigningKeys. Only these two calls populate the store — a key
+// carried inside an event is never trusted for verification.
 func (c *Chat) SetSigningKeys(keys []SigningKeyEntry) error {
 	defer runtime.KeepAlive(c)
 	if keys == nil {
@@ -170,6 +182,21 @@ func (c *Chat) SetSigningKeys(keys []SigningKeyEntry) error {
 		return err
 	}
 	return ffiSetSigningKeys(c.h, string(b))
+}
+
+// AddSigningKeys adds signing keys to the set SetSigningKeys stores, keeping
+// the keys it holds: an entry replaces the stored entry of the same UserID
+// and PublicKeyVersion, and any other is added.
+func (c *Chat) AddSigningKeys(keys []SigningKeyEntry) error {
+	defer runtime.KeepAlive(c)
+	if keys == nil {
+		keys = []SigningKeyEntry{}
+	}
+	b, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	return ffiAddSigningKeys(c.h, string(b))
 }
 
 // Lock clears keys from memory.
@@ -274,10 +301,10 @@ func (c *Chat) ExtractConversationKeys(events []string) (*ConversationKeyBundle,
 // Errors map, keyed by event index.
 //
 // Nil (or empty) SigningKeys fall back to the keys stored via
-// SetSigningKeys; with nothing stored either, signed events fail decryption
-// under the default reject-unverified policy. A member removal's title and
-// description, re-encrypted under the new key, aren't changes: they land in
-// Errors under either policy.
+// SetSigningKeys and AddSigningKeys; with nothing stored either, signed
+// events fail decryption under the default reject-unverified policy. A
+// member removal's title and description, re-encrypted under the new key,
+// aren't changes: they land in Errors under either policy.
 //
 // The signing keys must include those of every member who signed a key
 // change in the batch, whether or not that member sent a message in it.
@@ -321,6 +348,9 @@ func (c *Chat) DecryptEvents(params DecryptEventsParams) (*DecryptEventsResult, 
 //
 // Leave ConversationID empty for a one-to-one to derive the canonical id from the
 // two participants; pass the existing id for a group key rotation.
+//
+// While the key cache is on (SetCacheKeys), the new key is cached when the
+// call returns.
 func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	j, err := json.Marshal(params)
@@ -348,6 +378,9 @@ func (c *Chat) PrepareConversationKeyChange(params ConversationKeyChangeParams) 
 // under the new conversation key, signs the ciphertext, and returns it as
 // EncryptedTitle and EncryptedDescription. CurrentAvatarURL is the avatar's
 // media URL, signed as is.
+//
+// While the key cache is on (SetCacheKeys), the new key is cached when the
+// call returns.
 func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	// Rosters are required fields; marshal nil slices as [] rather than null.
@@ -378,6 +411,9 @@ func (c *Chat) PrepareGroupMembersChange(params GroupMembersChangeParams) (*Prep
 // encrypts a title under the new conversation key, signs the ciphertext, and
 // returns it as EncryptedTitle: the group_name the create request sends. A
 // create sets no avatar; set it afterwards with PrepareGroupAvatarChange.
+//
+// While the key cache is on (SetCacheKeys), the new key is cached when the
+// call returns.
 func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	// Rosters are required fields; marshal nil slices as [] rather than null.
@@ -402,6 +438,9 @@ func (c *Chat) PrepareGroupCreate(params GroupCreateParams) (*PreparedConversati
 // signatures: the removal (which names the new key version), a title and a
 // description change for each one the params set, re-encrypted under the new
 // key, and the key change.
+//
+// While the key cache is on (SetCacheKeys), the new key is cached when the
+// call returns.
 func (c *Chat) PrepareGroupMembersRemove(params GroupMembersRemoveParams) (*PreparedConversationChange, error) {
 	defer runtime.KeepAlive(c)
 	if params.PublicKeys == nil {
@@ -451,7 +490,10 @@ func (c *Chat) PrepareGroupTitleChange(params GroupTitleChangeParams) (*Prepared
 
 // PrepareGroupAvatarChange signs a group avatar change: NewAvatarURL, the
 // avatar image's media URL, as is, and ConversationKeyVersion, the version of
-// the key the image is encrypted under.
+// the key the image is encrypted under. An empty ConversationKeyVersion signs
+// the version of the conversation's newest key in the opt-in key cache
+// (SetCacheKeys), the key the encrypt methods resolve; with no key cached
+// the call fails with an ErrorKindInvalidState error.
 func (c *Chat) PrepareGroupAvatarChange(params GroupAvatarChangeParams) (*PreparedAction, error) {
 	return c.prepareAction(params, ffiPrepareGroupAvatarChange)
 }
@@ -602,13 +644,18 @@ func (c *Chat) PrepareMarkConversationRead(params MarkConversationReadParams) (*
 //
 // Nil (or empty) ConversationKeys fall back to the opt-in conversation-key
 // cache (SetCacheKeys); leave them nil for non-message events. Nil (or empty)
-// SigningKeys fall back to the keys stored via SetSigningKeys; the SDK picks
-// the sender's key for the version the event carries. With no signing keys
-// passed or stored, every signed event fails under the default
-// reject-unverified policy; only after SetRejectUnverified(false) are such
-// events returned with Verified=false. A member removal's title and
-// description, re-encrypted under the new key, aren't changes: they fail with
-// an ErrorKindInvalidInput error under either policy.
+// SigningKeys fall back to the keys stored via SetSigningKeys and
+// AddSigningKeys; the SDK picks the sender's key for the version the event
+// carries. With no signing keys passed or stored, every signed event fails
+// under the default reject-unverified policy; only after
+// SetRejectUnverified(false) are such events returned with Verified=false. A
+// member removal's title and description, re-encrypted under the new key,
+// aren't changes: they fail with an ErrorKindInvalidInput error under either
+// policy.
+//
+// A key change that verifies is recorded as DecryptEvents records it: while
+// the key cache is on, its key is cached, so later calls that omit their
+// conversation key resolve it.
 func (c *Chat) DecryptEvent(params DecryptEventParams) (*Event, error) {
 	defer runtime.KeepAlive(c)
 	params.ConversationKeys = orEmptyKeys(params.ConversationKeys)
@@ -765,9 +812,10 @@ func (c *Chat) EncryptFile(params EncryptFileParams) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(outB64)
 }
 
-// DecryptFile decrypts an encrypted file, as downloaded. Errors say what to
-// pass instead. Raw bytes in, raw bytes out; the FFI transports base64
-// internally.
+// DecryptFile decrypts an encrypted file, as downloaded. Nil (or empty)
+// ConversationKeys take the conversation's keys from the opt-in key cache
+// (SetCacheKeys). Errors say what to pass instead. Raw bytes in, raw bytes
+// out; the FFI transports base64 internally.
 func (c *Chat) DecryptFile(params DecryptFileParams) ([]byte, error) {
 	defer runtime.KeepAlive(c)
 	params.Encrypted = orEmptyBytes(params.Encrypted)

@@ -11,13 +11,13 @@ import { delivered, deliveredAction } from "./frame.mjs";
 // has its key dropped, and one before it, where the key is kept.
 const ENFORCED_SEQUENCE = "2100000000000000000";
 const UNENFORCED_SEQUENCE = "100";
-const GROUP = "g900";
+export const GROUP = "g900";
 const OTHER_GROUP = "g901";
 const THIRD_GROUP = "g902";
-const KEY_VERSION = "1";
+export const KEY_VERSION = "1";
 
 /** A chat with fresh keys as user `userId`, and the keys others hold for it. */
-async function party(newChat, userId) {
+export async function party(newChat, userId) {
   const chat = await newChat();
   const { publicKey } = chat.generateKeypairs();
   return {
@@ -35,7 +35,7 @@ async function party(newChat, userId) {
 }
 
 /** The key change `signer` makes in `conversationId` for `members`, with its key. */
-function keyChange(signer, members, conversationId) {
+export function keyChange(signer, members, conversationId) {
   const prepared = signer.chat.prepareConversationKeyChange({
     senderId: signer.userId,
     signingKeyVersion: KEY_VERSION,
@@ -72,7 +72,7 @@ function atVersion(change, signer, conversationId, version) {
 }
 
 /** The message `author` sends in `conversationId` under the key of `change`, as delivered. */
-function message(author, conversationId, change, text) {
+export function message(author, conversationId, change, text) {
   const payload = author.chat.encryptMessage({
     conversationId,
     text,
