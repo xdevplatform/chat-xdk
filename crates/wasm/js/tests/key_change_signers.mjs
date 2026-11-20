@@ -85,7 +85,7 @@ export function message(author, conversationId, change, text) {
 }
 
 /** The text of each message among a result's events. */
-function texts(result) {
+export function texts(result) {
   return result.events.filter(({ event }) => event.type === "message").map(({ event }) => event.content.text);
 }
 

@@ -3,12 +3,11 @@ package com.example.chatbot;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.x.chatxdk.ChatXdkException;
 import com.x.chatxdk.Types.DecryptEventsResult;
-import com.x.chatxdk.Types.SigningKeyEntry;
+import com.x.chatxdk.Types.DecryptedEvent;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,6 +15,11 @@ import java.util.Set;
 /**
  * The receive -&gt; decrypt -&gt; reply -&gt; encrypt -&gt; send loop. Conversation state
  * is kept in memory, one entry per conversation.
+ *
+ * <p>One bot serves one signed-in user, in any number of conversations. A
+ * process with several signed-in users keeps one chat per user and gives each
+ * the same public-key resolver (see {@link UserChats} and
+ * {@link SharedPublicKeys}).
  */
 public final class Bot {
 
@@ -31,6 +35,10 @@ public final class Bot {
         // Session identity, once: every encrypt below signs as the bot without
         // passing a sender id per call.
         core.setIdentity(botUserId);
+        // The SDK fetches the public keys it lacks through the API client: the
+        // signing keys of whoever signed a page's events, the members who made
+        // its key changes included.
+        core.fetchPublicKeysWith(api::getPublicKeys);
     }
 
     /** Turn an incoming message into a reply (simple echo by default). */
@@ -43,45 +51,26 @@ public final class Bot {
         return state.computeIfAbsent(conversationId, k -> new ConversationState());
     }
 
-    /** The signing keys of the senders of {@code events}. */
-    private List<SigningKeyEntry> signingKeysFor(List<JsonNode> events) {
-        Set<String> senders = new LinkedHashSet<>();
-        for (JsonNode e : events) {
-            String sid = e.path("sender_id").asText("");
-            if (!sid.isEmpty() && !sid.equals(botUserId)) senders.add(sid);
-        }
-        return signingKeysOf(new ArrayList<>(senders));
-    }
-
-    /** The signing keys of {@code userIds}, fetched from the X API. */
-    private List<SigningKeyEntry> signingKeysOf(List<String> userIds) {
-        List<SigningKeyEntry> keys = new ArrayList<>();
-        for (String userId : userIds) {
-            try {
-                for (JsonNode pk : api.getPublicKeys(userId)) {
-                    SigningKeyEntry entry = new SigningKeyEntry(
-                            userId,
-                            pk.path("public_key_version").asText(""),
-                            pk.path("signing_public_key").asText(""),
-                            pk.path("public_key").asText(""),
-                            pk.path("identity_public_key_signature").asText(""));
-                    keys.add(entry);
-                }
-            } catch (Exception ex) {
-                System.err.println("public_keys_fetch_failed user=" + userId);
+    /**
+     * Batch-decrypt one GET events page: its key events, which carry the
+     * conversation keys its messages decrypt under, and its data events, in
+     * one batch. The SDK fetches the public keys the page lacks and caches the
+     * keys of the key changes that verify. Logs what the page still could not
+     * use.
+     */
+    private DecryptEventsResult decryptPage(String conversationId, JsonNode page) throws Exception {
+        List<String> eventsB64 = new ArrayList<>(keyEvents(page));
+        JsonNode data = page.path("data");
+        if (data.isArray()) {
+            for (JsonNode item : data) {
+                String eventB64 = item.path("encoded_event").asText("");
+                if (!eventB64.isEmpty()) eventsB64.add(eventB64);
             }
         }
-        return keys;
-    }
-
-    /**
-     * Batch-decrypt {@code eventsB64}, adding to {@code signingKeys} the keys of
-     * the members who made their key changes: they sign them, and may have sent
-     * none of the page's messages. Logs what the batch still could not use.
-     */
-    private DecryptEventsResult decryptBatch(
-            String conversationId, List<String> eventsB64, List<SigningKeyEntry> signingKeys) throws Exception {
-        DecryptEventsResult result = core.decryptBatchWithSigners(eventsB64, signingKeys, this::signingKeysOf);
+        DecryptEventsResult result = core.decryptBatch(eventsB64);
+        result.missingSigningKeys.forEach((index, key) -> System.err.printf(
+                "signing_key_missing conv=%s event=%s user=%s version=%s%n",
+                conversationId, index, key.userId, key.publicKeyVersion));
         result.unverifiedKeyChanges.forEach((index, change) -> System.err.printf(
                 "key_change_unverified conv=%s event=%s reason=%s signer=%s key_dropped=%s%n",
                 conversationId, index, change.reason, change.senderId, change.keyDropped));
@@ -90,13 +79,6 @@ public final class Bot {
         result.rejectedSigningKeys.forEach((index, key) -> System.err.printf(
                 "signing_key_rejected index=%s user=%s version=%s%n", index, key.userId, key.publicKeyVersion));
         return result;
-    }
-
-    private static List<JsonNode> dataArray(JsonNode page) {
-        List<JsonNode> out = new ArrayList<>();
-        JsonNode data = page.path("data");
-        if (data.isArray()) data.forEach(out::add);
-        return out;
     }
 
     /** Pagination token from a GET events page, or null when absent. */
@@ -129,54 +111,28 @@ public final class Bot {
     public void loadBacklog(String conversationId) throws Exception {
         ConversationState st = stateFor(conversationId);
         JsonNode page = api.getEvents(conversationId, 100, null);
-        List<JsonNode> raw = dataArray(page);
-        List<String> eventsB64 = new ArrayList<>(keyEvents(page));
-        for (JsonNode e : raw) {
-            String ev = e.path("encoded_event").asText("");
-            if (!ev.isEmpty()) eventsB64.add(ev);
-        }
-        var result = decryptBatch(conversationId, eventsB64, signingKeysFor(raw));
+        DecryptEventsResult result = decryptPage(conversationId, page);
         st.paginationToken = nextToken(page);
         System.out.printf("backlog_loaded conv=%s messages=%d keys=%d%n",
                 conversationId, result.events.size(), result.conversationKeys.keys.size());
     }
 
-    /** Poll for new events; reply to each new message (decryptEvent path). */
+    /**
+     * Poll for a page of new events, batch-decrypt it (decryptEvents path),
+     * and reply to each new incoming message it holds.
+     */
     public void pollOnce(String conversationId) throws Exception {
         ConversationState st = stateFor(conversationId);
         JsonNode page = api.getEvents(conversationId, 50, st.paginationToken);
-        List<JsonNode> raw = dataArray(page);
-        List<SigningKeyEntry> signingKeys = signingKeysFor(raw);
+        DecryptEventsResult result = decryptPage(conversationId, page);
+        result.errors.forEach((index, error) -> System.err.printf(
+                "decrypt_failed conv=%s event=%s err=%s%n", conversationId, index, error));
 
-        // Key changes for this page arrive in meta, not data; only the batch
-        // path feeds the key cache, so route them through it before
-        // decrypting the messages that need them. The batch fetches the keys
-        // of the members who made them.
-        List<String> pageKeyEvents = keyEvents(page);
-        if (!pageKeyEvents.isEmpty()) {
-            decryptBatch(conversationId, pageKeyEvents, signingKeys);
-        }
-
-        for (JsonNode item : raw) {
-            String eventB64 = item.path("encoded_event").asText("");
-            if (eventB64.isEmpty()) continue;
-            // An empty key map: the conversation keys come from the cache.
-            JsonNode event;
-            try {
-                event = core.decryptOne(eventB64, Map.of(), signingKeys);
-            } catch (ChatXdkException e) {
-                System.err.printf("decrypt_failed conv=%s err=%s%n", conversationId, e.getMessage());
-                continue;
+        for (DecryptedEvent decrypted : result.events) {
+            // A reply is threaded under the raw event of its message.
+            if (decrypted.originalB64 != null) {
+                maybeReply(conversationId, decrypted.event, decrypted.originalB64);
             }
-
-            if ("KeyChange".equals(event.path("type").asText())) {
-                // Only the batch path adopts keys into the cache; replay the
-                // key change through it so the rotated key becomes the
-                // sending key.
-                decryptBatch(conversationId, List.of(eventB64), signingKeys);
-                continue;
-            }
-            maybeReply(conversationId, event, eventB64);
         }
         // Advance the pagination token so the next poll fetches only new events.
         String next = nextToken(page);

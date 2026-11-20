@@ -5,6 +5,9 @@
  *   CHATXDK_E2E=1 X_ACCESS_TOKEN=... CHAT_PRIVATE_KEYS_B64=... CHAT_SIGNING_KEY_VERSION=... \
  *   CHAT_CONVERSATION_ID=... node e2e-live.mjs
  *
+ * The SDK fetches the public keys it lacks through the hook
+ * `ChatCore.fetchPublicKeysWith` sets: this script fetches and passes none.
+ *
  * Flow (each numbered step asserts against the live API):
  *   1. batch-decrypt inbound history (pagination when a second page exists)
  *   2. rotate the conversation key (prepare -> POST /keys -> decrypt own CKCE)
@@ -39,36 +42,19 @@ const blob = need("CHAT_PRIVATE_KEYS_B64");
 const ver = need("CHAT_SIGNING_KEY_VERSION");
 const conv = need("CHAT_CONVERSATION_ID");
 
-function signingFrom(pk, userId) {
-  return {
-    userId,
-    publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
-    publicKey: pk.signingPublicKey ?? pk.signing_public_key ?? "",
-    identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
-    identityPublicKeySignature:
-      pk.identityPublicKeySignature ?? pk.identity_public_key_signature ?? "",
-  };
-}
-
-/** Public-keys response -> the flat entries the prepare methods take. */
-function keyEntries(pks, userId) {
-  return pks.map((pk) => ({
-    userId,
-    identityPublicKey: pk.publicKey ?? pk.public_key ?? "",
-    publicKeyVersion: String(pk.publicKeyVersion ?? pk.public_key_version ?? ""),
-  }));
-}
-
 /**
  * Poll the conversation until the event for `messageId` lands, and return it
  * decrypted via the single-event path (`decryptOne`) as
  * `{ event, b64 }` — the raw base64 alongside, for reply/reaction-by-event.
  *
+ * The single-event path fetches no public keys: the event is one this
+ * account sent, and the SDK holds this account's keys from the key rotation.
+ *
  * The target envelope is matched by its raw event id before decrypting, so a
  * decrypt failure on our own event (e.g. a broken sign->verify loop) surfaces
  * in the timeout message instead of being silently swallowed.
  */
-async function awaitDecrypted(api, core, conversationId, convKeys, signing, messageId, tries = 10) {
+async function awaitDecrypted(api, core, conversationId, convKeys, messageId, tries = 10) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
     const page = await api.getEvents(conversationId, { maxResults: 25 });
@@ -78,7 +64,7 @@ async function awaitDecrypted(api, core, conversationId, convKeys, signing, mess
       const isTarget = String(e.id ?? "") === messageId;
       let one;
       try {
-        one = core.decryptOne(b64, convKeys, signing);
+        one = core.decryptOne(b64, convKeys);
       } catch (err) {
         if (isTarget) lastErr = err;
         continue;
@@ -103,10 +89,12 @@ const api = new XChatClient(token);
 const myId = await api.getMyUserId();
 // The session identity signs everything sent below.
 core.setIdentity(myId);
+// The SDK fetches the public keys it lacks through the API client.
+core.fetchPublicKeysWith((userId) => api.getPublicKeys(userId));
 
 // KeyChange events arrive in meta.conversation_key_events, separate from
 // data; they carry the conversation keys and must go into the same
-// decryptEvents batch as the data events.
+// decryptBatchAsync call as the data events.
 const keyEventsOf = (p) =>
   p.meta?.conversationKeyEvents ?? p.meta?.conversation_key_events ?? [];
 
@@ -128,28 +116,12 @@ if (nextToken) {
   console.log(`pagination: fetched second page with ${raw2.length} events`);
 }
 
-const ids = new Set([myId]);
-for (const e of raw) {
-  const s = String(e.senderId ?? e.sender_id ?? "");
-  if (s) ids.add(s);
-}
-const signing = [];
-const pksByUser = new Map();
-for (const id of ids) {
-  try {
-    const pks = await api.getPublicKeys(id);
-    pksByUser.set(id, pks);
-    for (const pk of pks) signing.push(signingFrom(pk, id));
-  } catch {
-    /* ignore */
-  }
-}
-
+// The SDK fetches the signing keys of whoever signed the events.
 const eventsB64 = [
   ...keyEventsB64,
   ...raw.map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
 ];
-let batch = core.decryptBatch(eventsB64, signing);
+let batch = await core.decryptBatchAsync(eventsB64);
 const decrypted = batch.events.filter((m) => messageText(m.event)).length;
 let convKeys = { ...batch.conversationKeys.keys };
 console.log(
@@ -168,17 +140,16 @@ for (const m of batch.events) {
     lastInboundB64 = m.originalB64;
   }
 }
-const partnerId = [...ids].find((id) => id !== myId);
+const partnerId = raw
+  .map((e) => String(e.senderId ?? e.sender_id ?? ""))
+  .find((id) => id && id !== myId);
 assert(partnerId, "expected a conversation partner among the senders");
 
 // -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE -------------
-const bothKeys = [
-  ...keyEntries(pksByUser.get(myId) ?? [], myId),
-  ...keyEntries(pksByUser.get(partnerId) ?? [], partnerId),
-];
-const prep = core.prepareConversationKeyChange({
-  publicKeys: bothKeys,
-});
+// The one-to-one is named by the partner's id and no public keys are passed:
+// the SDK reads both users' identity keys from the public keys it holds,
+// fetching the ones it lacks.
+const prep = await core.prepareConversationKeyChangeAsync({ conversationId: partnerId });
 const resp = await api.addConversationKeys(conv, prepToRequest(prep));
 const data = resp.data ?? {};
 assert(
@@ -199,13 +170,10 @@ console.log(
 const kv = prep.conversationKeyVersion;
 for (let i = 0; i < 5; i++) {
   const page3 = await api.getEvents(conv, { maxResults: 10 });
-  batch = core.decryptBatch(
-    [
-      ...keyEventsOf(page3),
-      ...(page3.data ?? []).map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
-    ],
-    signing,
-  );
+  batch = await core.decryptBatchAsync([
+    ...keyEventsOf(page3),
+    ...(page3.data ?? []).map((e) => e.encodedEvent ?? e.encoded_event).filter(Boolean),
+  ]);
   convKeys = { ...batch.conversationKeys.keys };
   if (convKeys[kv]) break;
   await sleep(1500);
@@ -228,14 +196,7 @@ const body = core.encryptReply({
 await api.sendMessage(canonicalConv, body);
 console.log(`sent live encrypted message: ${JSON.stringify(marker)}`);
 
-const { event: one, b64: oneB64 } = await awaitDecrypted(
-  api,
-  core,
-  conv,
-  convKeys,
-  signing,
-  body.message_id,
-);
+const { event: one, b64: oneB64 } = await awaitDecrypted(api, core, conv, convKeys, body.message_id);
 assert(messageText(one) === `@user ${marker}`, `round-trip text mismatch: ${JSON.stringify(one)}`);
 assert(one.verified === true, "own sent message failed signature verification");
 console.log("sent message decrypted + verified via the single-event path");
@@ -249,7 +210,7 @@ const add = core.encryptReaction({
   conversationKeyVersion: kv,
 });
 await api.sendMessage(canonicalConv, add);
-const { event: reaction } = await awaitDecrypted(api, core, conv, convKeys, signing, add.message_id);
+const { event: reaction } = await awaitDecrypted(api, core, conv, convKeys, add.message_id);
 assert(
   reaction.content?.contentType === "reaction" && reaction.content?.emoji === "\u{1f44d}",
   `expected a reaction event, got ${JSON.stringify(reaction.content)}`,
@@ -303,7 +264,6 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
     core,
     conv,
     convKeys,
-    signing,
     mediaMsg.message_id,
   );
   assert(mediaOne.verified === true, "media message failed signature verification");
@@ -322,14 +282,13 @@ if (process.env.CHATXDK_E2E_MEDIA === "1") {
 
 // -- 6. Optional: group create + message + member add ------------------------
 if (process.env.CHATXDK_E2E_GROUPS === "1") {
-  const myKeys = keyEntries(pksByUser.get(myId) ?? [], myId);
   const groupId = await api.initializeGroup();
   assert(groupId.startsWith("g"), `unexpected group id: ${groupId}`);
 
   // Create with the caller as sole member/admin so the member add below
-  // exercises prepareGroupMembersChange with the partner.
-  let gPrep = core.prepareGroupCreate({
-    publicKeys: myKeys,
+  // exercises prepareGroupMembersChangeAsync with the partner. No call below
+  // passes public keys: the SDK holds both users' keys from the key rotation.
+  let gPrep = await core.prepareGroupCreateAsync({
     conversationId: groupId,
     memberIds: [myId],
     adminIds: [myId],
@@ -347,8 +306,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
   } catch {
     // Some deployments reject single-member groups; fall back to creating
     // with both participants (skipping the member-add below).
-    gPrep = core.prepareGroupCreate({
-      publicKeys: bothKeys,
+    gPrep = await core.prepareGroupCreateAsync({
       conversationId: groupId,
       memberIds: [myId, partnerId],
       adminIds: [myId],
@@ -375,14 +333,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     conversationKeyVersion: gkv,
   });
   await api.sendMessage(groupId, gBody);
-  const { event: gOne } = await awaitDecrypted(
-    api,
-    core,
-    groupId,
-    { [gkv]: gkey },
-    signing,
-    gBody.message_id,
-  );
+  const { event: gOne } = await awaitDecrypted(api, core, groupId, { [gkv]: gkey }, gBody.message_id);
   assert(
     messageText(gOne) === gMarker && gOne.verified === true,
     `group message round-trip failed: ${JSON.stringify(gOne)}`,
@@ -390,8 +341,7 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
   console.log("group message decrypted + verified");
 
   if (!members.includes(partnerId)) {
-    const mPrep = core.prepareGroupMembersChange({
-      publicKeys: bothKeys,
+    const mPrep = await core.prepareGroupMembersChangeAsync({
       conversationId: groupId,
       newMemberIds: [partnerId],
       currentMemberIds: members,
@@ -406,10 +356,10 @@ if (process.env.CHATXDK_E2E_GROUPS === "1") {
     );
   }
 
-  const rPrep = core.prepareGroupMembersRemove({
-    publicKeys: myKeys,
+  const rPrep = await core.prepareGroupMembersRemoveAsync({
     conversationId: groupId,
     userIds: [partnerId],
+    remainingMemberIds: [myId],
   });
   await api.removeGroupMembers(groupId, removalToRequest([partnerId], rPrep));
   console.log(

@@ -4,7 +4,7 @@
 //! testable and free of any HTTP dependency. [`HttpChatApi`] is the HTTP
 //! implementation (over `ureq`), compiled only with the `http` feature.
 
-use chat_xdk_core::SigningKeyEntry;
+use chat_xdk_core::PublicKeyRecord;
 
 /// One raw (encrypted) event from a conversation. `id` is the event's
 /// sequence id (the API exposes sequence_id as id).
@@ -18,7 +18,9 @@ pub struct EventItem {
 /// The X Chat API surface the bot needs.
 pub trait ChatApi {
     fn get_my_user_id(&self) -> Result<String, String>;
-    fn get_public_keys(&self, user_id: &str) -> Result<Vec<SigningKeyEntry>, String>;
+    /// A user's public keys: the records `GET /2/users/{id}/public_keys`
+    /// returns, one per key version. The SDK takes them as they are.
+    fn get_public_keys(&self, user_id: &str) -> Result<Vec<PublicKeyRecord>, String>;
     /// Fetch a page of raw (encrypted) events.
     ///
     /// Returns `(events, key_events, next_token)`. KeyChange events arrive in
@@ -339,7 +341,7 @@ mod http_impl {
         // signing_public_key, identity_public_key_signature,
         // public_key_version, juicebox_config) is always included; the route
         // takes no public_key.fields parameter.
-        fn get_public_keys(&self, user_id: &str) -> Result<Vec<SigningKeyEntry>, String> {
+        fn get_public_keys(&self, user_id: &str) -> Result<Vec<PublicKeyRecord>, String> {
             let path = format!("/2/users/{user_id}/public_keys");
             let v = self.get_json(&path)?;
             let items = match &v["data"] {
@@ -347,19 +349,12 @@ mod http_impl {
                 Value::Object(_) => vec![v["data"].clone()],
                 _ => vec![],
             };
-            Ok(items
-                .iter()
-                .map(|pk| {
-                    let field = |name: &str| pk[name].as_str().unwrap_or("").to_string();
-                    SigningKeyEntry::new(
-                        user_id,
-                        field("public_key_version"),
-                        field("signing_public_key"),
-                        field("public_key"),
-                        field("identity_public_key_signature"),
-                    )
+            items
+                .into_iter()
+                .map(|record| {
+                    serde_json::from_value::<PublicKeyRecord>(record).map_err(|e| e.to_string())
                 })
-                .collect())
+                .collect()
         }
 
         fn get_events(

@@ -110,7 +110,7 @@ fn versions(entries: &[(&str, &str)]) -> HashMap<String, String> {
 }
 
 /// The text of each message among a batch's decrypted events.
-fn message_texts(result: &DecryptEventsResult) -> Vec<&str> {
+pub(super) fn message_texts(result: &DecryptEventsResult) -> Vec<&str> {
     result
         .events
         .iter()
@@ -123,14 +123,14 @@ fn message_texts(result: &DecryptEventsResult) -> Vec<&str> {
 
 /// An admin who rotates a group's key, a member who then sends a message
 /// under it, and the bot that receives both.
-struct Group {
-    admin: Party,
-    member: Party,
-    bot: Party,
+pub(super) struct Group {
+    pub(super) admin: Party,
+    pub(super) member: Party,
+    pub(super) bot: Party,
 }
 
 impl Group {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             admin: Party::new("5001"),
             member: Party::new("5002"),
@@ -140,7 +140,7 @@ impl Group {
 
     /// The admin's key change at `sequence_id`, and a message from the
     /// member under its key.
-    fn page(&self, sequence_id: &str) -> (ThriftMessageEvent, String) {
+    pub(super) fn page(&self, sequence_id: &str) -> (ThriftMessageEvent, String) {
         let (change, key) = key_change(
             &self.admin,
             &[&self.admin, &self.member, &self.bot],

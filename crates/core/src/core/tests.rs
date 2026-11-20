@@ -342,5 +342,6 @@ mod key_change_signers;
 mod keys;
 mod messages;
 mod prepare;
+mod public_keys;
 mod replies;
 mod verification;

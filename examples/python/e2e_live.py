@@ -6,6 +6,9 @@ Run manually after `pip install -r requirements.txt`:
     CHATXDK_E2E=1 X_ACCESS_TOKEN=... CHAT_PRIVATE_KEYS_B64=... \\
     CHAT_SIGNING_KEY_VERSION=... CHAT_CONVERSATION_ID=... python e2e_live.py
 
+The SDK fetches the public keys it lacks through the hook
+``ChatCore.fetch_public_keys_with`` sets: this script fetches and passes none.
+
 Flow (each numbered step asserts against the live API):
   1. batch-decrypt inbound history (pagination when a second page exists)
   2. rotate the conversation key (prepare -> POST /keys -> decrypt own CKCE)
@@ -36,39 +39,19 @@ from chat_core import ChatCore, message_text, prep_to_request, removal_to_reques
 from x_api import XChatClient
 
 
-def _signing_from(pk: dict, user_id: str) -> dict:
-    return {
-        "user_id": user_id,
-        "public_key_version": str(pk.get("public_key_version") or ""),
-        "public_key": pk.get("signing_public_key") or "",
-        "identity_public_key": pk.get("public_key") or "",
-        "identity_public_key_signature": pk.get("identity_public_key_signature") or "",
-    }
-
-
-def _key_entries(pks: list[dict], user_id: str) -> list[dict]:
-    """Public-keys response -> the flat entries the prepare methods take."""
-    return [
-        {
-            "user_id": user_id,
-            "identity_public_key": pk.get("public_key") or "",
-            "public_key_version": str(pk.get("public_key_version") or ""),
-        }
-        for pk in pks
-    ]
-
-
 def _await_decrypted(
     api: XChatClient,
     core: ChatCore,
     conversation_id: str,
     conv_keys: dict[str, bytes],
-    signing: list[dict],
     message_id: str,
     tries: int = 10,
 ) -> dict:
     """Poll the conversation until the event for ``message_id`` lands, and
     return it decrypted via the single-event path (``decrypt_one``).
+
+    The single-event path fetches no public keys: the event is one this
+    account sent, and the SDK holds this account's keys from the key rotation.
 
     The target envelope is matched by its raw event id before decrypting, so a
     decrypt failure on our own event (e.g. a broken sign->verify loop) surfaces
@@ -81,7 +64,7 @@ def _await_decrypted(
                 continue
             is_target = str(e.get("id") or "") == message_id
             try:
-                one = core.decrypt_one(e["encoded_event"], conv_keys, signing)
+                one = core.decrypt_one(e["encoded_event"], conv_keys)
             except Exception as err:
                 if is_target:
                     last_err = err
@@ -112,6 +95,8 @@ def main() -> None:
     my_id = api.get_my_user_id()
     # All signed actions below resolve their sender from the session identity.
     core.set_identity(my_id)
+    # The SDK fetches the public keys it lacks through the API client.
+    core.fetch_public_keys_with(api.get_public_keys)
 
     # KeyChange events arrive in meta.conversation_key_events, separate from
     # data; they carry the conversation keys and must go into the same
@@ -133,19 +118,9 @@ def main() -> None:
         key_events_b64 += key_events_of(page2)
         print(f"pagination: fetched second page with {len(raw2)} events")
 
-    ids = {my_id} | {str(e.get("sender_id")) for e in raw if e.get("sender_id")}
-    signing: list[dict] = []
-    pks_by_user: dict[str, list[dict]] = {}
-    for uid in ids:
-        try:
-            pks = api.get_public_keys(uid)
-            pks_by_user[uid] = pks
-            signing.extend(_signing_from(pk, uid) for pk in pks)
-        except Exception:
-            pass
-
+    # The SDK fetches the signing keys of whoever signed the events.
     events_b64 = key_events_b64 + [e["encoded_event"] for e in raw if e.get("encoded_event")]
-    batch = core.decrypt_batch(events_b64, signing)
+    batch = core.decrypt_batch(events_b64)
     decrypted = sum(1 for m in batch["events"] if message_text(m["event"]))
     conv_keys = dict(batch["conversation_keys"]["keys"])
     print(f"live inbound messages decrypted: {decrypted}; conversation keys: {len(conv_keys)}")
@@ -153,7 +128,8 @@ def main() -> None:
 
     # Canonical conversation_id + partner id from the decrypted events.
     canonical_conv = conversation_id
-    partner_id = next(iter(ids - {my_id}), None)
+    senders = [str(e.get("sender_id")) for e in raw if e.get("sender_id")]
+    partner_id = next((sender for sender in senders if sender != my_id), None)
     last_inbound_event = None
     for m in batch["events"]:
         ev = m["event"] or {}
@@ -164,10 +140,10 @@ def main() -> None:
     assert partner_id, "expected a conversation partner among the senders"
 
     # -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE ---------
-    both_keys = _key_entries(pks_by_user.get(my_id) or [], my_id) + _key_entries(
-        pks_by_user.get(partner_id) or [], partner_id
-    )
-    prep = core.prepare_conversation_key_change(both_keys)
+    # The one-to-one is named by the partner's id and no public keys are
+    # passed: the SDK reads both users' identity keys from the public keys it
+    # holds, fetching the ones it lacks.
+    prep = core.prepare_conversation_key_change(conversation_id=partner_id)
     resp = api.add_conversation_keys(conversation_id, prep_to_request(prep))
     data = resp.get("data") or {}
     assert data.get("sequence_id") or data.get("conversation_key_change_sequence_id"), (
@@ -185,7 +161,7 @@ def main() -> None:
         events_b64 = key_events_of(page) + [
             e["encoded_event"] for e in (page.get("data") or []) if e.get("encoded_event")
         ]
-        batch = core.decrypt_batch(events_b64, signing)
+        batch = core.decrypt_batch(events_b64)
         conv_keys = dict(batch["conversation_keys"]["keys"])
         if kv in conv_keys:
             break
@@ -211,7 +187,7 @@ def main() -> None:
     api.send_message(canonical_conv, body)
     print(f"sent live encrypted message: {marker!r}")
 
-    one = _await_decrypted(api, core, conversation_id, conv_keys, signing, body["message_id"])
+    one = _await_decrypted(api, core, conversation_id, conv_keys, body["message_id"])
     assert message_text(one) == f"@user {marker}", f"round-trip text mismatch: {one}"
     assert one.get("verified") is True, "own sent message failed signature verification"
     seq = str(one.get("sequence_id") or "")
@@ -228,7 +204,7 @@ def main() -> None:
         conversation_key_version=kv,
     )
     api.send_message(canonical_conv, add)
-    one = _await_decrypted(api, core, conversation_id, conv_keys, signing, add["message_id"])
+    one = _await_decrypted(api, core, conversation_id, conv_keys, add["message_id"])
     content = one.get("content") or {}
     assert content.get("content_type") == "Reaction" and content.get("emoji") == "\U0001f44d", (
         f"expected a Reaction event, got {content}"
@@ -277,7 +253,7 @@ def main() -> None:
         api.finish_media_upload(canonical_conv, session_id, media_hash_key, ciphertext)
         print(f"encrypted media uploaded: {media_hash_key} ({len(ciphertext)} bytes)")
         api.send_message(canonical_conv, media_msg)
-        one = _await_decrypted(api, core, conversation_id, conv_keys, signing, media_msg["message_id"])
+        one = _await_decrypted(api, core, conversation_id, conv_keys, media_msg["message_id"])
         assert one.get("verified") is True, "media message failed signature verification"
         atts = (one.get("content") or {}).get("attachments") or []
         got_key = next(
@@ -292,7 +268,7 @@ def main() -> None:
 
     # -- 6. Optional: group create + message + member add --------------------
     if os.environ.get("CHATXDK_E2E_GROUPS") == "1":
-        _groups_flow(api, core, my_id, partner_id, both_keys, signing)
+        _groups_flow(api, core, my_id, partner_id)
 
     # -- 7. Optional: live Juicebox unlock -----------------------------------
     pin = os.environ.get("CHAT_PIN")
@@ -308,22 +284,15 @@ def main() -> None:
     print("E2E PYTHON: PASS")
 
 
-def _groups_flow(
-    api: XChatClient,
-    core: ChatCore,
-    my_id: str,
-    partner_id: str,
-    both_keys: list[dict],
-    signing: list[dict],
-) -> None:
-    my_keys = [k for k in both_keys if k["user_id"] == my_id]
-
+def _groups_flow(api: XChatClient, core: ChatCore, my_id: str, partner_id: str) -> None:
+    """The group calls pass no public keys: the SDK reads the identity keys
+    of the members each call names from the public keys it holds."""
     group_id = api.initialize_group()
     assert group_id.startswith("g"), f"unexpected group id: {group_id!r}"
 
     # Create with the caller as sole member/admin so the member add below
     # exercises prepare_group_members_change with the partner.
-    prep = core.prepare_group_create(my_keys, group_id, [my_id], [my_id], title="chat-xdk e2e")
+    prep = core.prepare_group_create(None, group_id, [my_id], [my_id], title="chat-xdk e2e")
     body = {
         "conversation_id": group_id,
         "group_members": [my_id],
@@ -338,7 +307,7 @@ def _groups_flow(
         # Some deployments reject single-member groups; fall back to creating
         # with both participants (skipping the member-add below).
         prep = core.prepare_group_create(
-            both_keys, group_id, [my_id, partner_id], [my_id], title="chat-xdk e2e"
+            None, group_id, [my_id, partner_id], [my_id], title="chat-xdk e2e"
         )
         body = {
             "conversation_id": group_id,
@@ -362,23 +331,23 @@ def _groups_flow(
     )
     api.send_message(group_id, msg)
     conv_keys = {kv: key}
-    one = _await_decrypted(api, core, group_id, conv_keys, signing, msg["message_id"])
+    one = _await_decrypted(api, core, group_id, conv_keys, msg["message_id"])
     assert message_text(one) == marker and one.get("verified") is True, (
         f"group message round-trip failed: {one}"
     )
     print("group message decrypted + verified")
 
     if partner_id not in members:
-        prep = core.prepare_group_members_change(
-            both_keys, group_id, [partner_id], members, [my_id]
-        )
+        prep = core.prepare_group_members_change(None, group_id, [partner_id], members, [my_id])
         api.add_group_members(
             group_id,
             {"user_ids": [partner_id], **prep_to_request(prep)},
         )
         print(f"group member add: {partner_id} added (key rotated to {prep['conversation_key_version']})")
 
-    prep = core.prepare_group_members_remove(my_keys, group_id, [partner_id])
+    prep = core.prepare_group_members_remove(
+        None, group_id, [partner_id], remaining_member_ids=[my_id]
+    )
     api.remove_group_members(group_id, removal_to_request([partner_id], prep))
     print(
         f"group member remove: {partner_id} removed "

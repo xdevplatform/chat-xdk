@@ -19,6 +19,9 @@ import (
 //	CHATXDK_E2E=1 X_ACCESS_TOKEN=... CHAT_PRIVATE_KEYS_B64=... CHAT_SIGNING_KEY_VERSION=... \
 //	CHAT_CONVERSATION_ID=... go test -run TestE2ELive -v
 //
+// The SDK fetches the public keys it lacks through the hook
+// ChatCore.FetchPublicKeysWith sets: the test fetches and passes none.
+//
 // Flow (each numbered step asserts against the live API):
 //  1. batch-decrypt inbound history (pagination when a second page exists)
 //  2. rotate the conversation key (prepare -> POST /keys -> decrypt own CKCE)
@@ -61,6 +64,8 @@ func TestE2ELive(t *testing.T) {
 	if err := core.SetIdentity(myID); err != nil {
 		t.Fatalf("SetIdentity: %v", err)
 	}
+	// The SDK fetches the public keys it lacks through the API client.
+	core.FetchPublicKeysWith(api.GetPublicKeys)
 
 	// -- 1. Inbound history: batch decrypt (+ pagination when available) ----
 	raw, keyEventsPage1, next, err := api.GetEvents(conv, 10, "")
@@ -90,49 +95,16 @@ func TestE2ELive(t *testing.T) {
 		t.Logf("pagination: fetched second page with %d events", len(raw2))
 	}
 
-	// Build signing keys for every sender plus self (for verification), and
-	// keep each user's raw public-keys rows for the prepare calls below.
-	seen := map[string]bool{myID: true}
-	ids := []string{myID}
-	for _, e := range raw {
-		if e.SenderID != "" && !seen[e.SenderID] {
-			seen[e.SenderID] = true
-			ids = append(ids, e.SenderID)
-		}
-	}
-	var signing []chatxdk.SigningKeyEntry
-	pksByUser := map[string][]map[string]any{}
-	for _, id := range ids {
-		pks, err := api.GetPublicKeys(id)
-		if err != nil {
-			continue
-		}
-		pksByUser[id] = pks
-		for _, pk := range pks {
-			signing = append(signing, chatxdk.SigningKeyEntry{
-				UserID:                     id,
-				PublicKeyVersion:           str(pk["public_key_version"]),
-				PublicKey:                  str(pk["signing_public_key"]),
-				IdentityPublicKey:          str(pk["public_key"]),
-				IdentityPublicKeySignature: str(pk["identity_public_key_signature"]),
-			})
-		}
-	}
-	// Store the signing keys once; every decrypt call below passes nil and
-	// verifies against this set.
-	if err := core.SetSigningKeys(signing); err != nil {
-		t.Fatalf("SetSigningKeys: %v", err)
-	}
-
 	// The KeyChange events from meta.conversation_key_events carry the
 	// conversation keys; they must be in the same batch as the messages.
+	// The SDK fetches the signing keys of whoever signed the events.
 	eventsB64 := append([]string{}, keyEventsPage1...)
 	for _, e := range raw {
 		if e.EncodedEvent != "" {
 			eventsB64 = append(eventsB64, e.EncodedEvent)
 		}
 	}
-	batch, err := core.DecryptBatch(eventsB64, nil)
+	batch, err := core.DecryptBatch(eventsB64)
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
@@ -168,9 +140,9 @@ func TestE2ELive(t *testing.T) {
 		}
 	}
 	partnerID := ""
-	for _, id := range ids {
-		if id != myID {
-			partnerID = id
+	for _, e := range raw {
+		if e.SenderID != "" && e.SenderID != myID {
+			partnerID = e.SenderID
 			break
 		}
 	}
@@ -179,8 +151,10 @@ func TestE2ELive(t *testing.T) {
 	}
 
 	// -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE ---------
-	bothKeys := append(keyEntries(pksByUser[myID], myID), keyEntries(pksByUser[partnerID], partnerID)...)
-	prep, err := core.PrepareConversationKeyChange(bothKeys, "")
+	// The one-to-one is named by the partner's id and no public keys are
+	// passed: the SDK reads both users' identity keys from the public keys
+	// it holds, fetching the ones it lacks.
+	prep, err := core.PrepareConversationKeyChange(nil, partnerID)
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
@@ -215,7 +189,7 @@ func TestE2ELive(t *testing.T) {
 				eventsB64 = append(eventsB64, e.EncodedEvent)
 			}
 		}
-		batch, err = core.DecryptBatch(eventsB64, nil)
+		batch, err = core.DecryptBatch(eventsB64)
 		if err != nil {
 			t.Fatalf("DecryptBatch: %v", err)
 		}
@@ -367,22 +341,20 @@ func TestE2ELive(t *testing.T) {
 
 	// -- 6. Optional: group create + message + member add --------------------
 	if os.Getenv("CHATXDK_E2E_GROUPS") == "1" {
-		groupsFlow(t, api, core, myID, partnerID, bothKeys)
+		groupsFlow(t, api, core, myID, partnerID)
 	}
 
 	t.Log("E2E GO: PASS")
 }
 
 // groupsFlow creates a group (two-signature create), sends and verifies a
-// group message under the fresh key, and adds the 1:1 partner as a member.
-func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID string, bothKeys []chatxdk.PublicKeyInput) {
+// group message under the fresh key, adds the 1:1 partner as a member, and
+// removes that partner again.
+//
+// The group calls pass no public keys: the SDK reads the identity keys of
+// the members each call names from the public keys it holds.
+func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID string) {
 	t.Helper()
-	var myKeys []chatxdk.PublicKeyInput
-	for _, k := range bothKeys {
-		if k.UserID == myID {
-			myKeys = append(myKeys, k)
-		}
-	}
 	groupID, err := api.InitializeGroup()
 	if err != nil {
 		t.Fatalf("InitializeGroup: %v", err)
@@ -393,7 +365,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 
 	// Create with the caller as sole member/admin so the member add below
 	// exercises PrepareGroupMembersChange with the partner.
-	prep, err := core.PrepareGroupCreate(myKeys, groupID, []string{myID}, []string{myID}, "chat-xdk e2e")
+	prep, err := core.PrepareGroupCreate(nil, groupID, []string{myID}, []string{myID}, "chat-xdk e2e")
 	if err != nil {
 		t.Fatalf("PrepareGroupCreate: %v", err)
 	}
@@ -401,7 +373,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 	if _, err := api.CreateConversation(groupBody(groupID, members, myID, prep)); err != nil {
 		// Some deployments reject single-member groups; fall back to creating
 		// with both participants (skipping the member-add below).
-		prep, err = core.PrepareGroupCreate(bothKeys, groupID, []string{myID, partnerID}, []string{myID}, "chat-xdk e2e")
+		prep, err = core.PrepareGroupCreate(nil, groupID, []string{myID, partnerID}, []string{myID}, "chat-xdk e2e")
 		if err != nil {
 			t.Fatalf("PrepareGroupCreate (fallback): %v", err)
 		}
@@ -440,7 +412,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 		}
 	}
 	if !partnerIsMember {
-		mPrep, err := core.PrepareGroupMembersChange(bothKeys, groupID, []string{partnerID}, members, []string{myID})
+		mPrep, err := core.PrepareGroupMembersChange(nil, groupID, []string{partnerID}, members, []string{myID})
 		if err != nil {
 			t.Fatalf("PrepareGroupMembersChange: %v", err)
 		}
@@ -452,7 +424,7 @@ func groupsFlow(t *testing.T, api *XChatClient, core *ChatCore, myID, partnerID 
 		t.Logf("group member add: %s added (key rotated to %s)", partnerID, mPrep.ConversationKeyVersion)
 	}
 
-	rPrep, err := core.PrepareGroupMembersRemove(myKeys, groupID, []string{partnerID})
+	rPrep, err := core.PrepareGroupMembersRemove(nil, groupID, []string{partnerID}, []string{myID})
 	if err != nil {
 		t.Fatalf("PrepareGroupMembersRemove: %v", err)
 	}
@@ -474,25 +446,11 @@ func groupBody(groupID string, members []string, adminID string, prep *chatxdk.P
 	return body
 }
 
-// keyEntries converts public-keys response rows into the flat entries the
-// prepare methods take.
-func keyEntries(pks []map[string]any, userID string) []chatxdk.PublicKeyInput {
-	entries := make([]chatxdk.PublicKeyInput, 0, len(pks))
-	for _, pk := range pks {
-		version := str(pk["public_key_version"])
-		entries = append(entries, chatxdk.PublicKeyInput{
-			UserID:            userID,
-			IdentityPublicKey: str(pk["public_key"]),
-			PublicKeyVersion:  version,
-		})
-	}
-	return entries
-}
-
 // awaitDecrypted polls the conversation until the event for messageID lands,
-// and returns it decrypted via the single-event path (DecryptOne, verifying
-// against the stored signing keys) together with its raw base64 envelope
-// (the anchor for reactions and replies).
+// and returns it decrypted via the single-event path (DecryptOne) together
+// with its raw base64 envelope (the anchor for reactions and replies). The
+// single-event path fetches no public keys: the event is one this account
+// sent, and the SDK holds this account's keys from the key rotation.
 //
 // The target envelope is matched by its raw event id before decrypting, so a
 // decrypt failure on our own event (e.g. a broken sign->verify loop) surfaces
@@ -510,7 +468,7 @@ func awaitDecrypted(t *testing.T, api *XChatClient, core *ChatCore, conversation
 				continue
 			}
 			isTarget := e.ID == messageID
-			one, err := core.DecryptOne(e.EncodedEvent, convKeys, nil)
+			one, err := core.DecryptOne(e.EncodedEvent, convKeys)
 			if err != nil {
 				if isTarget {
 					lastErr = err
@@ -553,6 +511,14 @@ func attachmentMediaHashKey(msg *chatxdk.Message) string {
 		if a.Media != nil {
 			return a.Media.MediaHashKey
 		}
+	}
+	return ""
+}
+
+// str returns a decoded JSON value when it is a string, or "".
+func str(v any) string {
+	if s, ok := v.(string); ok {
+		return s
 	}
 	return ""
 }

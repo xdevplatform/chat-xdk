@@ -523,6 +523,14 @@ Holds:
 - `reject_unverified: bool` — signature verification policy (defaults to `true`)
 - `conversation_key_high_water: RwLock<HashMap<String, u64>>` — per-conversation monotonic high-water mark of verified key versions, backing the anti-downgrade guarantee on `latest_version`
 - `owner_user_id: RwLock<Option<String>>` — the session identity's user id, set by `set_identity`
+- `conversation_key_cache` — the opt-in key cache (`set_cache_keys`): per conversation, every key version whose key change verified in `decrypt_events` or `decrypt_event`, and every key a prepare call of this instance made
+- `signing_key_cache` — other users' public keys, by user id and key version, filled by `set_signing_keys`, `add_signing_keys` and `add_public_keys`; the decrypt calls verify with it and the prepare calls that make a conversation key encrypt to it when they are passed no keys
+- `public_key_lookups` — the public-key lookups `missing_public_keys` and `missing_public_keys_for` asked for, each remembered for a minute so it is not repeated
+- `resolve_public_keys` — the Rust public-keys hook (`set_resolve_public_keys`); the other bindings keep their hook in their own language and call these same core methods around it, so no callback crosses the wasm, pyo3 or C boundary
+
+One `ChatCore` holds one user's keys and state for all of that user's
+conversations. A process with several signed-in users keeps one per user
+(see [API.md](API.md#many-users-many-conversations)).
 
 The file methods (`encrypt_file` / `file_encryptor` / `decrypt_file` /
 `file_decryptor`) need no session identity: `core/media.rs` finds the
@@ -637,9 +645,9 @@ Developer                          SDK
     │                               │  1. Resolve inputs: sender_id / signing_key_version
     │                               │     from params or the session identity (set_identity);
     │                               │     the raw conversation key + version from params or
-    │                               │     the opt-in key cache (ECIES decryption happened
-    │                               │     earlier, in decrypt_conversation_key /
-    │                               │     extract_conversation_keys / decrypt_events)
+    │                               │     the opt-in key cache (filled earlier, by a
+    │                               │     verified key change in decrypt_events or
+    │                               │     decrypt_event, or by a prepare call)
     │                               │  2. Build rich-text entities (if provided)
     │                               │  3. Serialize text + entities as Thrift MessageEntryHolder
     │                               │  4. Take the message id (derived from the files'
@@ -711,7 +719,10 @@ Developer                          SDK
 ```
 
 > In practice prefer the batch `decrypt_events`, which performs Step 1
-> internally and verifies each event's signing-key binding.
+> internally and verifies each event's signing-key binding. Its result lists
+> the events whose sender's signing key it did not have
+> (`missing_signing_keys`); with a public-keys hook set, the call fetches
+> those users' keys and decrypts the batch once more.
 
 ---
 

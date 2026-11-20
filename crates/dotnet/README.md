@@ -98,9 +98,91 @@ changes use the conversation's newest key, and `DecryptEvent`, `DecryptFile`
 and `FileDecryptor` the key at the version the event names. So
 `DecryptFileParams` and `FileDecryptorParams` can be created without a key
 map, and `GroupAvatarChangeParams` without a key version. A value that is
-passed is used as is.
+passed is used as is. The cache keeps every key version of a conversation,
+so a message or file sent before a key change still decrypts after it.
+`PrepareConversationKeyChange`, `PrepareGroupCreate`,
+`PrepareGroupMembersChange` and `PrepareGroupMembersRemove` cache the key
+they make as the conversation's newest, so a send right after one of them
+uses that key.
 
 Stateless helpers (base64/hex, MIME sniffing, image dimensions) live on **`ChatXdkUtilities`**.
+
+## Other users' public keys
+
+`DecryptEvents` verifies each event with its sender's signing key, and the
+four prepare calls that make a conversation key (`PrepareGroupCreate`,
+`PrepareGroupMembersChange`, `PrepareGroupMembersRemove`,
+`PrepareConversationKeyChange`) encrypt it to each member's identity key.
+Both are in the records `GET /2/users/{id}/public_keys` returns. Set
+`ResolvePublicKeys` to a hook that fetches those records, and the `Async`
+form of each of those calls gets the keys it is missing by itself:
+
+```csharp
+chat.ResolvePublicKeys = async userIds =>
+{
+    var records = new Dictionary<string, IReadOnlyList<PublicKeyRecord>>();
+    foreach (var userId in userIds)
+    {
+        // The "data" array of GET /2/users/{id}/public_keys, fetched with
+        // your X API client.
+        JsonElement data = await FetchPublicKeysAsync(userId);
+        records[userId] = data.Deserialize<List<PublicKeyRecord>>()!;
+    }
+    return records;
+};
+
+// No signing keys passed: the chat calls the hook for the users whose keys
+// the page is missing, stores what it returns, and decrypts once more.
+var page = await chat.DecryptEventsAsync(new DecryptEventsParams(rawEventB64List));
+
+// No public keys passed: the chat calls the hook for the members it has no
+// stored keys for, then encrypts the new key to the stored keys.
+var created = await chat.PrepareGroupCreateAsync(
+    new GroupCreateParams(groupId, memberIds, adminIds));
+```
+
+- Only `DecryptEventsAsync`, `PrepareConversationKeyChangeAsync`,
+  `PrepareGroupCreateAsync`, `PrepareGroupMembersChangeAsync` and
+  `PrepareGroupMembersRemoveAsync` call the hook, at most once per call. An
+  exception it throws is thrown by that call. The synchronous methods never
+  call it.
+- Setting a hook turns the key cache on (`SetCacheKeys(true)`).
+- `page.MissingSigningKeys` lists, by event index, the user id and key
+  version of each signing key the page still lacks. A lookup that did not
+  bring its key is not repeated for a minute, so the hook is not called with
+  every page for a key it cannot find.
+- Without a hook, do the same by hand: `chat.MissingPublicKeys(page)` returns
+  the users to fetch, `chat.AddPublicKeys(records)` stores their records, and
+  a second `DecryptEvents` reads them.
+- With no `PublicKeys`, the prepare calls, synchronous or `Async`, read the
+  stored keys of `MemberIds` and `AdminIds` (create), `CurrentMemberIds` and
+  `NewMemberIds` (members change), `RemainingMemberIds` (members remove), and
+  `MemberIds` or the two users of a one-to-one `ConversationId` (key change).
+  A member with no stored key fails the call with a `ChatXdkException` of
+  kind `InvalidInput` that names the member.
+- A call that passes `SigningKeys` or `PublicKeys` uses them as is and never
+  calls the hook.
+
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Give each chat the same function,
+  over one cache of `GET /2/users/{id}/public_keys` answers for the whole
+  process. Have the cache share a lookup that is under way, drop a lookup
+  that failed so the next call tries again, and expire each answer after a
+  few minutes so a key a user registers later is picked up.
+  [`examples/dotnet/ChatBot/MultiUser.cs`](../../examples/dotnet/ChatBot/MultiUser.cs)
+  has one (`SharedPublicKeys`), with `UserChats` for the chats.
+- **Add keys, don't replace them.** `SetSigningKeys` replaces every stored
+  key, the ones the hook fetched included, and the chat then waits a minute
+  before it asks the hook for them again. With a hook set, add keys with
+  `AddSigningKeys` or `AddPublicKeys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 

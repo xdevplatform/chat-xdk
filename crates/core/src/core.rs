@@ -35,6 +35,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use thrift::protocol::{TBinaryInputProtocol, TSerializable};
 
+pub use public_keys::{KeyChangeCall, ResolvePublicKeys, PUBLIC_KEYS_RETRY_MS};
+
 /// Sequence number at or above which a conversation key change with an
 /// invalid plaintext-key signature is dropped instead of adopted. Key changes
 /// below it are always kept, so older conversations stay readable; at or above
@@ -82,6 +84,12 @@ pub struct ChatCore {
     /// This instance's feature switches from `GET /2/chat/features`; all off
     /// until an answer turns them on.
     features: std::sync::Mutex<crate::features::ChatFeatures>,
+    /// The public-key lookups [`Self::missing_public_keys`] and
+    /// [`Self::missing_public_keys_for`] asked for, each until the time it
+    /// may be asked for again.
+    public_key_lookups: std::sync::Mutex<public_keys::PublicKeyLookups>,
+    /// The hook [`Self::set_resolve_public_keys`] set.
+    resolve_public_keys: std::sync::RwLock<Option<ResolvePublicKeys>>,
 }
 
 /// A cached conversation key with its version.
@@ -118,6 +126,8 @@ impl ChatCore {
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),
             signing_key_cache: std::sync::RwLock::new(Vec::new()),
             features: std::sync::Mutex::new(Default::default()),
+            public_key_lookups: std::sync::Mutex::new(HashMap::new()),
+            resolve_public_keys: std::sync::RwLock::new(None),
         }
     }
 
@@ -656,40 +666,9 @@ impl ChatCore {
         signing_keys: &[SigningKeyEntry],
         plaintext_ckey_b64: Option<&str>,
     ) -> SignatureCheck {
-        let Some(sig_data) = &parsed.message_event_signature else {
-            return SignatureCheck::Unsigned;
-        };
-        let Some(signature_b64) = &sig_data.signature else {
-            return SignatureCheck::Unsigned;
-        };
-
-        let Some(sig_version) = signature_version(parsed) else {
-            return SignatureCheck::UnacceptedVersion(
-                "signature_version is missing or not an integer".to_string(),
-            );
-        };
-        if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
-            return SignatureCheck::UnacceptedVersion(format!(
-                "signature_version {} is no longer accepted (minimum: {})",
-                sig_version,
-                crate::signatures::MIN_SIGNATURE_VERSION
-            ));
-        }
-        if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
-            return SignatureCheck::UnacceptedVersion(format!(
-                "signature_version {} is not supported (maximum: {})",
-                sig_version,
-                crate::signatures::MAX_SIGNATURE_VERSION
-            ));
-        }
-
-        let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
-        let Some(signing_key_b64) = signing_keys
-            .iter()
-            .find(|e| e.public_key_version == key_version)
-            .map(|e| e.public_key.as_str())
-        else {
-            return SignatureCheck::MissingSigningKey;
+        let signature = match event_signature(parsed, signing_keys) {
+            Ok(signature) => signature,
+            Err(check) => return check,
         };
 
         let Some(payload) = build_event_signature_payload(parsed, detail, plaintext_ckey_b64)
@@ -697,12 +676,12 @@ impl ChatCore {
             return SignatureCheck::NoPayload;
         };
 
-        let sig_bytes = base64_decode_or_empty(signature_b64);
-        match self.verify(signing_key_b64, &sig_bytes, &payload) {
+        let sig_bytes = base64_decode_or_empty(signature.signature_b64);
+        match self.verify(signature.signing_key_b64, &sig_bytes, &payload) {
             Ok(true) => SignatureCheck::Verified,
             Ok(false) => SignatureCheck::Mismatch(format!(
                 "ECDSA mismatch: key_version={}, payload_len={}",
-                key_version,
+                signature.key_version,
                 payload.len()
             )),
             Err(e) => SignatureCheck::Mismatch(format!("verify error: {}", e)),
@@ -813,6 +792,63 @@ impl SignatureCheck {
     pub(crate) fn is_verified(&self) -> bool {
         matches!(self, Self::Verified)
     }
+}
+
+/// An event's signature and the signing key that checks it.
+pub(crate) struct EventSignature<'a> {
+    /// The signature, base64.
+    signature_b64: &'a str,
+    /// The version of its sender's signing key the signature names.
+    key_version: &'a str,
+    /// That signing key, base64.
+    signing_key_b64: &'a str,
+}
+
+/// The signature `event` carries and, among `signing_keys`, the key at the
+/// key version it names. Otherwise why the signature cannot be checked: the
+/// event carries none, its signature version is not one this SDK accepts,
+/// or no key among `signing_keys` is at that key version.
+pub(crate) fn event_signature<'a>(
+    event: &'a MessageEvent,
+    signing_keys: &'a [SigningKeyEntry],
+) -> Result<EventSignature<'a>, SignatureCheck> {
+    let Some(sig_data) = &event.message_event_signature else {
+        return Err(SignatureCheck::Unsigned);
+    };
+    let Some(signature_b64) = &sig_data.signature else {
+        return Err(SignatureCheck::Unsigned);
+    };
+
+    let Some(sig_version) = signature_version(event) else {
+        return Err(SignatureCheck::UnacceptedVersion(
+            "signature_version is missing or not an integer".to_string(),
+        ));
+    };
+    if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
+        return Err(SignatureCheck::UnacceptedVersion(format!(
+            "signature_version {} is no longer accepted (minimum: {})",
+            sig_version,
+            crate::signatures::MIN_SIGNATURE_VERSION
+        )));
+    }
+    if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+        return Err(SignatureCheck::UnacceptedVersion(format!(
+            "signature_version {} is not supported (maximum: {})",
+            sig_version,
+            crate::signatures::MAX_SIGNATURE_VERSION
+        )));
+    }
+
+    let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
+    signing_keys
+        .iter()
+        .find(|e| e.public_key_version == key_version)
+        .map(|e| EventSignature {
+            signature_b64: signature_b64.as_str(),
+            key_version,
+            signing_key_b64: e.public_key.as_str(),
+        })
+        .ok_or(SignatureCheck::MissingSigningKey)
 }
 
 /// How an error names the signing key a signature was left unverified for
@@ -1958,6 +1994,7 @@ mod files;
 mod group_actions;
 mod key_cache;
 mod media;
+mod public_keys;
 mod signing;
 
 // Tests

@@ -1765,6 +1765,171 @@ pub struct RejectedSigningKey {
     pub public_key_version: String,
 }
 
+/// A signing key a `decrypt_events` call did not have: an event's signature
+/// names it, and it was not among the signing keys the call verified with.
+/// Fetch the user's public keys (`GET /2/users/{id}/public_keys`) and give
+/// them to the next call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct MissingSigningKey {
+    /// The user who sent the event, whose signing key it is.
+    pub user_id: String,
+    /// The version of that user's key the signature names.
+    pub public_key_version: String,
+}
+
+impl MissingSigningKey {
+    /// The signing key of `user_id` at `public_key_version`.
+    pub fn new(user_id: impl Into<String>, public_key_version: impl Into<String>) -> Self {
+        Self {
+            user_id: user_id.into(),
+            public_key_version: public_key_version.into(),
+        }
+    }
+}
+
+/// One of a user's public keys, as the X API returns it in the `data` of
+/// `GET /2/users/{id}/public_keys`.
+///
+/// A record deserializes from the API's own JSON: each field under its
+/// snake_case name or the camelCase name the X API client libraries give
+/// it, a `public_key_version` written as a string or a number, and any
+/// other field, such as `juicebox_config`, ignored. A field that is absent
+/// or null is empty, and [`crate::ChatCore::add_public_keys`] leaves out a
+/// record that lacks one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct PublicKeyRecord {
+    /// The version of this key (`public_key_version`).
+    pub public_key_version: String,
+    /// The user's identity public key (`public_key`), base64.
+    pub public_key: String,
+    /// The user's signing public key (`signing_public_key`), base64.
+    pub signing_public_key: String,
+    /// The signing key's signature over the identity key
+    /// (`identity_public_key_signature`), base64: what binds the two.
+    pub identity_public_key_signature: String,
+}
+
+impl PublicKeyRecord {
+    /// A record of the four values the SDK reads.
+    pub fn new(
+        public_key_version: impl Into<String>,
+        public_key: impl Into<String>,
+        signing_public_key: impl Into<String>,
+        identity_public_key_signature: impl Into<String>,
+    ) -> Self {
+        Self {
+            public_key_version: public_key_version.into(),
+            public_key: public_key.into(),
+            signing_public_key: signing_public_key.into(),
+            identity_public_key_signature: identity_public_key_signature.into(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKeyRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RecordVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RecordVisitor {
+            type Value = PublicKeyRecord;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a public key record from GET /2/users/{id}/public_keys")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut record = PublicKeyRecord::default();
+                while let Some(name) = map.next_key::<String>()? {
+                    let field = match name.as_str() {
+                        "public_key_version" | "publicKeyVersion" => &mut record.public_key_version,
+                        "public_key" | "publicKey" => &mut record.public_key,
+                        "signing_public_key" | "signingPublicKey" => &mut record.signing_public_key,
+                        "identity_public_key_signature" | "identityPublicKeySignature" => {
+                            &mut record.identity_public_key_signature
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                            continue;
+                        }
+                    };
+                    // A record that carries a field under both of its names
+                    // keeps the first value that is not empty.
+                    let RecordValue(value) = map.next_value()?;
+                    if field.is_empty() {
+                        *field = value;
+                    }
+                }
+                Ok(record)
+            }
+        }
+
+        deserializer.deserialize_map(RecordVisitor)
+    }
+}
+
+/// A value of a [`PublicKeyRecord`] field: a string, a whole number written
+/// as a number, or nothing.
+struct RecordValue(String);
+
+impl<'de> Deserialize<'de> for RecordValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+            type Value = RecordValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a string, a whole number or null")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                // A JavaScript number arrives as a float; one that is not a
+                // whole number is no key version.
+                if value.fract() == 0.0 && (0.0..9.0e15).contains(&value) {
+                    Ok(RecordValue((value as u64).to_string()))
+                } else {
+                    Ok(RecordValue(String::new()))
+                }
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RecordValue(String::new()))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RecordValue(String::new()))
+            }
+
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(ValueVisitor)
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
+}
+
 /// Result from `decrypt_events` batch API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
@@ -1802,6 +1967,17 @@ pub struct DecryptEventsResult {
     #[serde(default)]
     #[cfg_attr(feature = "js", js_camel(wrap))]
     pub rejected_signing_keys: std::collections::HashMap<usize, RejectedSigningKey>,
+    /// Index → the signing key the event at that index of the batch names,
+    /// for each event, of any signed type, whose sender's signing key at
+    /// that version was not among the signing keys the call verified with.
+    /// Under the default reject-unverified policy such an event is in
+    /// `errors`; otherwise it is in `events`, unverified. A key change
+    /// listed here is also in `unverified_key_changes` when this identity
+    /// decrypted its key. [`crate::ChatCore::missing_public_keys`] reads
+    /// the users to fetch keys for from this map.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub missing_signing_keys: std::collections::HashMap<usize, MissingSigningKey>,
 }
 
 /// A public key input entry for `prepare_conversation_key_change`,
@@ -2609,6 +2785,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_public_key_record_reads_the_api_record_under_either_casing() {
+        let expected = PublicKeyRecord::new("7", "identity", "signing", "binding");
+
+        // The API's own record, with its other fields.
+        let snake: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "public_key_version": "7",
+            "public_key": "identity",
+            "signing_public_key": "signing",
+            "identity_public_key_signature": "binding",
+            "juicebox_config": { "max_guess_count": 20, "token_map": [] },
+            "public_key_fingerprint": null,
+        }))
+        .unwrap();
+        assert_eq!(snake, expected);
+
+        // A client library's camelCase record, with the version as a number.
+        let camel: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "publicKeyVersion": 7,
+            "publicKey": "identity",
+            "signingPublicKey": "signing",
+            "identityPublicKeySignature": "binding",
+        }))
+        .unwrap();
+        assert_eq!(camel, expected);
+
+        // A record with both names of a field keeps the value that is set.
+        let both: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "publicKeyVersion": null,
+            "public_key_version": "7",
+            "public_key": "identity",
+            "publicKey": "",
+            "signing_public_key": "signing",
+            "identity_public_key_signature": "binding",
+        }))
+        .unwrap();
+        assert_eq!(both, expected);
+
+        // What a record lacks is empty.
+        let partial: PublicKeyRecord =
+            serde_json::from_value(serde_json::json!({ "public_key_version": 1.5 })).unwrap();
+        assert_eq!(partial, PublicKeyRecord::default());
+    }
+
     #[cfg(feature = "js")]
     #[test]
     fn test_js_decrypt_events_result_keys_its_diagnostics_by_index() {
@@ -2624,6 +2844,7 @@ mod tests {
             unverified_key_changes: [(3, unverified_key_change())].into(),
             undecryptable_key_changes: [(4, undecryptable_key_change())].into(),
             rejected_signing_keys: [(0, rejected_signing_key())].into(),
+            missing_signing_keys: [(5, MissingSigningKey::new("9", "3"))].into(),
         };
         let json = serde_json::to_value(JsDecryptEventsResult::from(result)).unwrap();
         assert_eq!(
@@ -2655,6 +2876,9 @@ mod tests {
                 },
                 "rejectedSigningKeys": {
                     "0": { "userId": "2", "publicKeyVersion": "7" },
+                },
+                "missingSigningKeys": {
+                    "5": { "userId": "9", "publicKeyVersion": "3" },
                 },
             })
         );

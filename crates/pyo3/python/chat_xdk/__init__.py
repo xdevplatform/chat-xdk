@@ -38,7 +38,7 @@ import time as _time
 import urllib.parse as _urllib_parse
 import urllib.request as _urllib_request
 from enum import Enum
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence, TypedDict, Union
 
 # Python imports the idna codec the first time a host name is resolved. Import
 # it here, so it is never mid-import on a request's thread when the process
@@ -481,6 +481,32 @@ class PublicKeyInput(TypedDict):
     public_key_version: str
 
 
+class PublicKeyRecord(TypedDict, total=False):
+    """One of a user's public keys, as ``GET /2/users/:id/public_keys``
+    returns it in ``data``: what ``add_public_keys`` takes and the hook of
+    ``set_resolve_public_keys`` returns, by user id.
+
+    ``public_key`` is the identity key and ``signing_public_key`` the signing
+    key at ``public_key_version``. A record may hold other keys, such as
+    ``juicebox_config``; they are ignored. A record without a key version,
+    an identity key or a signing key is left out."""
+
+    public_key_version: Union[str, int]
+    public_key: str
+    signing_public_key: str
+    identity_public_key_signature: str
+
+
+# The hook ``Chat.set_resolve_public_keys`` takes: called with user ids, it
+# returns each user's public-key records by user id, leaving out a user it has
+# nothing for; ``None`` is no records at all. A record is typed as any mapping
+# as well, so that a response's parsed JSON passes a type checker as it is.
+ResolvePublicKeys = Callable[
+    [list[str]],
+    Optional[Mapping[str, Sequence[Union[PublicKeyRecord, Mapping[str, Any]]]]],
+]
+
+
 class ConversationKeyResult(TypedDict):
     """The conversation keys a batch's key changes carry, and the key version
     to encrypt with.
@@ -579,13 +605,25 @@ class RejectedSigningKey(TypedDict):
     public_key_version: str
 
 
+class MissingSigningKey(TypedDict):
+    """A signing key a ``decrypt_events`` call did not have: an event's
+    signature names it, and it was not among the signing keys the call
+    verified with. ``user_id`` is the event's sender and
+    ``public_key_version`` the key version its signature names. Fetch the
+    user's public keys (``GET /2/users/:id/public_keys``), add them with
+    ``add_public_keys``, and decrypt again."""
+
+    user_id: str
+    public_key_version: str
+
+
 class DecryptEventsResult(TypedDict):
     """What ``decrypt_events`` returns.
 
-    ``errors``, ``unverified_key_changes`` and ``undecryptable_key_changes``
-    are keyed by an event's index in the batch, as a string, and
-    ``rejected_signing_keys`` by a signing key's index, as a string. Each is
-    empty when it has nothing to report.
+    ``errors``, ``unverified_key_changes``, ``undecryptable_key_changes``
+    and ``missing_signing_keys`` are keyed by an event's index in the batch,
+    as a string, and ``rejected_signing_keys`` by a signing key's index, as
+    a string. Each is empty when it has nothing to report.
 
     ``errors`` holds the error of each event left out of ``events``: one
     that failed, or one decrypt drops, such as a member removal's title or
@@ -594,7 +632,11 @@ class DecryptEventsResult(TypedDict):
     ``undecryptable_key_changes`` each key change whose conversation key
     this identity could not decrypt, and ``rejected_signing_keys`` each of
     the signing keys the call verified with that it left out because its
-    identity binding does not verify."""
+    identity binding does not verify. ``missing_signing_keys`` holds, for
+    each signed event whose sender's signing key was not among the keys the
+    call verified with, that sender and the key version the event's
+    signature names; ``Chat.missing_public_keys`` lists the users to fetch
+    keys for from it."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult
@@ -602,6 +644,7 @@ class DecryptEventsResult(TypedDict):
     unverified_key_changes: dict[str, UnverifiedKeyChange]
     undecryptable_key_changes: dict[str, UndecryptableKeyChange]
     rejected_signing_keys: dict[str, RejectedSigningKey]
+    missing_signing_keys: dict[str, MissingSigningKey]
 
 
 class MessageEventSignature(TypedDict):
@@ -659,6 +702,13 @@ class PreparedConversationChange(TypedDict, total=False):
     encrypted_description: str
 
 
+def _documented_natively(method):
+    """Give ``method``, which runs the native method of its name, that
+    method's docstring."""
+    method.__doc__ = getattr(_native.Chat, method.__name__).__doc__
+    return method
+
+
 class Chat(_native.Chat):
     """The X Chat encryption SDK.
 
@@ -670,6 +720,95 @@ class Chat(_native.Chat):
     The ``_async`` methods run the Juicebox round trips on a worker thread,
     for an ``asyncio`` loop.
     """
+
+    # The hook set_resolve_public_keys set, or None. The native code never
+    # calls it: the methods below call it between native calls.
+    _resolve_public_keys = None
+
+    def set_resolve_public_keys(self, hook):
+        """Set the hook that fetches users' public keys, or remove it with
+        ``None``.
+
+        The hook is called with a list of user ids and returns a dict from
+        user id to the list of records ``GET /2/users/{id}/public_keys``
+        returns in ``data`` for that user, as ``add_public_keys`` takes
+        them. It leaves out a user it has nothing for, and may return
+        ``None`` for no records at all. With a hook set:
+
+        - ``decrypt_events``, when its ``signing_keys`` is ``None`` or
+          empty, calls the hook for ``missing_public_keys`` of its result,
+          adds the records it returns, and returns the result of decrypting
+          the batch once more.
+        - ``prepare_conversation_key_change``, ``prepare_group_create``,
+          ``prepare_group_members_change`` and
+          ``prepare_group_members_remove``, when their ``public_keys`` is
+          ``None`` or empty, call the hook for the members who have no
+          stored public key and add the records it returns, then encrypt
+          the new key to the stored keys.
+
+        The hook runs on the calling thread, and an exception it raises
+        reaches the caller of the method that called it. A user whose lookup
+        brought no key is not asked for again for a minute.
+
+        Setting a hook turns the key cache on (``set_cache_keys``); removing
+        it leaves the cache as it is.
+
+        Args:
+            hook: A callable, or ``None`` to remove the hook.
+
+        Raises:
+            TypeError: ``hook`` is neither callable nor ``None``.
+        """
+        if hook is not None and not callable(hook):
+            raise TypeError("hook must be callable or None")
+        self._resolve_public_keys = hook
+        if hook is not None:
+            self.set_cache_keys(True)
+
+    @_documented_natively
+    def decrypt_events(self, params):
+        result = super().decrypt_events(params)
+        hook = self._resolve_public_keys
+        # The hook fills the stored keys, which only a call that is passed no
+        # signing keys verifies with.
+        if hook is None or params.signing_keys:
+            return result
+        missing = self.missing_public_keys(result)
+        if not missing:
+            return result
+        self.add_public_keys(hook(missing) or {})
+        return super().decrypt_events(params)
+
+    def _fetch_public_keys_for(self, call, params):
+        """With a hook set and no public keys in ``params``, fetch through
+        the hook the public keys of the members the prepare call ``call``
+        encrypts its key to who have none stored, and store them."""
+        hook = self._resolve_public_keys
+        if hook is None or getattr(params, "public_keys", None):
+            return
+        missing = self._missing_public_keys_for(call, params)
+        if missing:
+            self.add_public_keys(hook(missing) or {})
+
+    @_documented_natively
+    def prepare_conversation_key_change(self, params):
+        self._fetch_public_keys_for("conversation_key_change", params)
+        return super().prepare_conversation_key_change(params)
+
+    @_documented_natively
+    def prepare_group_create(self, params):
+        self._fetch_public_keys_for("group_create", params)
+        return super().prepare_group_create(params)
+
+    @_documented_natively
+    def prepare_group_members_change(self, params):
+        self._fetch_public_keys_for("group_members_change", params)
+        return super().prepare_group_members_change(params)
+
+    @_documented_natively
+    def prepare_group_members_remove(self, params):
+        self._fetch_public_keys_for("group_members_remove", params)
+        return super().prepare_group_members_remove(params)
 
     async def setup_async(self, pin):
         """``setup`` on a worker thread."""
@@ -734,6 +873,7 @@ __all__ = [
     "MarkConversationReadParams",
     "MessageDeleteParams",
     "MessageEventSignature",
+    "MissingSigningKey",
     "MessageTtlChangeParams",
     "MessageTtlRemoveParams",
     "ParseError",
@@ -741,6 +881,7 @@ __all__ = [
     "PreparedConversationChange",
     "PreparedGroupMetadataChange",
     "PublicKeyInput",
+    "PublicKeyRecord",
     "PublicKeyRegistration",
     "PublicKeyRegistrationPayload",
     "PublicKeys",
@@ -751,6 +892,7 @@ __all__ = [
     "QuickReplyRequest",
     "QuickReplyResponse",
     "RejectedSigningKey",
+    "ResolvePublicKeys",
     "ScreenCaptureChange",
     "ScreenCaptureParams",
     "SendPayload",

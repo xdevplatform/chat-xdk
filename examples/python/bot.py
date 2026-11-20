@@ -5,9 +5,17 @@ Flow (encrypt on send, decrypt on receive):
   1. Load keys (import a private-key blob, or generate + register a new one).
   2. On startup, batch-decrypt the conversation backlog (``decrypt_events``)
      to seed the conversation-key cache.
-  3. Poll for new events; decrypt each one individually (``decrypt_event``).
+  3. Poll for new events; batch-decrypt each page, its key changes and its
+     data events together (``decrypt_events``).
   4. For each incoming text message, generate a reply, encrypt + sign it,
      and send it back via the X Chat API.
+
+The SDK fetches the public keys it lacks through a hook the bot sets once:
+the bot keeps no signing keys of its own.
+
+One bot serves one signed-in user, in any number of conversations. A process
+with several signed-in users keeps one chat per user and gives each the same
+public-key resolver (see ``multi_user.py``).
 
 Conversation state is held in memory, one entry per conversation.
 Run it with ``python run.py`` after filling in ``.env``.
@@ -21,7 +29,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from chat_core import ChatCore, message_text
-from chat_xdk import ChatXdkError
 from x_api import XChatClient
 
 logger = logging.getLogger("chatbot")
@@ -37,9 +44,9 @@ def generate_reply(text: str) -> str:
 
 @dataclass
 class ConversationState:
-    """In-memory state for one conversation."""
+    """In-memory state for one conversation. Its conversation keys live in
+    the SDK's cache."""
 
-    conversation_keys: dict[str, bytes] = field(default_factory=dict)
     seen_event_ids: set[str] = field(default_factory=set)
     pagination_token: str | None = None
 
@@ -55,65 +62,36 @@ class ChatBot:
         # calls below need no key arguments.
         self.core.set_identity(bot_user_id)
         self.core.set_cache_keys(True)
-        # Signing keys accumulate here and are pushed to the SDK's store, so
-        # the decrypt calls need no signing_keys argument either.
-        self._signing_keys: list[dict[str, str]] = []
-        self._known_senders: set[str] = set()
+        # The SDK fetches the public keys it lacks through the API client:
+        # the signing keys of whoever signed a page's events, the members who
+        # made its key changes included. The decrypt calls need no
+        # signing_keys argument.
+        self.core.fetch_public_keys_with(api.get_public_keys)
 
     def _state(self, conversation_id: str) -> ConversationState:
         return self.state.setdefault(conversation_id, ConversationState())
 
-    def _register_signing_keys(self, events: list[dict[str, Any]]) -> None:
-        """Fetch the public keys of the new senders of ``events`` into the
-        SDK's signing-key store."""
-        self._register_signing_keys_of(
-            [
-                str(e.get("sender_id"))
-                for e in events
-                if e.get("sender_id") and str(e.get("sender_id")) != self.bot_user_id
-            ]
-        )
+    def _decrypt_page(self, conversation_id: str, page: dict[str, Any]) -> dict[str, Any]:
+        """Batch-decrypt one page of events and log what it could not use.
 
-    def _register_signing_keys_of(self, user_ids: list[str]) -> bool:
-        """Fetch the public keys of the users among ``user_ids`` not fetched
-        yet into the SDK's signing-key store. Returns whether it stored any.
-
-        Pulled from the X API per unique user. Each entry must carry the
-        identity public key + its binding signature for verification. The
-        store is replaced wholesale, so the accumulated roster is re-sent.
+        KeyChange events arrive in meta.conversation_key_events, separate
+        from data. They carry the conversation keys the messages decrypt
+        under, so they go into the same decrypt_events batch as the data
+        events.
         """
-        stored = False
-        for user_id in dict.fromkeys(user_ids):
-            if user_id in self._known_senders:
-                continue
-            try:
-                for pk in self.api.get_public_keys(user_id):
-                    self._signing_keys.append(
-                        {
-                            "user_id": user_id,
-                            "public_key_version": str(pk.get("public_key_version") or ""),
-                            "public_key": pk.get("signing_public_key") or "",
-                            "identity_public_key": pk.get("public_key") or "",
-                            "identity_public_key_signature": pk.get(
-                                "identity_public_key_signature"
-                            )
-                            or "",
-                        }
-                    )
-                self._known_senders.add(user_id)
-                stored = True
-            except Exception:
-                logger.warning("public_keys_fetch_failed user=%s", user_id)
-        if stored:
-            self.core.set_signing_keys(self._signing_keys)
-        return stored
-
-    def _decrypt_batch(self, conversation_id: str, events_b64: list[str]) -> dict[str, Any]:
-        """Batch-decrypt ``events_b64``, fetching the signing keys of the
-        members who made its key changes: they sign them, and may have sent
-        none of the page's messages. Logs what the batch still could not use.
-        """
-        batch = self.core.decrypt_batch_with_signers(events_b64, self._register_signing_keys_of)
+        key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
+        events_b64 = list(key_events_b64) + [
+            e["encoded_event"] for e in page.get("data") or [] if e.get("encoded_event")
+        ]
+        batch = self.core.decrypt_batch(events_b64)
+        for index, key in batch["missing_signing_keys"].items():
+            logger.warning(
+                "signing_key_missing conv=%s event=%s user=%s version=%s",
+                conversation_id,
+                index,
+                key["user_id"],
+                key["public_key_version"],
+            )
         for index, change in batch["unverified_key_changes"].items():
             logger.warning(
                 "key_change_unverified conv=%s event=%s reason=%s signer=%s key_dropped=%s",
@@ -140,74 +118,32 @@ class ChatBot:
         return batch
 
     def load_backlog(self, conversation_id: str) -> None:
-        """Initial load: batch-decrypt the backlog (decrypt_events path)."""
+        """Initial load: batch-decrypt the backlog (decrypt_events path),
+        which fills the SDK's conversation-key cache from its key changes."""
         st = self._state(conversation_id)
         page = self.api.get_events(conversation_id, max_results=100)
-        raw = page.get("data") or []
-        # KeyChange events arrive in meta.conversation_key_events, separate
-        # from data. They must go into the same decrypt_events batch — without
-        # them no conversation key is extracted and every message lands in
-        # the result's errors.
-        key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
-        events_b64 = list(key_events_b64) + [
-            e["encoded_event"] for e in raw if e.get("encoded_event")
-        ]
-        self._register_signing_keys(raw)
-
-        batch = self._decrypt_batch(conversation_id, events_b64)
-        keys = batch["conversation_keys"].get("keys") or {}
-        st.conversation_keys.update(keys)
+        batch = self._decrypt_page(conversation_id, page)
         st.pagination_token = page.get("meta", {}).get("next_token")
         logger.info(
             "backlog_loaded conv=%s messages=%d keys=%d",
             conversation_id,
             len(batch["events"]),
-            len(keys),
+            len(batch["conversation_keys"].get("keys") or {}),
         )
 
     def poll_once(self, conversation_id: str) -> None:
-        """Fetch new events and reply to each new incoming message.
-
-        Uses the single-event decrypt path (decrypt_event) with the cached
-        conversation keys from the initial backlog load.
-        """
+        """Fetch a page of new events, batch-decrypt it (decrypt_events
+        path), and reply to each new incoming message it holds."""
         st = self._state(conversation_id)
         page = self.api.get_events(
             conversation_id, max_results=50, pagination_token=st.pagination_token
         )
-        raw = page.get("data") or []
-        self._register_signing_keys(raw)
-        # Key changes for this page arrive in meta, not data; route them
-        # through the batch path so the rotated keys are verified and cached
-        # before this loop decrypts the messages that need them. The batch
-        # fetches the keys of the members who made them: a key change whose
-        # signer is missing from the store would fail verification and be
-        # dropped.
-        key_events_b64 = page.get("meta", {}).get("conversation_key_events") or []
-        if key_events_b64:
-            rotated = self._decrypt_batch(conversation_id, list(key_events_b64))
-            st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
+        batch = self._decrypt_page(conversation_id, page)
+        for index, error in batch["errors"].items():
+            logger.warning("decrypt_failed conv=%s event=%s err=%s", conversation_id, index, error)
 
-        for item in raw:
-            event_b64 = item.get("encoded_event")
-            if not event_b64:
-                continue
-            try:
-                event = self.core.decrypt_one(event_b64, st.conversation_keys)
-            except ChatXdkError as err:
-                logger.warning("decrypt_failed conv=%s err=%s", conversation_id, err)
-                continue
-
-            # A KeyChange rotates the conversation key. Route it through the
-            # batch path: that verifies the change, feeds the SDK's key cache
-            # (used by the encrypt calls), and returns the decrypted key for
-            # this loop's own decrypt_one lookups.
-            if event.get("type") == "KeyChange":
-                rotated = self._decrypt_batch(conversation_id, [event_b64])
-                st.conversation_keys.update(rotated["conversation_keys"].get("keys") or {})
-                continue
-
-            self._maybe_reply(conversation_id, event)
+        for decrypted in batch["events"]:
+            self._maybe_reply(conversation_id, decrypted["event"])
 
         st.pagination_token = page.get("meta", {}).get("next_token") or st.pagination_token
 

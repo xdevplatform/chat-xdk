@@ -2,19 +2,27 @@
 //!
 //! These drive the REAL `chat_xdk_core` binding through the same `ChatCore` the
 //! bot uses — no mocking. They prove an actual encrypt -> decrypt round-trip and
-//! that the binding reproduces the committed key vectors.
+//! that the binding reproduces the committed key vectors. The X API is the one
+//! thing faked: a directory of users' public keys and one page of events.
+
+mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
-use chat_xdk_core::signatures::ActionSignature;
-use chat_xdk_core::{AttachmentDescriptor, EntityDescriptor, PublicKeyInput, SigningKeyEntry};
-use chatbot_rs::chat_core::{
-    message_text, missing_key_change_signers, prep_to_request, removal_to_request, ChatCore,
-    ReplyOptions,
+use chat_xdk_core::{
+    AttachmentDescriptor, EntityDescriptor, MissingSigningKey, PreparedConversationChange,
+    PublicKeyInput, PublicKeyRecord,
 };
+use chatbot_rs::bot::Bot;
+use chatbot_rs::chat_core::{
+    prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
+};
+use chatbot_rs::x_api::{ChatApi, EventItem};
+use common::{delivered, key_change_and_message, party, public_keys_of, texts};
 use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
@@ -136,7 +144,7 @@ fn encrypt_reply_produces_sendable_payload() {
 fn decrypt_batch_empty_is_safe() {
     let v = load_vectors();
     let core = loaded_core(&v);
-    let result = core.decrypt_batch(&[], &[]);
+    let result = core.decrypt_batch(&[]);
     assert!(result.events.is_empty());
 }
 
@@ -144,7 +152,7 @@ fn decrypt_batch_empty_is_safe() {
 fn decrypt_one_rejects_garbage() {
     let v = load_vectors();
     let core = loaded_core(&v);
-    let err = core.decrypt_one("not-valid-base64!!!", &Default::default(), &[]);
+    let err = core.decrypt_one("not-valid-base64!!!", &Default::default());
     assert!(err.is_err());
 }
 
@@ -218,7 +226,7 @@ fn removal_to_request_rotates_for_members_who_stay() {
     let keys = fixture_public_keys(&v);
     let removed = "2000".to_string();
     let prep = core
-        .prepare_group_members_remove(&keys, "g123", &[removed.clone()])
+        .prepare_group_members_remove(&keys, "g123", &[removed.clone()], &[])
         .expect("prepare_group_members_remove");
     let body = removal_to_request(&[removed.clone()], &prep);
 
@@ -417,139 +425,235 @@ fn media_from_the_fixture_message_opens() {
     }
 }
 
-/// A Thrift string field: its id, then the value's length and bytes.
-fn thrift_string(id: u16, value: &str) -> Vec<u8> {
-    let mut field = vec![11];
-    field.extend(id.to_be_bytes());
-    field.extend((value.len() as u32).to_be_bytes());
-    field.extend(value.as_bytes());
-    field
+/// The group the tests' key changes and messages belong to.
+const GROUP: &str = "g900";
+
+/// The X API as the bot sees it, offline: users' public keys, one page of
+/// events, and a record of the keys it was asked for and the messages it
+/// was sent.
+#[derive(Default)]
+struct FakeApi {
+    /// Each user's public-key records, by user id.
+    directory: HashMap<String, Vec<PublicKeyRecord>>,
+    /// The data events of the page.
+    events: Vec<EventItem>,
+    /// The key events of the page.
+    key_events: Vec<String>,
+    /// The users whose public keys were asked for, in order.
+    asked: Arc<Mutex<Vec<String>>>,
+    /// Each message sent: its conversation and its body.
+    sent: Arc<Mutex<Vec<(String, SendBody)>>>,
 }
 
-/// `event_b64` as delivered: with the sequence id the server assigns,
-/// prepended as Thrift string field 1.
-fn delivered(event_b64: &str, sequence_id: &str) -> String {
-    let mut event = thrift_string(1, sequence_id);
-    event.extend(B64.decode(event_b64).unwrap());
-    B64.encode(event)
-}
+impl ChatApi for FakeApi {
+    fn get_my_user_id(&self) -> Result<String, String> {
+        Err("the fake API has no account".to_string())
+    }
 
-/// A signed action as delivered: the event the server relays for `action`,
-/// an entry of a prepared change's `action_signatures`, from `sender_id` in
-/// `conversation_id`, with the sequence id the server assigns.
-fn delivered_action(
-    action: &ActionSignature,
-    sender_id: &str,
-    conversation_id: &str,
-    sequence_id: &str,
-) -> String {
-    let signed = &action.message_event_signature;
-    let mut event = thrift_string(1, sequence_id);
-    event.extend(thrift_string(2, &action.message_id));
-    event.extend(thrift_string(3, sender_id));
-    event.extend(thrift_string(4, conversation_id));
-    event.extend([12, 0, 7]);
-    event.extend(B64.decode(&action.encoded_message_event_detail).unwrap());
-    event.extend([12, 0, 9]);
-    event.extend(thrift_string(1, &signed.signature));
-    event.extend(thrift_string(2, &signed.public_key_version));
-    event.extend(thrift_string(3, &signed.signature_version));
-    event.extend([0, 0]);
-    B64.encode(event)
-}
+    fn get_public_keys(&self, user_id: &str) -> Result<Vec<PublicKeyRecord>, String> {
+        self.asked.lock().unwrap().push(user_id.to_string());
+        self.directory
+            .get(user_id)
+            .cloned()
+            .ok_or_else(|| format!("no public keys for user {user_id}"))
+    }
 
-/// A core with fresh keys as a user, and the keys others hold for it.
-struct Party {
-    core: ChatCore,
-    user_id: String,
-    signing_key: SigningKeyEntry,
-    public_key: PublicKeyInput,
-}
+    fn get_events(
+        &self,
+        _conversation_id: &str,
+        _max_results: u32,
+        _pagination_token: Option<&str>,
+    ) -> Result<(Vec<EventItem>, Vec<String>, Option<String>), String> {
+        Ok((self.events.clone(), self.key_events.clone(), None))
+    }
 
-fn party(user_id: &str) -> Party {
-    let mut core = ChatCore::new();
-    let (payload, private_keys_b64) = core.generate_and_register().expect("generate_and_register");
-    core.load_keys(&private_keys_b64, "1").expect("load_keys");
-    core.set_identity(user_id).expect("set_identity");
-    let registration = payload.public_key;
-    Party {
-        core,
-        user_id: user_id.to_string(),
-        signing_key: SigningKeyEntry::new(
-            user_id,
-            "1",
-            registration.signing_public_key.as_str(),
-            registration.public_key.as_str(),
-            registration.identity_public_key_signature.as_str(),
-        ),
-        public_key: PublicKeyInput::new(user_id, registration.public_key.as_str(), "1"),
+    fn send_message(&self, conversation_id: &str, body: &SendBody) -> Result<(), String> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((conversation_id.to_string(), body.clone()));
+        Ok(())
+    }
+
+    fn get_feature_switches(&self, _url: &str) -> Option<(u16, Vec<u8>)> {
+        None
     }
 }
 
+/// Have `core` fetch the public keys it lacks from a fake X API that holds
+/// `directory`, the way the bot has it fetch them from the X API. Returns
+/// the users whose keys the SDK then asks for, in order.
+fn fetch_public_keys_from(
+    core: &ChatCore,
+    directory: HashMap<String, Vec<PublicKeyRecord>>,
+) -> Arc<Mutex<Vec<String>>> {
+    let api = FakeApi {
+        directory,
+        ..Default::default()
+    };
+    let asked = Arc::clone(&api.asked);
+    core.fetch_public_keys_with(move |user_id| api.get_public_keys(user_id));
+    asked
+}
+
+/// The users a prepared change encrypts its key to, sorted.
+fn recipients(prepared: &PreparedConversationChange) -> Vec<&str> {
+    let mut user_ids: Vec<&str> = prepared
+        .conversation_participant_keys
+        .iter()
+        .map(|key| key.user_id.as_str())
+        .collect();
+    user_ids.sort_unstable();
+    user_ids
+}
+
 #[test]
-fn decrypt_batch_with_signers_gets_the_keys_of_the_member_who_made_a_key_change() {
-    // An admin rotates a group's key and a member sends a message under it.
-    // The bot holds the member's signing keys: the member is the only sender
-    // on the page.
+fn decrypt_batch_fetches_the_keys_of_the_member_who_made_a_key_change() {
+    // An admin rotates a group's key and a member sends a message under it:
+    // the admin signed the key change and sent no message on the page.
     let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
-    let members = [
-        admin.public_key.clone(),
-        member.public_key.clone(),
-        bot.public_key.clone(),
-    ];
-    let prepared = admin
-        .core
-        .prepare_conversation_key_change(&members, Some("g900"))
-        .expect("prepare_conversation_key_change");
-    let key = prepared
-        .conversation_key
-        .as_ref()
-        .expect("conversation key");
-    let key_change = delivered_action(
-        &prepared.action_signatures[0],
-        &admin.user_id,
-        "g900",
-        "2100000000000000000",
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
     );
-    let options =
-        ReplyOptions::default().with_conversation_key(key, &prepared.conversation_key_version);
-    let body = member
-        .core
-        .encrypt_reply("g900", "hello group", options)
-        .expect("encrypt_reply");
-    let message = delivered(&body.event_b64, "2100000000000000001");
     let events = [key_change.as_str(), message.as_str()];
 
-    // Without the admin's keys the key change does not verify: its key is
+    // With nothing to fetch public keys with, the result names the signing
+    // key each event lacked. The key change does not verify: its key is
     // dropped and the message does not decrypt.
-    let unverified = bot
-        .core
-        .decrypt_batch(&events, std::slice::from_ref(&member.signing_key));
+    let unverified = bot.core.decrypt_batch(&events);
     assert!(unverified.events.is_empty());
-    assert_eq!(missing_key_change_signers(&unverified), ["5001"]);
+    assert_eq!(
+        unverified.missing_signing_keys,
+        HashMap::from([
+            (0, MissingSigningKey::new("5001", "1")),
+            (1, MissingSigningKey::new("5002", "1")),
+        ])
+    );
 
-    let mut signing_keys = vec![member.signing_key.clone()];
-    let mut asked: Vec<String> = Vec::new();
-    let result = bot
-        .core
-        .decrypt_batch_with_signers(&events, &mut signing_keys, |user_ids| {
-            asked.extend(user_ids.iter().cloned());
-            vec![admin.signing_key.clone()]
-        });
-    assert_eq!(asked, ["5001"]);
+    // The SDK fetches the keys of both senders, the admin's as well, and
+    // decrypts the page with them.
+    let asked = fetch_public_keys_from(&bot.core, public_keys_of(&[&admin, &member]));
+    let result = bot.core.decrypt_batch(&events);
+    assert_eq!(*asked.lock().unwrap(), ["5001", "5002"]);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert!(missing_key_change_signers(&result).is_empty());
-    let texts: Vec<Option<&str>> = result
-        .events
-        .iter()
-        .map(|decrypted| message_text(&decrypted.event))
-        .collect();
-    assert_eq!(texts, [None, Some("hello group")]);
-    assert_eq!(signing_keys.len(), 2);
+    assert!(result.missing_signing_keys.is_empty());
+    assert!(result.unverified_key_changes.is_empty());
+    assert_eq!(texts(&result), [None, Some("hello group")]);
 
-    // With every signer's keys there is nothing to fetch.
-    bot.core
-        .decrypt_batch_with_signers(&events, &mut signing_keys, |user_ids| {
-            panic!("asked for the keys of {user_ids:?}")
-        });
+    // The SDK stored the keys: the next page needs no fetch.
+    bot.core.decrypt_batch(&events);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn a_failed_public_key_fetch_leaves_the_other_users_keys_arriving() {
+    let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
+    );
+    let events = [key_change.as_str(), message.as_str()];
+
+    // The X API holds the admin's keys alone: the member's fetch fails.
+    let asked = fetch_public_keys_from(&bot.core, public_keys_of(&[&admin]));
+    let result = bot.core.decrypt_batch(&events);
+    assert_eq!(*asked.lock().unwrap(), ["5001", "5002"]);
+
+    // The key change verifies with the admin's keys, and the result names
+    // the key the member's message still lacks.
+    assert!(result.unverified_key_changes.is_empty());
+    assert_eq!(texts(&result), [None::<&str>]);
+    assert_eq!(
+        result.missing_signing_keys,
+        HashMap::from([(1, MissingSigningKey::new("5002", "1"))])
+    );
+
+    // The SDK remembers the lookup that brought no key: the next page does
+    // not repeat it.
+    bot.core.decrypt_batch(&events);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn prepare_calls_fetch_the_public_keys_they_are_not_passed() {
+    let (admin, member) = (party("5001"), party("5002"));
+    let asked = fetch_public_keys_from(&admin.core, public_keys_of(&[&admin, &member]));
+
+    // A one-to-one named by the other user's id: the SDK fetches the
+    // identity keys of both users.
+    let direct = admin
+        .core
+        .prepare_conversation_key_change(&[], Some("5002"))
+        .expect("prepare_conversation_key_change");
+    assert_eq!(direct.conversation_id, "5001:5002");
+    assert_eq!(recipients(&direct), ["5001", "5002"]);
+    assert_eq!(*asked.lock().unwrap(), ["5001", "5002"]);
+
+    // The SDK stored the keys: the group calls, which name their members,
+    // need no fetch.
+    let members = [admin.user_id.clone(), member.user_id.clone()];
+    let created = admin
+        .core
+        .prepare_group_create(&[], GROUP, &members, &members[..1], None)
+        .expect("prepare_group_create");
+    assert_eq!(recipients(&created), ["5001", "5002"]);
+    let removed = admin
+        .core
+        .prepare_group_members_remove(&[], GROUP, &members[1..], &members[..1])
+        .expect("prepare_group_members_remove");
+    assert_eq!(recipients(&removed), ["5001"]);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn the_bot_replies_to_a_message_under_a_key_change_whose_signer_sent_no_message() {
+    let (admin, member, bot) = (party("5001"), party("5002"), party("5003"));
+    let (key_change, message) = key_change_and_message(
+        &admin,
+        &[&admin, &member, &bot],
+        &member,
+        GROUP,
+        "hello group",
+    );
+    let directory = public_keys_of(&[&admin, &member, &bot]);
+
+    // The page as the X API returns it: the message in its data, the key
+    // change apart, among its key events.
+    let api = FakeApi {
+        directory: directory.clone(),
+        events: vec![EventItem {
+            encoded_event: message,
+            sender_id: member.user_id.clone(),
+            id: "2100000000000000001".to_string(),
+        }],
+        key_events: vec![key_change.clone()],
+        ..Default::default()
+    };
+    let (asked, sent) = (Arc::clone(&api.asked), Arc::clone(&api.sent));
+    let mut chatbot = Bot::new(bot.core, api, bot.user_id).expect("Bot::new");
+    chatbot.poll_once(GROUP).expect("poll_once");
+
+    // The bot's SDK fetched the keys of the admin, who sent no message, and
+    // of the member, and the bot answered the member's message.
+    assert_eq!(*asked.lock().unwrap(), ["5001", "5002"]);
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    let (conversation_id, body) = &sent[0];
+    assert_eq!(conversation_id.as_str(), GROUP);
+
+    // The member reads the reply under the key of the key change.
+    let reply = delivered(&body.event_b64, "2100000000000000002");
+    fetch_public_keys_from(&member.core, directory);
+    let read = member
+        .core
+        .decrypt_batch(&[key_change.as_str(), reply.as_str()]);
+    assert!(read.errors.is_empty(), "{:?}", read.errors);
+    assert_eq!(texts(&read), [None, Some("You said: hello group")]);
 }

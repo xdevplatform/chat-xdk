@@ -6,11 +6,16 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
@@ -181,7 +186,7 @@ func TestEncryptReplyProducesPayload(t *testing.T) {
 func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 	core, _ := loadedCore(t)
 	defer core.Close()
-	result, err := core.DecryptBatch([]string{}, nil)
+	result, err := core.DecryptBatch([]string{})
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
@@ -193,7 +198,7 @@ func TestDecryptBatchEmptyIsSafe(t *testing.T) {
 func TestDecryptOneRejectsGarbage(t *testing.T) {
 	core, _ := loadedCore(t)
 	defer core.Close()
-	if _, err := core.DecryptOne("not-valid-base64!!!", map[string][]byte{}, nil); err == nil {
+	if _, err := core.DecryptOne("not-valid-base64!!!", map[string][]byte{}); err == nil {
 		t.Error("expected error for invalid base64 event")
 	}
 }
@@ -271,7 +276,7 @@ func TestPrepToRequestMapsTheRESTShape(t *testing.T) {
 func TestRemovalToRequestRotatesForMembersWhoStay(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	prep, err := core.PrepareGroupMembersRemove(fixtureKeys(v), "g123", []string{"2000"})
+	prep, err := core.PrepareGroupMembersRemove(fixtureKeys(v), "g123", []string{"2000"}, nil)
 	if err != nil {
 		t.Fatalf("PrepareGroupMembersRemove: %v", err)
 	}
@@ -478,29 +483,34 @@ func TestThreadedReplyWithEntitiesAndTTL(t *testing.T) {
 	}
 }
 
-// TestCachedKeyReplyFlow is the bot's send path end to end, offline: stored
-// signing keys verify the fixture key change, the batch decrypt adopts its
-// key into the SDK cache, and the reply-by-event needs neither a sender nor
-// a conversation key argument.
+// TestCachedKeyReplyFlow is the bot's send path end to end, offline: the SDK
+// fetches the fixture sender's public keys, they verify the fixture key
+// change, the batch decrypt adopts its key into the SDK cache, and the
+// reply-by-event needs neither a sender nor a conversation key argument.
 func TestCachedKeyReplyFlow(t *testing.T) {
 	core, v := loadedCore(t)
 	defer core.Close()
-	if err := core.SetSigningKeys([]chatxdk.SigningKeyEntry{{
-		UserID:                     v.EventSenderID,
-		PublicKeyVersion:           v.EventSigningKeyVersion,
-		PublicKey:                  v.SigningPublicB64,
-		IdentityPublicKey:          v.IdentityPublicB64,
-		IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
-	}}); err != nil {
-		t.Fatalf("SetSigningKeys: %v", err)
-	}
+	core.FetchPublicKeysWith(func(userID string) ([]chatxdk.PublicKeyRecord, error) {
+		if userID != v.EventSenderID {
+			return nil, errors.New("no public keys for user " + userID)
+		}
+		return []chatxdk.PublicKeyRecord{{
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.IdentityPublicB64,
+			SigningPublicKey:           v.SigningPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		}}, nil
+	})
 
-	result, err := core.DecryptBatch([]string{v.EventKeyChangeB64, v.EventMessageB64}, nil)
+	result, err := core.DecryptBatch([]string{v.EventKeyChangeB64, v.EventMessageB64})
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
 	if len(result.Errors) != 0 {
 		t.Fatalf("unexpected decrypt errors: %v", result.Errors)
+	}
+	if len(result.MissingSigningKeys) != 0 || len(result.UnverifiedKeyChanges) != 0 {
+		t.Fatalf("unverified events: missing %v, key changes %v", result.MissingSigningKeys, result.UnverifiedKeyChanges)
 	}
 
 	body, err := core.EncryptReply(v.EventConversationID, "pong", &ReplyOptions{
@@ -560,10 +570,14 @@ func deliveredAction(t *testing.T, action chatxdk.ActionSignature, senderID, con
 
 // party is a core with fresh keys as a user, and the keys others hold for it.
 type party struct {
-	core       *ChatCore
-	userID     string
-	signingKey chatxdk.SigningKeyEntry
-	publicKey  chatxdk.PublicKeyInput
+	core   *ChatCore
+	userID string
+	// privateKeysB64 is the user's private-key blob, registered under key
+	// version "1": what signs the user in to another chat.
+	privateKeysB64 string
+	// record is the record the X API returns for the user's public keys.
+	record    chatxdk.PublicKeyRecord
+	publicKey chatxdk.PublicKeyInput
 }
 
 func newParty(t *testing.T, userID string) *party {
@@ -582,13 +596,13 @@ func newParty(t *testing.T, userID string) *party {
 	}
 	registration := payload.PublicKey
 	return &party{
-		core:   core,
-		userID: userID,
-		signingKey: chatxdk.SigningKeyEntry{
-			UserID:                     userID,
+		core:           core,
+		userID:         userID,
+		privateKeysB64: privateKeysB64,
+		record: chatxdk.PublicKeyRecord{
 			PublicKeyVersion:           "1",
-			PublicKey:                  registration.SigningPublicKey,
-			IdentityPublicKey:          registration.PublicKey,
+			PublicKey:                  registration.PublicKey,
+			SigningPublicKey:           registration.SigningPublicKey,
 			IdentityPublicKeySignature: registration.IdentityPublicKeySignature,
 		},
 		publicKey: chatxdk.PublicKeyInput{
@@ -599,71 +613,358 @@ func newParty(t *testing.T, userID string) *party {
 	}
 }
 
-func TestDecryptBatchWithSignersGetsTheKeysOfTheMemberWhoMadeAKeyChange(t *testing.T) {
-	// An admin rotates a group's key and a member sends a message under it.
-	// The bot holds the member's signing keys: the member is the only sender
-	// on the page.
-	admin, member, bot := newParty(t, "5001"), newParty(t, "5002"), newParty(t, "5003")
-	prepared, err := admin.core.PrepareConversationKeyChange(
-		[]chatxdk.PublicKeyInput{admin.publicKey, member.publicKey, bot.publicKey}, "g900")
+// testGroup is the group the tests' key changes and messages belong to.
+const testGroup = "g900"
+
+// publicKeyDirectory stands in for the X API's public keys: each user's
+// records by user id, and the users whose keys were asked for, in order.
+type publicKeyDirectory struct {
+	records map[string][]chatxdk.PublicKeyRecord
+
+	mu    sync.Mutex
+	asked []string
+}
+
+func directoryOf(parties ...*party) *publicKeyDirectory {
+	records := make(map[string][]chatxdk.PublicKeyRecord, len(parties))
+	for _, p := range parties {
+		records[p.userID] = []chatxdk.PublicKeyRecord{p.record}
+	}
+	return &publicKeyDirectory{records: records}
+}
+
+// fetch is a lookup ChatCore.FetchPublicKeysWith takes. It fails for a user
+// the directory does not hold.
+func (d *publicKeyDirectory) fetch(userID string) ([]chatxdk.PublicKeyRecord, error) {
+	d.mu.Lock()
+	d.asked = append(d.asked, userID)
+	d.mu.Unlock()
+	records, ok := d.records[userID]
+	if !ok {
+		return nil, errors.New("no public keys for user " + userID)
+	}
+	return records, nil
+}
+
+// askedFor is the users whose keys were asked for so far, in order.
+func (d *publicKeyDirectory) askedFor() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string{}, d.asked...)
+}
+
+// keyChangeAndMessage is the page keyChangeAndMessageIn builds for testGroup.
+func keyChangeAndMessage(t *testing.T, admin *party, members []*party, author *party, text string) (keyChange, message string) {
+	t.Helper()
+	return keyChangeAndMessageIn(t, testGroup, admin, members, author, text)
+}
+
+// keyChangeAndMessageIn is the page that follows a key rotation of the group
+// conversationID: the key change admin made for members, which admin signed,
+// and the message author then sent under the new key, both as delivered.
+func keyChangeAndMessageIn(t *testing.T, conversationID string, admin *party, members []*party, author *party, text string) (keyChange, message string) {
+	t.Helper()
+	publicKeys := make([]chatxdk.PublicKeyInput, 0, len(members))
+	for _, member := range members {
+		publicKeys = append(publicKeys, member.publicKey)
+	}
+	prepared, err := admin.core.PrepareConversationKeyChange(publicKeys, conversationID)
 	if err != nil {
 		t.Fatalf("PrepareConversationKeyChange: %v", err)
 	}
-	keyChange := deliveredAction(t, prepared.ActionSignatures[0], admin.userID, "g900", "2100000000000000000")
-	body, err := member.core.EncryptReply("g900", "hello group", &ReplyOptions{
+	keyChange = deliveredAction(t, prepared.ActionSignatures[0], admin.userID, conversationID, "2100000000000000000")
+	body, err := author.core.EncryptReply(conversationID, text, &ReplyOptions{
 		ConversationKey:        prepared.ConversationKey,
 		ConversationKeyVersion: prepared.ConversationKeyVersion,
 	})
 	if err != nil {
 		t.Fatalf("EncryptReply: %v", err)
 	}
-	events := []string{keyChange, deliveredEvent(t, body.EventB64, "2100000000000000001")}
-	if err := bot.core.SetSigningKeys([]chatxdk.SigningKeyEntry{member.signingKey}); err != nil {
-		t.Fatalf("SetSigningKeys: %v", err)
-	}
+	return keyChange, deliveredEvent(t, body.EventB64, "2100000000000000001")
+}
 
-	// Without the admin's keys the key change does not verify: its key is
+// messageTexts is the text of each event a batch decrypted; "" for an event
+// that is not a text message.
+func messageTexts(result *chatxdk.DecryptEventsResult) []string {
+	texts := make([]string, len(result.Events))
+	for i := range result.Events {
+		texts[i] = MessageText(&result.Events[i].Event)
+	}
+	return texts
+}
+
+// recipientsOf is the users a prepared change encrypts its key to, sorted.
+func recipientsOf(prepared *chatxdk.PreparedConversationChange) []string {
+	userIDs := make([]string, len(prepared.ConversationParticipantKeys))
+	for i, key := range prepared.ConversationParticipantKeys {
+		userIDs[i] = key.UserID
+	}
+	sort.Strings(userIDs)
+	return userIDs
+}
+
+func TestDecryptBatchFetchesTheKeysOfTheMemberWhoMadeAKeyChange(t *testing.T) {
+	// An admin rotates a group's key and a member sends a message under it:
+	// the admin signed the key change and sent no message on the page.
+	admin, member, bot := newParty(t, "5001"), newParty(t, "5002"), newParty(t, "5003")
+	keyChange, message := keyChangeAndMessage(t, admin, []*party{admin, member, bot}, member, "hello group")
+	events := []string{keyChange, message}
+
+	// With nothing to fetch public keys with, the result names the signing
+	// key each event lacked. The key change does not verify: its key is
 	// dropped and the message does not decrypt.
-	unverified, err := bot.core.DecryptBatch(events, nil)
+	unverified, err := bot.core.DecryptBatch(events)
 	if err != nil {
 		t.Fatalf("DecryptBatch: %v", err)
 	}
 	if len(unverified.Events) != 0 {
 		t.Errorf("expected no decrypted events, got %d", len(unverified.Events))
 	}
-	if signers := MissingKeyChangeSigners(unverified); !reflect.DeepEqual(signers, []string{"5001"}) {
-		t.Errorf("missing signers %v, want [5001]", signers)
+	wantMissing := map[string]chatxdk.MissingSigningKey{
+		"0": {UserID: "5001", PublicKeyVersion: "1"},
+		"1": {UserID: "5002", PublicKeyVersion: "1"},
+	}
+	if !reflect.DeepEqual(unverified.MissingSigningKeys, wantMissing) {
+		t.Errorf("missing signing keys %v, want %v", unverified.MissingSigningKeys, wantMissing)
 	}
 
-	var asked []string
-	result, err := bot.core.DecryptBatchWithSigners(events, func(userIDs []string) bool {
-		asked = append(asked, userIDs...)
-		if err := bot.core.SetSigningKeys([]chatxdk.SigningKeyEntry{member.signingKey, admin.signingKey}); err != nil {
-			t.Fatalf("SetSigningKeys: %v", err)
-		}
-		return true
-	})
+	// The SDK fetches the keys of both senders, the admin's as well, and
+	// decrypts the page with them.
+	directory := directoryOf(admin, member)
+	bot.core.FetchPublicKeysWith(directory.fetch)
+	result, err := bot.core.DecryptBatch(events)
 	if err != nil {
-		t.Fatalf("DecryptBatchWithSigners: %v", err)
+		t.Fatalf("DecryptBatch: %v", err)
 	}
-	if !reflect.DeepEqual(asked, []string{"5001"}) {
-		t.Errorf("asked for the keys of %v, want [5001]", asked)
+	if asked := directory.askedFor(); !reflect.DeepEqual(asked, []string{"5001", "5002"}) {
+		t.Errorf("asked for the keys of %v, want [5001 5002]", asked)
 	}
 	if len(result.Errors) != 0 {
 		t.Fatalf("unexpected decrypt errors: %v", result.Errors)
 	}
-	if signers := MissingKeyChangeSigners(result); len(signers) != 0 {
-		t.Errorf("signers still missing: %v", signers)
+	if len(result.MissingSigningKeys) != 0 || len(result.UnverifiedKeyChanges) != 0 {
+		t.Errorf("unverified events: missing %v, key changes %v", result.MissingSigningKeys, result.UnverifiedKeyChanges)
 	}
-	if len(result.Events) != 2 || MessageText(&result.Events[1].Event) != "hello group" {
-		t.Fatalf("expected the key change and the message, got %+v", result.Events)
+	if texts := messageTexts(result); !reflect.DeepEqual(texts, []string{"", "hello group"}) {
+		t.Fatalf("expected the key change and the message, got %q", texts)
 	}
 
-	// With every signer's keys stored there is nothing to fetch.
-	if _, err := bot.core.DecryptBatchWithSigners(events, func(userIDs []string) bool {
-		t.Errorf("asked for the keys of %v", userIDs)
-		return false
-	}); err != nil {
-		t.Fatalf("DecryptBatchWithSigners: %v", err)
+	// The SDK stored the keys: the next page needs no fetch.
+	if _, err := bot.core.DecryptBatch(events); err != nil {
+		t.Fatalf("DecryptBatch: %v", err)
+	}
+	if asked := directory.askedFor(); len(asked) != 2 {
+		t.Errorf("expected no further fetch, asked for the keys of %v", asked)
+	}
+}
+
+func TestAFailedPublicKeyFetchLeavesTheOtherUsersKeysArriving(t *testing.T) {
+	admin, member, bot := newParty(t, "5001"), newParty(t, "5002"), newParty(t, "5003")
+	keyChange, message := keyChangeAndMessage(t, admin, []*party{admin, member, bot}, member, "hello group")
+	events := []string{keyChange, message}
+
+	// The directory holds the admin's keys alone: the member's fetch fails.
+	directory := directoryOf(admin)
+	bot.core.FetchPublicKeysWith(directory.fetch)
+	result, err := bot.core.DecryptBatch(events)
+	if err != nil {
+		t.Fatalf("DecryptBatch: %v", err)
+	}
+	if asked := directory.askedFor(); !reflect.DeepEqual(asked, []string{"5001", "5002"}) {
+		t.Errorf("asked for the keys of %v, want [5001 5002]", asked)
+	}
+
+	// The key change verifies with the admin's keys, and the result names
+	// the key the member's message still lacks.
+	if len(result.UnverifiedKeyChanges) != 0 {
+		t.Errorf("unverified key changes: %v", result.UnverifiedKeyChanges)
+	}
+	if texts := messageTexts(result); !reflect.DeepEqual(texts, []string{""}) {
+		t.Errorf("expected the key change alone, got %q", texts)
+	}
+	wantMissing := map[string]chatxdk.MissingSigningKey{
+		"1": {UserID: "5002", PublicKeyVersion: "1"},
+	}
+	if !reflect.DeepEqual(result.MissingSigningKeys, wantMissing) {
+		t.Errorf("missing signing keys %v, want %v", result.MissingSigningKeys, wantMissing)
+	}
+
+	// The SDK remembers the lookup that brought no key: the next page does
+	// not repeat it.
+	if _, err := bot.core.DecryptBatch(events); err != nil {
+		t.Fatalf("DecryptBatch: %v", err)
+	}
+	if asked := directory.askedFor(); len(asked) != 2 {
+		t.Errorf("expected no further fetch, asked for the keys of %v", asked)
+	}
+}
+
+func TestPrepareCallsFetchThePublicKeysTheyAreNotPassed(t *testing.T) {
+	admin, member := newParty(t, "5001"), newParty(t, "5002")
+	directory := directoryOf(admin, member)
+	admin.core.FetchPublicKeysWith(directory.fetch)
+
+	// A one-to-one named by the other user's id: the SDK fetches the
+	// identity keys of both users.
+	direct, err := admin.core.PrepareConversationKeyChange(nil, "5002")
+	if err != nil {
+		t.Fatalf("PrepareConversationKeyChange: %v", err)
+	}
+	if direct.ConversationID != "5001:5002" {
+		t.Errorf("conversation id %q, want 5001:5002", direct.ConversationID)
+	}
+	if recipients := recipientsOf(direct); !reflect.DeepEqual(recipients, []string{"5001", "5002"}) {
+		t.Errorf("key change encrypted to %v, want [5001 5002]", recipients)
+	}
+	if asked := directory.askedFor(); !reflect.DeepEqual(asked, []string{"5001", "5002"}) {
+		t.Errorf("asked for the keys of %v, want [5001 5002]", asked)
+	}
+
+	// The SDK stored the keys: the group calls, which name their members,
+	// need no fetch.
+	members := []string{"5001", "5002"}
+	created, err := admin.core.PrepareGroupCreate(nil, testGroup, members, members[:1], "")
+	if err != nil {
+		t.Fatalf("PrepareGroupCreate: %v", err)
+	}
+	if recipients := recipientsOf(created); !reflect.DeepEqual(recipients, []string{"5001", "5002"}) {
+		t.Errorf("group create encrypted to %v, want [5001 5002]", recipients)
+	}
+	removed, err := admin.core.PrepareGroupMembersRemove(nil, testGroup, members[1:], members[:1])
+	if err != nil {
+		t.Fatalf("PrepareGroupMembersRemove: %v", err)
+	}
+	if recipients := recipientsOf(removed); !reflect.DeepEqual(recipients, []string{"5001"}) {
+		t.Errorf("member removal encrypted to %v, want [5001]", recipients)
+	}
+	if asked := directory.askedFor(); len(asked) != 2 {
+		t.Errorf("expected no further fetch, asked for the keys of %v", asked)
+	}
+}
+
+// sentMessage is one message posted to the fake X API: the path it was
+// posted to and its body.
+type sentMessage struct {
+	path string
+	body SendBody
+}
+
+// fakeXAPI is the X API as the bot sees it, offline: users' public keys, one
+// page of events, and a record of the messages it was sent.
+type fakeXAPI struct {
+	directory *publicKeyDirectory
+	// events is the data events of the page.
+	events []EventItem
+	// keyEvents is the key events of the page.
+	keyEvents []string
+
+	mu   sync.Mutex
+	sent []sentMessage
+}
+
+func (api *fakeXAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/2/users/") && strings.HasSuffix(path, "/public_keys"):
+		userID := strings.TrimSuffix(strings.TrimPrefix(path, "/2/users/"), "/public_keys")
+		records, err := api.directory.fetch(userID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		// The resource as the API returns it: the fields of a record, and
+		// one the SDK does not read.
+		data := make([]map[string]any, 0, len(records))
+		for _, record := range records {
+			data = append(data, map[string]any{
+				"public_key_version":            record.PublicKeyVersion,
+				"public_key":                    record.PublicKey,
+				"signing_public_key":            record.SigningPublicKey,
+				"identity_public_key_signature": record.IdentityPublicKeySignature,
+				"juicebox_config":               map[string]any{},
+			})
+		}
+		writeJSON(w, map[string]any{"data": data})
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/events"):
+		writeJSON(w, map[string]any{
+			"data": api.events,
+			"meta": map[string]any{"conversation_key_events": api.keyEvents},
+		})
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/messages"):
+		var body SendBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		api.mu.Lock()
+		api.sent = append(api.sent, sentMessage{path: path, body: body})
+		api.mu.Unlock()
+		writeJSON(w, map[string]any{})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// sentMessages is the messages posted so far, in order.
+func (api *fakeXAPI) sentMessages() []sentMessage {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return append([]sentMessage{}, api.sent...)
+}
+
+func writeJSON(w http.ResponseWriter, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func TestBotRepliesToAMessageUnderAKeyChangeWhoseSignerSentNoMessage(t *testing.T) {
+	admin, member, bot := newParty(t, "5001"), newParty(t, "5002"), newParty(t, "5003")
+	keyChange, message := keyChangeAndMessage(t, admin, []*party{admin, member, bot}, member, "hello group")
+
+	// The page as the X API returns it: the message in its data, the key
+	// change apart, among its key events.
+	api := &fakeXAPI{
+		directory: directoryOf(admin, member, bot),
+		events: []EventItem{{
+			ID:             "2100000000000000001",
+			ConversationID: testGroup,
+			SenderID:       member.userID,
+			EncodedEvent:   message,
+		}},
+		keyEvents: []string{keyChange},
+	}
+	server := httptest.NewServer(api)
+	defer server.Close()
+	chatbot := NewBot(bot.core, NewXChatClient("token", server.URL), bot.userID)
+	if err := chatbot.PollOnce(testGroup); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	// The bot's SDK fetched the keys of the admin, who sent no message, and
+	// of the member, and the bot answered the member's message.
+	if asked := api.directory.askedFor(); !reflect.DeepEqual(asked, []string{"5001", "5002"}) {
+		t.Errorf("asked for the keys of %v, want [5001 5002]", asked)
+	}
+	sent := api.sentMessages()
+	if len(sent) != 1 {
+		t.Fatalf("expected one reply, got %d", len(sent))
+	}
+	if want := "/2/chat/conversations/" + testGroup + "/messages"; sent[0].path != want {
+		t.Errorf("reply posted to %q, want %q", sent[0].path, want)
+	}
+	reply := sent[0].body
+	if reply.MessageID == "" || reply.EncodedMessageCreateEvent == "" || reply.EncodedMessageEventSignature == "" {
+		t.Errorf("incomplete reply: %+v", reply)
+	}
+
+	// The page read again brings no second reply and no further fetch.
+	if err := chatbot.PollOnce(testGroup); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+	if sent := api.sentMessages(); len(sent) != 1 {
+		t.Errorf("expected one reply after the page is read again, got %d", len(sent))
+	}
+	if asked := api.directory.askedFor(); len(asked) != 2 {
+		t.Errorf("expected no further fetch, asked for the keys of %v", asked)
 	}
 }

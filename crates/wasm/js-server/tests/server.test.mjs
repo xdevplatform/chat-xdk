@@ -3,12 +3,14 @@
 // it shares with @xdevplatform/chat-xdk, and the staged copies it ships. The
 // SDK is never mocked; only the Juicebox network client is a stub.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 
 import init, { __featureSetDefaultEndpoint } from "../pkg/chat_xdk_wasm.js";
 import * as browser from "../../js/index.js";
 import { keyCacheTests } from "../../js/tests/key_cache.mjs";
 import { keyChangeSignerTests } from "../../js/tests/key_change_signers.mjs";
+import { publicKeyTests } from "../../js/tests/public_keys.mjs";
 import * as server from "../index.js";
 
 const { ChatWithJuicebox, ChatXdkError, ServerChat, bytesToBase64, createChat } = server;
@@ -66,6 +68,29 @@ async function stagedCopiesTests() {
   ]) {
     assert.ok((await read(copy)).equals(await read(source)), `${copy} is stale: run \`make js-server\``);
   }
+}
+
+// The first chats of a process, created at the same time, are separate chats:
+// each keeps the keys it generated. This process loaded the wasm module
+// before its first chat, so a child process creates them.
+async function concurrentFirstChatsTests() {
+  const script = `
+    const { createChat } = await import(${JSON.stringify(new URL("../index.js", import.meta.url).href)});
+    const chats = await Promise.all(Array.from({ length: 4 }, () => createChat()));
+    for (const chat of chats) chat.generateKeypairs();
+    const keys = new Set(chats.map((chat) => Buffer.from(chat.exportKeys()).toString("hex")));
+    process.exit(keys.size === chats.length ? 0 : 1);
+  `;
+  const code = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: "inherit",
+      // Nothing listens here: the chats' feature-switch reads fail, with no
+      // request leaving the machine.
+      env: { ...process.env, CHAT_XDK_API_BASE_URL: "http://127.0.0.1:9/" },
+    });
+    child.on("exit", resolve);
+  });
+  assert.equal(code, 0, "chats created at the same time on first use do not each keep their own keys");
 }
 
 // Everything @xdevplatform/chat-xdk exports, and ServerChat; only the server
@@ -193,6 +218,7 @@ async function main() {
   const v = await loadVectors();
 
   await stagedCopiesTests();
+  await concurrentFirstChatsTests();
   await exportsTests();
   await exportImportRoundTripTests();
   await fixtureKeysTests(v);
@@ -204,6 +230,10 @@ async function main() {
   // a key and read by every call that takes one, and its addSigningKeys
   // merges into the stored signing keys.
   await keyCacheTests(() => createChat());
+  // A ServerChat names the signing keys a batch lacked, stores the public
+  // keys the X API returns, reads its prepare calls' keys from them, and
+  // fetches what is missing through its public-key hook.
+  await publicKeyTests((options) => createChat(options));
   console.log("server.test.mjs: all assertions passed");
 }
 

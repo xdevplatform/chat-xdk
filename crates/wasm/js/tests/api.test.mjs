@@ -11,9 +11,11 @@ import init, {
   detectImageDimensions,
   encryptedFileSize,
 } from "../pkg/chat_xdk_wasm.js";
+import { createChat } from "../index.js";
 import { featureServer, keepOffline, reading, v1Chat, waitForV1 } from "./feature_server.mjs";
 import { keyCacheTests } from "./key_cache.mjs";
 import { keyChangeSignerTests } from "./key_change_signers.mjs";
+import { publicKeyTests } from "./public_keys.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
 const withKey = ({ conversationKeys, ...rest }) => {
@@ -1466,6 +1468,13 @@ async function main() {
   // and read by every call that takes one, and addSigningKeys merges into
   // the stored signing keys.
   await keyCacheTests(() => new Chat());
+
+  // 9. Other users' public keys: a batch names the signing keys it lacked,
+  // addPublicKeys stores the records the X API returns, the prepare calls
+  // read their members' keys from the store, and the Async methods fetch
+  // what is missing through the hook. The hook belongs to the chat
+  // createChat makes, so these run on that chat.
+  await publicKeyTests((options) => createChat(options));
 
   console.log("api.test.mjs: all assertions passed");
 }

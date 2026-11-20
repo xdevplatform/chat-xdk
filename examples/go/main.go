@@ -1,7 +1,8 @@
 // Command chatbot-go is a chat-xdk example bot.
 //
 // Flow (encrypt on send, decrypt on receive): load keys -> batch-decrypt the backlog ->
-// poll for new events -> decrypt each -> reply -> encrypt + sign -> send.
+// poll for new events -> batch-decrypt each page -> reply -> encrypt + sign -> send.
+// The SDK fetches the public keys it lacks through the X API client.
 //
 // Configure via environment variables (see .env.example) and run:
 //

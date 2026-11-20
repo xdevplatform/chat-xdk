@@ -219,6 +219,33 @@ func ffiAddSigningKeys(h handle, signingKeysJSON string) error {
 	return err
 }
 
+func ffiAddPublicKeys(h handle, recordsJSON string) error {
+	c := C.CString(recordsJSON)
+	defer C.free(unsafe.Pointer(c))
+	_, err := ffiResult(C.chat_xdk_add_public_keys(h, c))
+	return err
+}
+
+// ffiMissingPublicKeys returns, as a JSON array of user ids, the users whose
+// public keys a decrypt-events result was missing, given its
+// missing_signing_keys object as JSON.
+func ffiMissingPublicKeys(h handle, missingSigningKeysJSON string) (string, error) {
+	c := C.CString(missingSigningKeysJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_missing_public_keys(h, c))
+}
+
+// ffiMissingPublicKeysFor returns, as a JSON array of user ids, the users
+// whose public keys the prepare call named call would be missing, given that
+// call's params document.
+func ffiMissingPublicKeysFor(h handle, call, paramsJSON string) (string, error) {
+	cCall := C.CString(call)
+	defer C.free(unsafe.Pointer(cCall))
+	cParams := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(cParams))
+	return ffiResult(C.chat_xdk_missing_public_keys_for(h, cCall, cParams))
+}
+
 func ffiLock(h handle) error {
 	_, err := ffiResult(C.chat_xdk_lock(h))
 	return err

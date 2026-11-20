@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
 
 // apiConvID converts a conversation id to the form the X API URL paths expect
@@ -85,7 +87,7 @@ type eventsResponse struct {
 }
 
 type publicKeysResponse struct {
-	Data []map[string]any `json:"data"`
+	Data []chatxdk.PublicKeyRecord `json:"data"`
 }
 
 type meResponse struct {
@@ -103,11 +105,12 @@ func (c *XChatClient) GetMyUserID() (string, error) {
 	return out.Data.ID, nil
 }
 
-// GetPublicKeys fetches another user's registered public keys. Every field
-// of the public_key resource (public_key, signing_public_key,
-// identity_public_key_signature, public_key_version, juicebox_config) is
-// always included; the route takes no public_key.fields parameter.
-func (c *XChatClient) GetPublicKeys(userID string) ([]map[string]any, error) {
+// GetPublicKeys fetches a user's registered public keys, as the records the
+// SDK stores (ChatCore.FetchPublicKeysWith). Every field of the public_key
+// resource (public_key, signing_public_key, identity_public_key_signature,
+// public_key_version, juicebox_config) is always included; the route takes
+// no public_key.fields parameter. A record keeps the fields the SDK reads.
+func (c *XChatClient) GetPublicKeys(userID string) ([]chatxdk.PublicKeyRecord, error) {
 	var out publicKeysResponse
 	path := fmt.Sprintf("/2/users/%s/public_keys", url.PathEscape(userID))
 	if err := c.do(http.MethodGet, path, nil, &out); err != nil {

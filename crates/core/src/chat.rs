@@ -216,6 +216,36 @@ impl Chat {
     pub fn add_signing_keys(&self, entries: &[SigningKeyEntry]) {
         self.inner.add_signing_keys(entries);
     }
+    /// Add users' public keys, as `GET /2/users/{id}/public_keys` returns
+    /// them, to the stored set; see [`crate::ChatCore::add_public_keys`].
+    pub fn add_public_keys(
+        &self,
+        records: &std::collections::HashMap<String, Vec<PublicKeyRecord>>,
+    ) {
+        self.inner.add_public_keys(records);
+    }
+    /// The users whose public keys a batch result was missing; see
+    /// [`crate::ChatCore::missing_public_keys`].
+    pub fn missing_public_keys(&self, result: &DecryptEventsResult) -> Vec<String> {
+        self.inner.missing_public_keys(result)
+    }
+    /// [`Self::missing_public_keys`] for the entries of a result's
+    /// `missing_signing_keys`; see
+    /// [`crate::ChatCore::missing_public_keys_among`].
+    pub fn missing_public_keys_among(&self, missing: &[MissingSigningKey]) -> Vec<String> {
+        self.inner.missing_public_keys_among(missing)
+    }
+    /// The users whose public keys a prepare call that makes a conversation
+    /// key would be missing; see
+    /// [`crate::ChatCore::missing_public_keys_for`].
+    pub fn missing_public_keys_for(&self, call: crate::KeyChangeCall<'_>) -> Vec<String> {
+        self.inner.missing_public_keys_for(call)
+    }
+    /// Set the hook that fetches users' public keys, or remove it; see
+    /// [`crate::ChatCore::set_resolve_public_keys`].
+    pub fn set_resolve_public_keys(&self, hook: Option<crate::ResolvePublicKeys>) {
+        self.inner.set_resolve_public_keys(hook);
+    }
     /// The URL of this chat's feature switches; see
     /// [`crate::ChatCore::feature_switches_url`].
     pub fn feature_switches_url(&self) -> String {
