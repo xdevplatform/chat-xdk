@@ -80,7 +80,8 @@ await chat.unlock("2580");
 chat.setIdentity({ userId: "111", signingKeyVersion: "1" });
 chat.setCacheKeys(true);
 // Each signing-key entry carries all five fields from the X API
-// public keys response.
+// public keys response. setSigningKeys replaces the stored keys;
+// addSigningKeys adds to them.
 chat.setSigningKeys([
   {
     userId: "111",
@@ -108,10 +109,34 @@ for (const dm of result.events) {
   }
 }
 
+// A key change verifies with the signing keys of the member who made it. One
+// that did not verify is here, by its index in the batch; when its key was
+// dropped, the messages under it are in result.errors. With a public-key
+// hook, decryptEventsAsync fetches the keys a batch is missing: see "Other
+// users' public keys" below.
+for (const [index, change] of Object.entries(result.unverifiedKeyChanges)) {
+  console.warn(index, change.reason, change.senderId, change.keyDropped);
+}
+// Three more maps are reported the same way: result.missingSigningKeys, the
+// events whose sender's signing key the call did not have;
+// result.undecryptableKeyChanges, the key changes whose key this chat could
+// not decrypt; and result.rejectedSigningKeys, the signing keys left out
+// because their identity binding does not verify.
+
+// The version to encrypt with: for a batch of one conversation,
+// result.conversationKeys.latestVersion; for any batch,
+// result.conversationKeys.latestVersions[conversationId].
+
 // Individual events after the initial load: the empty key map resolves from
 // the cache and the unset signing keys from the store (pass either
-// explicitly to override).
+// explicitly to override). A key change that verifies here is cached as one
+// in a batch is.
 const event = chat.decryptEvent({ eventB64: webhookEventB64 });
+// The message's files decrypt from the cache too, with no key map.
+for (const { mediaHashKey } of event.mediaHashes ?? []) {
+  const encrypted = await download(mediaHashKey);
+  const file = chat.decryptFile({ encrypted, eventB64: webhookEventB64, mediaHashKey });
+}
 
 // Sending resolves the identity and conversation key from the session too.
 const payload = chat.encryptMessage({ conversationId: event.conversationId, text: "hi!" });
@@ -123,6 +148,183 @@ const reply = chat.encryptReply({
 });
 const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: webhookEventB64 });
 ```
+
+While the key cache is on, it keeps every key version of a conversation
+whose key change verified in `decryptEvents` or `decryptEvent`, and every key
+the chat made itself with `prepareConversationKeyChange`,
+`prepareGroupCreate`, `prepareGroupMembersChange` or
+`prepareGroupMembersRemove`. A call that omits its conversation key reads it
+from there: the encrypt calls and the group title, description and avatar
+changes use the conversation's newest key (`prepareGroupAvatarChange` needs
+no `conversationKeyVersion`), and `decryptEvent`, `decryptFile` and
+`fileDecryptor` the version the event names. A prepared key is cached before
+its request is sent: if the X API rejects the request, prepare the change
+again.
+
+## Other users' public keys
+
+A chat verifies events with the signing keys of the users who sent them, and
+encrypts a new conversation key to its members' identity keys. Both are in
+the records `GET /2/users/{id}/public_keys` returns. Set a hook that fetches
+them, and the chat asks it for the keys it is missing:
+
+```typescript
+import { createChat, type PublicKeyRecords } from "@xdevplatform/chat-xdk";
+
+const chat = await createChat({
+  getAuthToken,
+  resolvePublicKeys: async (userIds) => {
+    const records: PublicKeyRecords = {};
+    for (const userId of userIds) {
+      // The `data` array of GET /2/users/{id}/public_keys, as the API sends it.
+      records[userId] = await xApi.getPublicKeys(userId);
+    }
+    return records;
+  },
+});
+
+// Verifies with the stored keys, after fetching the keys of the senders it
+// has none for.
+const result = await chat.decryptEventsAsync({ events: rawEvents });
+
+// Encrypts the new key to the stored keys of the members named, after
+// fetching the ones it has none for. No publicKeys needed.
+const group = await chat.prepareGroupCreateAsync({
+  conversationId: "g123",
+  memberIds: ["111", "222"],
+  adminIds: ["111"],
+});
+```
+
+- The hook takes user ids and returns, or resolves to, each user's records
+  by user id. Leave out a user it has nothing for. What it throws rejects
+  the call that asked.
+- Only five methods call the hook: `decryptEventsAsync`,
+  `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+  `prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync`.
+  Each returns a Promise of what the method it is named after returns. The
+  other methods never call it.
+- `decryptEventsAsync` calls the hook only when it is passed no
+  `signingKeys`, and the prepare methods only when they are passed no
+  `publicKeys`.
+- `chat.setResolvePublicKeys(hook)` sets or replaces the hook later, and
+  `chat.setResolvePublicKeys(null)` removes it.
+- Setting a hook turns the key cache on (`setCacheKeys(true)`). Removing the
+  hook leaves the cache on.
+- A lookup that did not bring a key is not repeated for a minute, so a user
+  without keys does not cost a request with every batch.
+
+With `publicKeys` omitted, a prepare call encrypts to the stored keys of the
+members its params name, and throws when one of them has none:
+
+| Call | Members it reads keys for |
+|---|---|
+| `prepareGroupCreate` | `memberIds` and `adminIds` |
+| `prepareGroupMembersChange` | `currentMemberIds` and `newMemberIds` |
+| `prepareGroupMembersRemove` | `remainingMemberIds`: the members who stay, you included |
+| `prepareConversationKeyChange` | `memberIds`: every participant, you included. For a one-to-one, `conversationId` is enough |
+
+To fetch the keys yourself instead, without a hook, use the two calls the
+hook is built on. `decryptEvents` reports each event whose sender's signing
+key it did not have in `missingSigningKeys`, by the event's index in the
+batch; `missingPublicKeys` lists those senders, and `addPublicKeys` stores
+their records, keeping the keys already stored:
+
+```typescript
+let result = chat.decryptEvents({ events: rawEvents });
+const userIds = chat.missingPublicKeys(result);
+if (userIds.length > 0) {
+  chat.addPublicKeys(await fetchPublicKeys(userIds)); // { [userId]: records }
+  result = chat.decryptEvents({ events: rawEvents });
+}
+```
+
+`missingPublicKeys` also remembers what it returned: it does not list the
+same missing key again for a minute.
+
+`addPublicKeys` and `addSigningKeys` add to the stored keys, where
+`setSigningKeys` replaces them all. With a hook set, add: `setSigningKeys`
+also drops the keys the hook fetched, and the chat waits a minute before it
+asks the hook for them again.
+
+### Many users, many conversations
+
+A server often has many users signed in at once, each in many conversations.
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One hook function for every chat.** Each chat stores only the keys it
+  was given, so give every chat the same `resolvePublicKeys`, over one cache
+  of `GET /2/users/{id}/public_keys` answers for the whole process. Then two
+  chats that meet the same user cost one request. Have the cache share a
+  lookup that is under way, drop a lookup that failed so the next call tries
+  again, and expire each answer after a few minutes so a key a user
+  registers later is picked up.
+- **Add keys, don't replace them**, as above.
+
+```js
+import { createChat } from "@xdevplatform/chat-xdk";
+
+const KEY_TTL_MS = 5 * 60_000;
+const keyCache = new Map(); // userId -> { records: Promise<records | null>, expires }
+const resolvePublicKeys = async (ids) => {
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    let entry = keyCache.get(id);
+    if (!entry || entry.expires <= Date.now()) {
+      const fresh = { expires: Date.now() + KEY_TTL_MS };
+      // A failed lookup is dropped, so the next call fetches again.
+      fresh.records = xApi.getPublicKeys(id).catch(() => {
+        if (keyCache.get(id) === fresh) keyCache.delete(id);
+        return null;
+      });
+      keyCache.set(id, (entry = fresh));
+    }
+    const recs = await entry.records;
+    if (recs) out[id] = recs;
+  }));
+  return out;
+};
+
+const chats = new Map(); // localUserId -> Promise<chat>
+function chatFor(user) {
+  if (!chats.has(user.id)) chats.set(user.id, openChat(user));
+  return chats.get(user.id);
+}
+async function openChat(user) {
+  const chat = await createChat({
+    juiceboxConfig: user.juiceboxConfig,
+    getAuthToken: user.getAuthToken,
+    resolvePublicKeys,
+  });
+  await chat.unlock(user.pin);
+  chat.setIdentity({ userId: user.id, signingKeyVersion: user.signingKeyVersion });
+  return chat;
+}
+
+// For a request of a signed-in user:
+const chat = await chatFor(user);
+const result = await chat.decryptEventsAsync({ events: rawEvents });
+```
+
+`xApi.getPublicKeys(id)` stands for your call to
+`GET /2/users/{id}/public_keys`, which resolves to the `data` array of the
+response. `chats` keeps the promise of each chat, so two requests of one
+user that arrive together share one chat. Run `unlock` and the other
+Juicebox calls one chat at a time: juicebox-sdk reads its auth-token callback
+from one place in the process. When a user signs out, take the chat out of
+`chats` and call `free()` on it.
+
+Before 0.7.6, wait for a process's first `createChat` call to return before
+you make the next. Chats created at the same time on first use shared one
+chat's keys and identity.
+
+[`examples/js/src/multi-user.mjs`](../../../examples/js/src/multi-user.mjs)
+has this pattern as code that runs, with tests, and
+[Many users, many conversations](../../../docs/API.md#many-users-many-conversations)
+says when a key a user registers later is picked up.
 
 ## API
 

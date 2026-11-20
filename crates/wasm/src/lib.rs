@@ -38,9 +38,12 @@ use chat_xdk_core::error::{ErrorKind, SdkError};
 
 // Import generated camelCase JS types from core
 use chat_xdk_core::js::{
-    JsEvent, JsPreparedAction, JsPreparedConversationChange, JsPreparedGroupMetadataChange,
-    JsPublicKeyInput, JsPublicKeyRegistrationPayload, JsSendPayload, JsSigningKeyEntry,
+    JsEvent, JsMissingSigningKey, JsPreparedAction, JsPreparedConversationChange,
+    JsPreparedGroupMetadataChange, JsPublicKeyInput, JsPublicKeyRegistrationPayload,
+    JsRejectedSigningKey, JsSendPayload, JsSigningKeyEntry, JsUndecryptableKeyChange,
+    JsUnverifiedKeyChange,
 };
+use chat_xdk_core::KeyChangeCall;
 
 // Utility Functions (free functions, not methods)
 
@@ -372,10 +375,21 @@ impl Chat {
 
     /// Enable or disable the conversation-key cache (off by default).
     ///
-    /// While enabled, `decryptEvents` caches, per conversation, the key whose
-    /// key change carried a valid signature at the highest version seen, and
-    /// the encrypt methods resolve an omitted `conversationKey` /
-    /// `conversationKeyVersion` pair from it. Disabling clears the cache.
+    /// While enabled, the cache keeps, per conversation, the key of every key
+    /// change whose signature verified in `decryptEvents` or `decryptEvent`,
+    /// and the key of every key change this chat prepared
+    /// (`prepareConversationKeyChange`, `prepareGroupCreate`,
+    /// `prepareGroupMembersChange` or `prepareGroupMembersRemove`). A call
+    /// that omits its conversation key reads it from there: the encrypt
+    /// methods and the title, description and avatar changes use the
+    /// conversation's newest key, and `decryptEvent`, `decryptFile` and
+    /// `fileDecryptor` the key at the version the event names. Disabling
+    /// clears the cache.
+    ///
+    /// A prepared key is cached when the prepare call returns, before its
+    /// request is sent. If the X API rejects the request, no one else holds
+    /// that key: prepare the change again, or pass the key to encrypt with
+    /// explicitly, until a newer key change verifies.
     #[wasm_bindgen(js_name = setCacheKeys)]
     pub fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
@@ -400,14 +414,125 @@ impl Chat {
     }
 
     /// Store signing keys to use when a decrypt call omits its `signingKeys`
-    /// argument (same array shape as `decryptEvents`). Only this explicit
-    /// call populates the store — a key carried inside an event is never
-    /// trusted for verification. Each call replaces the previous set.
+    /// argument (same array shape as `decryptEvents`). Only this call,
+    /// `addSigningKeys` and `addPublicKeys` populate the store — a key
+    /// carried inside an event is never trusted for verification. Each call
+    /// replaces the previous set; `addSigningKeys` and `addPublicKeys` keep
+    /// it.
     #[wasm_bindgen(js_name = setSigningKeys)]
     pub fn set_signing_keys(&self, signing_keys: JsValue) -> Result<(), JsValue> {
         self.inner
             .set_signing_keys(&js_to_signing_keys(signing_keys)?);
         Ok(())
+    }
+
+    /// Add signing keys to the store `setSigningKeys` sets, keeping the keys
+    /// it holds (same array shape as `setSigningKeys`): an entry replaces
+    /// the stored entry of the same user and key version, and any other is
+    /// added.
+    #[wasm_bindgen(js_name = addSigningKeys)]
+    pub fn add_signing_keys(&self, signing_keys: JsValue) -> Result<(), JsValue> {
+        self.inner
+            .add_signing_keys(&js_to_signing_keys(signing_keys)?);
+        Ok(())
+    }
+
+    /// Add users' public keys to the store `setSigningKeys` sets, as
+    /// `addSigningKeys` adds entries. `records` is an object mapping each
+    /// user id to the array of records `GET /2/users/{id}/public_keys`
+    /// returns for that user, as the X API sends them: each field under its
+    /// snake_case or camelCase name, the key version a string or a number,
+    /// and any other field ignored. A record without a key version, an
+    /// identity key or a signing key is left out; `undefined` or `null`
+    /// adds nothing.
+    ///
+    /// The decrypt calls verify with the stored keys when they are passed
+    /// none, and `prepareConversationKeyChange`, `prepareGroupCreate`,
+    /// `prepareGroupMembersChange` and `prepareGroupMembersRemove` read
+    /// their members' identity keys from them when they are passed no
+    /// `publicKeys`.
+    #[wasm_bindgen(js_name = addPublicKeys)]
+    pub fn add_public_keys(&self, records: JsValue) -> Result<(), JsValue> {
+        if records.is_null() || records.is_undefined() {
+            return Ok(());
+        }
+        let records: HashMap<String, Vec<chat_xdk_core::PublicKeyRecord>> =
+            serde_wasm_bindgen::from_value(records)
+                .map_err(|e| invalid_input(format!("Invalid public key records: {}", e)))?;
+        self.inner.add_public_keys(&records);
+        Ok(())
+    }
+
+    /// The users whose public keys a `decryptEvents` result was missing:
+    /// the sender of each event in the result's `missingSigningKeys`, once
+    /// each, in batch order. Fetch their keys, add them with
+    /// `addPublicKeys`, and decrypt the batch again.
+    ///
+    /// A key this call returned a user for is not asked for again for a
+    /// minute unless it arrives, so a lookup that did not bring the key is
+    /// not repeated with every batch.
+    #[wasm_bindgen(js_name = missingPublicKeys)]
+    pub fn missing_public_keys(&self, result: JsValue) -> Result<Vec<String>, JsValue> {
+        // Only the one map is read: the events stay on the JavaScript side.
+        let missing_signing_keys = js_sys::Reflect::get(&result, &"missingSigningKeys".into())
+            .map_err(|_| invalid_input("Invalid result: pass the result decryptEvents returned"))?;
+        if missing_signing_keys.is_null() || missing_signing_keys.is_undefined() {
+            return Ok(Vec::new());
+        }
+        let by_index: HashMap<String, JsMissingSigningKey> =
+            serde_wasm_bindgen::from_value(missing_signing_keys)
+                .map_err(|e| invalid_input(format!("Invalid missingSigningKeys: {}", e)))?;
+        let missing = bindings::missing_signing_keys_in_order(by_index);
+        Ok(self.inner.missing_public_keys_among(&missing))
+    }
+
+    /// The users whose public keys a prepare call that makes a conversation
+    /// key would be missing: the members it encrypts the key to who have no
+    /// stored key with a valid identity binding. `call` names the prepare
+    /// call (`conversationKeyChange`, `groupCreate`, `groupMembersChange` or
+    /// `groupMembersRemove`) and `params` is the params object that call
+    /// takes. Empty when the params pass `publicKeys`. A user this call
+    /// returned is not returned again for a minute while the store still
+    /// has no key for that user. The JS wrapper calls this before it asks
+    /// its public-key hook. Not API.
+    #[wasm_bindgen(js_name = missingPublicKeysFor, skip_typescript)]
+    pub fn missing_public_keys_for(
+        &self,
+        call: &str,
+        params: JsValue,
+    ) -> Result<Vec<String>, JsValue> {
+        let missing = match call {
+            "conversationKeyChange" => {
+                let p: JsConversationKeyChangeParams =
+                    from_js_params("prepareConversationKeyChange", params)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::ConversationKeyChange(&p.into_core()))
+            }
+            "groupCreate" => {
+                let p: JsGroupCreateParams = from_js_params("prepareGroupCreate", params)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupCreate(&p.into_core()))
+            }
+            "groupMembersChange" => {
+                let p: JsGroupMembersChangeParams =
+                    from_js_params("prepareGroupMembersChange", params)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersChange(&p.into_core()))
+            }
+            "groupMembersRemove" => {
+                let p: JsGroupMembersRemoveParams =
+                    from_js_params("prepareGroupMembersRemove", params)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersRemove(&p.into_core()))
+            }
+            other => {
+                return Err(invalid_input(format!(
+                    "Invalid call '{other}': expected conversationKeyChange, groupCreate, \
+                     groupMembersChange or groupMembersRemove"
+                )))
+            }
+        };
+        Ok(missing)
     }
 
     /// Get current public keys.
@@ -460,38 +585,20 @@ impl Chat {
     /// Extract and decrypt conversation keys from raw KeyChange event strings.
     ///
     /// Returns a `ConversationKeyResult` with:
-    /// - `keys`: Object mapping key version strings to `Uint8Array` conversation keys
-    /// - `latestVersion`: The highest key version; signatures are not checked
+    /// - `keys`: Object mapping key version strings to `Uint8Array`
+    ///   conversation keys; a version that key changes of more than one
+    ///   conversation carry is left out
+    /// - `keysByConversation`: Object mapping each conversation id to that
+    ///   conversation's `keys`
+    /// - `latestVersion`: The highest key version when every event belongs
+    ///   to one conversation, null when they belong to more than one;
+    ///   signatures are not checked
+    /// - `latestVersions`: Object mapping each conversation id to its highest
+    ///   key version; signatures are not checked
     #[wasm_bindgen(js_name = extractConversationKeys)]
     pub fn extract_conversation_keys(&self, events: Vec<String>) -> Result<JsValue, JsValue> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
-        let result = self.inner.extract_conversation_keys(&refs);
-
-        // Build JS object with keys map and latestVersion
-        let obj = js_sys::Object::new();
-
-        // Build the keys map
-        let keys_obj = js_sys::Object::new();
-        for (version, key) in &result.keys {
-            let arr = js_sys::Uint8Array::from(key.encoded());
-            js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| internal_error("Failed to build conversation key map"))?;
-        }
-
-        js_sys::Reflect::set(&obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| internal_error("Failed to set keys"))?;
-
-        js_sys::Reflect::set(
-            &obj,
-            &"latestVersion".into(),
-            &result
-                .latest_version
-                .map(|v| JsValue::from_str(&v))
-                .unwrap_or(JsValue::NULL),
-        )
-        .map_err(|_| internal_error("Failed to set latestVersion"))?;
-
-        Ok(obj.into())
+        conversation_keys_object(&self.inner.extract_conversation_keys(&refs))
     }
 
     /// Decrypt multiple events in batch.
@@ -505,12 +612,25 @@ impl Chat {
     /// optional `signingKeys`, an array of `{ userId, publicKeyVersion,
     /// publicKey, identityPublicKey, identityPublicKeySignature }` objects for
     /// ALL participants in the conversation (pass the X API response
-    /// through). Omitting `signingKeys` falls back to the keys stored via
-    /// `setSigningKeys`.
+    /// through), the members who signed the batch's key changes included.
+    /// Omitting `signingKeys` falls back to the keys stored via
+    /// `setSigningKeys`, `addSigningKeys` and `addPublicKeys`.
     ///
-    /// Returns `{ events, conversationKeys, errors }`. A member removal's
-    /// title and description, re-encrypted under the new key, aren't
-    /// changes: they land in `errors`.
+    /// Returns `{ events, conversationKeys, errors, unverifiedKeyChanges,
+    /// undecryptableKeyChanges, rejectedSigningKeys, missingSigningKeys }`.
+    /// A member removal's title and description, re-encrypted under the new
+    /// key, aren't changes: they land in `errors`. Like `errors`, the last
+    /// four are objects keyed by index. `unverifiedKeyChanges` holds, by its
+    /// index in `events`, each key change whose signature did not verify:
+    /// why, the sender and signing-key version to fetch, and whether its key
+    /// was dropped. `undecryptableKeyChanges` holds, by its index in
+    /// `events`, each key change whose key this chat could not decrypt, and
+    /// why. `rejectedSigningKeys` holds, by its index in the signing keys,
+    /// each one left out because its identity binding does not verify.
+    /// `missingSigningKeys` holds, by its index in `events`, the sender and
+    /// signing-key version of each signed event whose sender's signing key
+    /// was not among the keys the call verified with: `missingPublicKeys`
+    /// reads the users to fetch keys for from it.
     #[wasm_bindgen(js_name = decryptEvents)]
     pub fn decrypt_events(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventsParams = from_js_params("decryptEvents", params)?;
@@ -540,28 +660,12 @@ impl Chat {
         js_sys::Reflect::set(&obj, &"events".into(), &events.into())
             .map_err(|_| internal_error("Failed to set events"))?;
 
-        // Convert conversation keys
-        let conv_keys_obj = js_sys::Object::new();
-        let keys_obj = js_sys::Object::new();
-        for (version, key) in &result.conversation_keys.keys {
-            let arr = js_sys::Uint8Array::from(key.encoded());
-            js_sys::Reflect::set(&keys_obj, &JsValue::from_str(version), &arr.into())
-                .map_err(|_| internal_error("Failed to build conversation key map"))?;
-        }
-        js_sys::Reflect::set(&conv_keys_obj, &"keys".into(), &keys_obj.into())
-            .map_err(|_| internal_error("Failed to set keys"))?;
         js_sys::Reflect::set(
-            &conv_keys_obj,
-            &"latestVersion".into(),
-            &result
-                .conversation_keys
-                .latest_version
-                .map(|v| JsValue::from_str(&v))
-                .unwrap_or(JsValue::NULL),
+            &obj,
+            &"conversationKeys".into(),
+            &conversation_keys_object(&result.conversation_keys)?,
         )
-        .map_err(|_| internal_error("Failed to set latestVersion"))?;
-        js_sys::Reflect::set(&obj, &"conversationKeys".into(), &conv_keys_obj.into())
-            .map_err(|_| internal_error("Failed to set conversationKeys"))?;
+        .map_err(|_| internal_error("Failed to set conversationKeys"))?;
 
         // Convert errors
         let errors_obj = js_sys::Object::new();
@@ -575,6 +679,50 @@ impl Chat {
         }
         js_sys::Reflect::set(&obj, &"errors".into(), &errors_obj.into())
             .map_err(|_| internal_error("Failed to set errors"))?;
+
+        let unverified = result
+            .unverified_key_changes
+            .into_iter()
+            .map(|(index, change)| (index, JsUnverifiedKeyChange::from(change)));
+        js_sys::Reflect::set(
+            &obj,
+            &"unverifiedKeyChanges".into(),
+            &indexed_object(unverified)?,
+        )
+        .map_err(|_| internal_error("Failed to set unverifiedKeyChanges"))?;
+
+        let undecryptable = result
+            .undecryptable_key_changes
+            .into_iter()
+            .map(|(index, change)| (index, JsUndecryptableKeyChange::from(change)));
+        js_sys::Reflect::set(
+            &obj,
+            &"undecryptableKeyChanges".into(),
+            &indexed_object(undecryptable)?,
+        )
+        .map_err(|_| internal_error("Failed to set undecryptableKeyChanges"))?;
+
+        let rejected = result
+            .rejected_signing_keys
+            .into_iter()
+            .map(|(index, key)| (index, JsRejectedSigningKey::from(key)));
+        js_sys::Reflect::set(
+            &obj,
+            &"rejectedSigningKeys".into(),
+            &indexed_object(rejected)?,
+        )
+        .map_err(|_| internal_error("Failed to set rejectedSigningKeys"))?;
+
+        let missing = result
+            .missing_signing_keys
+            .into_iter()
+            .map(|(index, key)| (index, JsMissingSigningKey::from(key)));
+        js_sys::Reflect::set(
+            &obj,
+            &"missingSigningKeys".into(),
+            &indexed_object(missing)?,
+        )
+        .map_err(|_| internal_error("Failed to set missingSigningKeys"))?;
 
         Ok(obj.into())
     }
@@ -596,17 +744,17 @@ impl Chat {
     /// returned with `verified: false`. A member removal's title and
     /// description, re-encrypted under the new key, aren't changes: they
     /// throw an invalid-input error under either policy.
+    ///
+    /// A key change that verifies is recorded as `decryptEvents` records it:
+    /// its version is the conversation's newest verified one unless a newer
+    /// is known, and while the key cache is on its key is cached.
     #[wasm_bindgen(js_name = decryptEvent)]
     pub fn decrypt_event(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsDecryptEventParams = from_js_params("decryptEvent", params)?;
-        let conversation_keys =
-            if p.conversation_keys.is_undefined() || p.conversation_keys.is_null() {
-                HashMap::new()
-            } else {
-                js_to_conv_keys("decryptEvent", p.conversation_keys)?
-            };
-        let mut core_params =
-            chat_xdk_core::DecryptEventParams::new(p.event_b64, conversation_keys);
+        let mut core_params = chat_xdk_core::DecryptEventParams::new(
+            p.event_b64,
+            js_to_conv_keys("decryptEvent", p.conversation_keys)?,
+        );
         core_params.signing_keys = p
             .signing_keys
             .map(|keys| keys.into_iter().map(Into::into).collect());
@@ -811,11 +959,14 @@ impl Chat {
     /// Sign a group member removal and rotate the conversation key for the
     /// members who stay.
     ///
-    /// `publicKeys` are the identity keys of the members who stay. The
+    /// `publicKeys` are the identity keys of the members who stay; omitted,
+    /// `null` or empty, they are the stored public keys (`addPublicKeys`) of
+    /// `remainingMemberIds`, the user ids of the members who stay. The
     /// result carries the new key and the action signatures: the removal,
     /// which names the new key version, a title and a description change for
     /// each one the params set, re-encrypted under the new key, and the key
-    /// change.
+    /// change. While the key cache is on (`setCacheKeys`), the call caches
+    /// the new key as the conversation's newest key.
     #[wasm_bindgen(js_name = prepareGroupMembersRemove)]
     pub fn prepare_group_members_remove(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupMembersRemoveParams = from_js_params("prepareGroupMembersRemove", params)?;
@@ -847,7 +998,10 @@ impl Chat {
 
     /// Sign a group avatar change: `newAvatarUrl`, the avatar image's media
     /// URL, as is, and `conversationKeyVersion`, the version of the key the
-    /// image is encrypted under. Returns `{ actionSignatures }`.
+    /// image is encrypted under. With `conversationKeyVersion` omitted,
+    /// `null` or empty, the change signs the version of the conversation's
+    /// newest key in the opt-in key cache, and throws an invalid-state error
+    /// when no key is cached. Returns `{ actionSignatures }`.
     #[wasm_bindgen(js_name = prepareGroupAvatarChange)]
     pub fn prepare_group_avatar_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupAvatarChangeParams = from_js_params("prepareGroupAvatarChange", params)?;
@@ -991,12 +1145,14 @@ impl Chat {
     /// Decrypt an encrypted file, as downloaded.
     ///
     /// Takes a single params object: `encrypted` (Uint8Array); `eventB64`,
-    /// the event of the message that carries the file, and
+    /// the event of the message that carries the file; optional
     /// `conversationKeys`, the conversation's key map, as passed to
-    /// `decryptEvent` (the map must hold the key for the message's version);
-    /// and `mediaHashKey`, the file's media hash key from the decrypted
-    /// message: a media attachment, a link card's banner or favicon, or media
-    /// quoted in its reply preview. Errors say what to pass instead.
+    /// `decryptEvent` (a map that is passed must hold the key for the
+    /// message's version; omitted, `null` or `{}`, the conversation's keys
+    /// come from the opt-in key cache); and `mediaHashKey`, the file's media
+    /// hash key from the decrypted message: a media attachment, a link
+    /// card's banner or favicon, or media quoted in its reply preview.
+    /// Errors say what to pass instead.
     #[wasm_bindgen(js_name = decryptFile)]
     pub fn decrypt_file(&self, params: JsValue) -> Result<Vec<u8>, JsValue> {
         let p: JsDecryptFileParams = from_js_params("decryptFile", params)?;
@@ -1011,7 +1167,8 @@ impl Chat {
 
     /// Create an incremental decryptor for an encrypted file too large to
     /// hold in memory. Takes the params of `decryptFile` apart from
-    /// `encrypted`, which is fed to the decryptor.
+    /// `encrypted`, which is fed to the decryptor, and reads the key cache
+    /// as `decryptFile` does when `conversationKeys` is omitted.
     #[wasm_bindgen(js_name = fileDecryptor)]
     pub fn file_decryptor(&self, params: JsValue) -> Result<FileDecryptor, JsValue> {
         let p: JsFileDecryptorParams = from_js_params("fileDecryptor", params)?;
@@ -1088,22 +1245,28 @@ impl Chat {
     /// `conversationId` for a one-to-one and it is derived from the two
     /// participants; pass the existing id for a group key rotation.
     ///
+    /// With `publicKeys` omitted, `null` or empty, the participants' identity
+    /// keys come from the stored public keys (`addPublicKeys`): of
+    /// `memberIds`, the user ids of every participant, the sender included,
+    /// or of the two users of a one-to-one `conversationId`. Only a stored
+    /// key whose identity binding verifies is used, and the call throws an
+    /// invalid-input error naming each participant who has none. The other
+    /// prepare calls that make a conversation key read the store the same
+    /// way for the members their params name.
+    ///
     /// Returns `{ conversationId, conversationKey, conversationKeyVersion,
-    /// conversationParticipantKeys, actionSignatures }`.
+    /// conversationParticipantKeys, actionSignatures }`. While the key cache
+    /// is on (`setCacheKeys`), the call caches the new key as the
+    /// conversation's newest key, as every prepare call that makes a
+    /// conversation key does.
     #[wasm_bindgen(js_name = prepareConversationKeyChange)]
     pub fn prepare_conversation_key_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsConversationKeyChangeParams =
             from_js_params("prepareConversationKeyChange", params)?;
-        let mut core_params = chat_xdk_core::ConversationKeyChangeParams::new(
-            p.public_keys.into_iter().map(Into::into).collect(),
-        );
-        core_params.sender_id = p.sender_id;
-        core_params.signing_key_version = p.signing_key_version;
-        core_params.conversation_id = p.conversation_id;
 
         let result = self
             .inner
-            .prepare_conversation_key_change_with_version(&core_params, &now_millis())
+            .prepare_conversation_key_change_with_version(&p.into_core(), &now_millis())
             .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
@@ -1112,39 +1275,26 @@ impl Chat {
     /// Prepare a signed group member-add change, ready to send to the X API.
     ///
     /// Takes a single params object with camelCase keys: `publicKeys` (for
-    /// the updated roster), `conversationId`, `newMemberIds`,
-    /// `currentMemberIds`, `currentAdminIds`, `currentPendingMemberIds`,
-    /// plus optional `senderId` / `signingKeyVersion` (resolved from the
-    /// session identity when omitted), `currentTitle` and
-    /// `currentDescription` (plaintext, encrypted under the new conversation
-    /// key), `currentAvatarUrl` (the avatar's media URL, signed as is),
-    /// `currentTtlMsec`, and `currentScreenCaptureBlockingEnabled`. Returns
-    /// the same shape as [`Chat::prepare_conversation_key_change`], plus
-    /// `encryptedTitle` and `encryptedDescription` for a title and
-    /// description the params set.
+    /// the updated roster; omitted, `null` or empty, the stored public keys
+    /// of `currentMemberIds` and `newMemberIds`), `conversationId`,
+    /// `newMemberIds`, `currentMemberIds`, `currentAdminIds`,
+    /// `currentPendingMemberIds`, plus optional `senderId` /
+    /// `signingKeyVersion` (resolved from the session identity when
+    /// omitted), `currentTitle` and `currentDescription` (plaintext,
+    /// encrypted under the new conversation key), `currentAvatarUrl` (the
+    /// avatar's media URL, signed as is), `currentTtlMsec`, and
+    /// `currentScreenCaptureBlockingEnabled`. Returns the same shape as
+    /// [`Chat::prepare_conversation_key_change`], plus `encryptedTitle` and
+    /// `encryptedDescription` for a title and description the params set.
+    /// While the key cache is on, the call caches the new key as the
+    /// conversation's newest key.
     #[wasm_bindgen(js_name = prepareGroupMembersChange)]
     pub fn prepare_group_members_change(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupMembersChangeParams = from_js_params("prepareGroupMembersChange", params)?;
-        let mut core_params = chat_xdk_core::GroupMembersChangeParams::new(
-            p.public_keys.into_iter().map(Into::into).collect(),
-            p.conversation_id,
-            p.new_member_ids,
-            p.current_member_ids,
-            p.current_admin_ids,
-            p.current_pending_member_ids,
-        );
-        core_params.sender_id = p.sender_id;
-        core_params.signing_key_version = p.signing_key_version;
-        core_params.current_title = p.current_title;
-        core_params.current_avatar_url = p.current_avatar_url;
-        core_params.current_description = p.current_description;
-        core_params.current_ttl_msec = p.current_ttl_msec;
-        core_params.current_screen_capture_blocking_enabled =
-            p.current_screen_capture_blocking_enabled;
 
         let result = self
             .inner
-            .prepare_group_members_change_with_version(&core_params, &now_millis())
+            .prepare_group_members_change_with_version(&p.into_core(), &now_millis())
             .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
@@ -1153,31 +1303,24 @@ impl Chat {
     /// Prepare a signed group create, ready to send to the X API.
     ///
     /// Takes a single params object with camelCase keys: `publicKeys` (for
-    /// the new roster), `conversationId`, `memberIds`, `adminIds`, plus
-    /// optional `senderId` / `signingKeyVersion` (resolved from the session
-    /// identity when omitted), `title` (plaintext, encrypted under the new
-    /// conversation key), and `ttlMsec`. Emits two action signatures (a
-    /// conversation-key change and the group create). Returns the same
-    /// shape as [`Chat::prepare_conversation_key_change`], plus
-    /// `encryptedTitle` for a title the params set. A create sets no avatar;
-    /// set it afterwards with `prepareGroupAvatarChange`.
+    /// the new roster; omitted, `null` or empty, the stored public keys of
+    /// `memberIds` and `adminIds`), `conversationId`, `memberIds`,
+    /// `adminIds`, plus optional `senderId` / `signingKeyVersion` (resolved
+    /// from the session identity when omitted), `title` (plaintext,
+    /// encrypted under the new conversation key), and `ttlMsec`. Emits two
+    /// action signatures (a conversation-key change and the group create).
+    /// Returns the same shape as [`Chat::prepare_conversation_key_change`],
+    /// plus `encryptedTitle` for a title the params set. A create sets no
+    /// avatar; set it afterwards with `prepareGroupAvatarChange`. While the
+    /// key cache is on, the call caches the new key as the conversation's
+    /// newest key.
     #[wasm_bindgen(js_name = prepareGroupCreate)]
     pub fn prepare_group_create(&self, params: JsValue) -> Result<JsValue, JsValue> {
         let p: JsGroupCreateParams = from_js_params("prepareGroupCreate", params)?;
-        let mut core_params = chat_xdk_core::GroupCreateParams::new(
-            p.public_keys.into_iter().map(Into::into).collect(),
-            p.conversation_id,
-            p.member_ids,
-            p.admin_ids,
-        );
-        core_params.sender_id = p.sender_id;
-        core_params.signing_key_version = p.signing_key_version;
-        core_params.title = p.title;
-        core_params.ttl_msec = p.ttl_msec;
 
         let result = self
             .inner
-            .prepare_group_create_with_version(&core_params, &now_millis())
+            .prepare_group_create_with_version(&p.into_core(), &now_millis())
             .map_err(sdk_error)?;
 
         prepared_change_to_js(result)
@@ -1350,13 +1493,112 @@ fn now_millis() -> String {
     (js_sys::Date::now() as u64).to_string()
 }
 
+/// A `ConversationKeyResult` as the object `extractConversationKeys` returns
+/// and `decryptEvents` returns as `conversationKeys`.
+fn conversation_keys_object(
+    result: &chat_xdk_core::ConversationKeyResult,
+) -> Result<JsValue, JsValue> {
+    let latest_version = result
+        .latest_version
+        .as_deref()
+        .map(JsValue::from_str)
+        .unwrap_or(JsValue::NULL);
+    let object = js_sys::Object::new();
+    for (name, value) in [
+        ("keys", key_map_object(&result.keys)?),
+        (
+            "keysByConversation",
+            keys_by_conversation_object(&result.keys_by_conversation)?,
+        ),
+        ("latestVersion", latest_version),
+        (
+            "latestVersions",
+            latest_versions_object(&result.latest_versions)?,
+        ),
+    ] {
+        js_sys::Reflect::set(&object, &JsValue::from_str(name), &value)
+            .map_err(|_| internal_error("Failed to build conversation keys"))?;
+    }
+    Ok(object.into())
+}
+
+/// A key map: a plain object mapping each key version to its key bytes.
+fn key_map_object(keys: &HashMap<String, XChatConversationKey>) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (version, key) in keys {
+        let bytes = js_sys::Uint8Array::from(key.encoded());
+        js_sys::Reflect::set(&object, &JsValue::from_str(version), &bytes.into())
+            .map_err(|_| internal_error("Failed to build conversation key map"))?;
+    }
+    Ok(object.into())
+}
+
+/// A result's `keysByConversation`: a plain object mapping each conversation
+/// id to that conversation's key map.
+fn keys_by_conversation_object(
+    keys: &HashMap<String, HashMap<String, XChatConversationKey>>,
+) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (conversation_id, keys) in keys {
+        // Assigning an object to `__proto__` would replace the map's
+        // prototype instead of adding an entry. No conversation has that id.
+        if conversation_id == "__proto__" {
+            continue;
+        }
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_str(conversation_id),
+            &key_map_object(keys)?,
+        )
+        .map_err(|_| internal_error("Failed to build conversation key map"))?;
+    }
+    Ok(object.into())
+}
+
+/// Entries keyed by an index: a plain object mapping each index, as a string
+/// key, to its entry, the shape of a result's `errors`.
+fn indexed_object<T: serde::Serialize>(
+    entries: impl IntoIterator<Item = (usize, T)>,
+) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (index, entry) in entries {
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_f64(index as f64),
+            &to_js_value(&entry)?,
+        )
+        .map_err(|_| internal_error("Failed to build index map"))?;
+    }
+    Ok(object.into())
+}
+
+/// A result's `latestVersions`: a plain object mapping each conversation id
+/// to that conversation's latest key version.
+fn latest_versions_object(latest_versions: &HashMap<String, String>) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (conversation_id, version) in latest_versions {
+        js_sys::Reflect::set(
+            &object,
+            &JsValue::from_str(conversation_id),
+            &JsValue::from_str(version),
+        )
+        .map_err(|_| internal_error("Failed to build latest version map"))?;
+    }
+    Ok(object.into())
+}
+
 /// Parse a params object's `conversationKeys`, a plain object mapping key
-/// version to the raw 32-byte key (`Uint8Array`). Anything else, including a
-/// missing map or an entry that is not a 32-byte `Uint8Array`, is an error.
+/// version to the raw 32-byte key (`Uint8Array`). A map that is absent,
+/// `undefined` or `null` is the empty map, which the core reads as the
+/// conversation's keys in the key cache. Anything else, including an entry
+/// that is not a 32-byte `Uint8Array`, is an error.
 fn js_to_conv_keys(
     method: &str,
     js: JsValue,
 ) -> Result<HashMap<String, XChatConversationKey>, JsValue> {
+    if js.is_undefined() || js.is_null() {
+        return Ok(HashMap::new());
+    }
     if !js.is_object() || js_sys::Array::is_array(&js) {
         return Err(invalid_input(format!(
             "Invalid {method} params: conversationKeys must be an object mapping key version to \
@@ -1400,6 +1642,19 @@ fn js_to_signing_keys(js: JsValue) -> Result<Vec<chat_xdk_core::SigningKeyEntry>
     let entries: Vec<JsSigningKeyEntry> = serde_wasm_bindgen::from_value(js)
         .map_err(|e| invalid_input(format!("Invalid signingKeys: {}", e)))?;
     Ok(entries.into_iter().map(Into::into).collect())
+}
+
+/// A params object's `publicKeys` as core entries. A list that is absent,
+/// `undefined` or `null` is the empty list, which the core reads as the
+/// stored public keys of the members the params name.
+fn public_key_inputs(
+    public_keys: Option<Vec<JsPublicKeyInput>>,
+) -> Vec<chat_xdk_core::PublicKeyInput> {
+    public_keys
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 /// Deserialize a JS params object into its camelCase mirror struct.
@@ -1656,19 +1911,20 @@ impl JsMarkConversationReadParams {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsGroupMembersRemoveParams {
-    public_keys: Vec<JsPublicKeyInput>,
+    public_keys: Option<Vec<JsPublicKeyInput>>,
     conversation_id: String,
     user_ids: Vec<String>,
     title: Option<String>,
     description: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
+    remaining_member_ids: Option<Vec<String>>,
 }
 
 impl JsGroupMembersRemoveParams {
     fn into_core(self) -> chat_xdk_core::GroupMembersRemoveParams {
         let mut params = chat_xdk_core::GroupMembersRemoveParams::new(
-            self.public_keys.into_iter().map(Into::into).collect(),
+            public_key_inputs(self.public_keys),
             self.conversation_id,
             self.user_ids,
         );
@@ -1676,6 +1932,7 @@ impl JsGroupMembersRemoveParams {
         params.description = self.description;
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
+        params.remaining_member_ids = self.remaining_member_ids.unwrap_or_default();
         params
     }
 }
@@ -1729,17 +1986,20 @@ impl JsGroupTitleChangeParams {
 struct JsGroupAvatarChangeParams {
     conversation_id: String,
     new_avatar_url: String,
-    conversation_key_version: String,
+    #[serde(default)]
+    conversation_key_version: Option<String>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
 }
 
 impl JsGroupAvatarChangeParams {
+    /// An omitted `conversationKeyVersion` is the empty version, which the
+    /// core reads as the version of the conversation's newest cached key.
     fn into_core(self) -> chat_xdk_core::GroupAvatarChangeParams {
         let mut params = chat_xdk_core::GroupAvatarChangeParams::new(
             self.conversation_id,
             self.new_avatar_url,
-            self.conversation_key_version,
+            self.conversation_key_version.unwrap_or_default(),
         );
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
@@ -1954,16 +2214,29 @@ impl JsScreenCaptureParams {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsConversationKeyChangeParams {
-    public_keys: Vec<JsPublicKeyInput>,
+    public_keys: Option<Vec<JsPublicKeyInput>>,
     sender_id: Option<String>,
     signing_key_version: Option<String>,
     conversation_id: Option<String>,
+    member_ids: Option<Vec<String>>,
+}
+
+impl JsConversationKeyChangeParams {
+    fn into_core(self) -> chat_xdk_core::ConversationKeyChangeParams {
+        let mut params =
+            chat_xdk_core::ConversationKeyChangeParams::new(public_key_inputs(self.public_keys));
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params.conversation_id = self.conversation_id;
+        params.member_ids = self.member_ids.unwrap_or_default();
+        params
+    }
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsGroupMembersChangeParams {
-    public_keys: Vec<JsPublicKeyInput>,
+    public_keys: Option<Vec<JsPublicKeyInput>>,
     conversation_id: String,
     new_member_ids: Vec<String>,
     current_member_ids: Vec<String>,
@@ -1979,10 +2252,32 @@ struct JsGroupMembersChangeParams {
     current_screen_capture_blocking_enabled: Option<bool>,
 }
 
+impl JsGroupMembersChangeParams {
+    fn into_core(self) -> chat_xdk_core::GroupMembersChangeParams {
+        let mut params = chat_xdk_core::GroupMembersChangeParams::new(
+            public_key_inputs(self.public_keys),
+            self.conversation_id,
+            self.new_member_ids,
+            self.current_member_ids,
+            self.current_admin_ids,
+            self.current_pending_member_ids,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params.current_title = self.current_title;
+        params.current_avatar_url = self.current_avatar_url;
+        params.current_description = self.current_description;
+        params.current_ttl_msec = self.current_ttl_msec;
+        params.current_screen_capture_blocking_enabled =
+            self.current_screen_capture_blocking_enabled;
+        params
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsGroupCreateParams {
-    public_keys: Vec<JsPublicKeyInput>,
+    public_keys: Option<Vec<JsPublicKeyInput>>,
     conversation_id: String,
     member_ids: Vec<String>,
     admin_ids: Vec<String>,
@@ -1991,6 +2286,22 @@ struct JsGroupCreateParams {
     title: Option<String>,
     #[serde(default, deserialize_with = "optional_msec")]
     ttl_msec: Option<i64>,
+}
+
+impl JsGroupCreateParams {
+    fn into_core(self) -> chat_xdk_core::GroupCreateParams {
+        let mut params = chat_xdk_core::GroupCreateParams::new(
+            public_key_inputs(self.public_keys),
+            self.conversation_id,
+            self.member_ids,
+            self.admin_ids,
+        );
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params.title = self.title;
+        params.ttl_msec = self.ttl_msec;
+        params
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -2038,7 +2349,7 @@ struct JsDecryptFileParams {
     #[serde(with = "serde_wasm_bindgen::preserve")]
     encrypted: JsValue,
     event_b64: String,
-    #[serde(with = "serde_wasm_bindgen::preserve")]
+    #[serde(default, with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,
     media_hash_key: String,
 }
@@ -2048,7 +2359,7 @@ struct JsDecryptFileParams {
 #[serde(rename_all = "camelCase")]
 struct JsFileDecryptorParams {
     event_b64: String,
-    #[serde(with = "serde_wasm_bindgen::preserve")]
+    #[serde(default, with = "serde_wasm_bindgen::preserve")]
     conversation_keys: JsValue,
     media_hash_key: String,
 }

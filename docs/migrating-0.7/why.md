@@ -567,17 +567,24 @@ than whether it verified:
 
 A call that rotates the conversation key (a member removal, a member add, a
 group create or a key change) returns the new key, and the app sends the
-key change in its request. The key cache (`set_cache_keys`) holds only the
-key of a key change that verified, at the newest version that verified, so
-a key change from someone who can't sign for the conversation, or an older
-one replayed, can't steer a chat's sends to a key they chose. A prepare
-call's key is in no verified key change yet: it reaches the conversation
-once the X API accepts the request, and the chat's cache adopts it once
-`decrypt_events` decrypts that key change and verifies it. Until then an
-encrypt call that leaves out the key resolves the old one, which the
-members a removal removed still hold. So each guide stores the new key and
-version and passes them to the encrypt and prepare calls until the cache
-holds them:
+key change in its request. The key cache (`set_cache_keys`) holds only keys
+the chat can trust. One is the key of a key change that verified: a key
+change from someone who can't sign for the conversation, or an older one
+replayed, can't steer a chat's sends to a key they chose. The other, from
+0.7.6, is the key of a change the chat prepared itself, which no one else
+chose.
+
+Through 0.7.5 a prepared key was not cached. It reached the cache once the X
+API accepted the request and `decrypt_events` decrypted the key change that
+came back and verified it. Until then an encrypt call that left out the key
+resolved the old one, which the members a removal removed still hold, so
+each guide stores the new key and version and passes them to the encrypt
+and prepare calls. From 0.7.6 a chat whose cache is on caches the key when
+the prepare call returns, and an encrypt call that leaves out the key
+resolves the new one at once. The key is cached before the request is sent:
+when the X API rejects the request, no other member holds that key, and the
+app prepares the change again. An app without the cache passes the key, as
+each guide shows:
 [Rust](rust.md#removing-members),
 [Python](python.md#removing-members),
 [JavaScript](javascript.md#removing-members),
@@ -585,6 +592,46 @@ holds them:
 [JVM](jvm.md#removing-members),
 [.NET](dotnet.md#removing-members),
 [C ABI](c-abi.md#removing-members).
+
+## The chat can fetch public keys and keep keys
+
+A chat verifies each event with its sender's signing key, and encrypts a new
+conversation key to its members' identity keys. Both come from
+`GET /2/users/{id}/public_keys`, which the SDK cannot request itself: it
+holds no credentials. Through 0.7.5 an app had to know whose keys a call
+needed before it made the call. A key change is signed by the member who
+made it, who may have sent none of the messages the app sees, and a batch
+decrypted without that member's keys lost the key change's key and the
+messages under it, with nothing in the result that said why.
+
+From 0.7.6 a batch says what it could not use and whose keys it lacked
+(`unverified_key_changes`, `missing_signing_keys`, `missing_public_keys`),
+the SDK takes the API's records as they are (`add_public_keys`), and an app
+can give the chat a hook that does the fetch. The hook runs in each
+binding's own language, between plain calls into the core, so no callback
+crosses into Rust and the core stays synchronous. That is why JavaScript
+and .NET, whose hooks are asynchronous, have `Async` methods that call it,
+and the other bindings call a blocking hook from the methods they had. A
+lookup that brings no key is remembered for a minute, so a user without
+keys does not cost a request with every batch.
+
+The key cache follows the same idea: the chat keeps what it has already
+verified or made, so the app does not pass it back. It keeps every key
+version of a conversation, not only the newest, and it is filled by the
+single-event decrypt and by the prepare calls as well as by the batch. A
+file or an avatar change then needs no key from the app.
+
+None of this changes a call that passes its keys. A server with many
+signed-in users keeps one chat per user and gives every chat the same hook
+function ([API.md](../API.md#many-users-many-conversations)). Each guide
+has the calls:
+[Rust](rust.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[Python](python.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[JavaScript](javascript.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[Go](go.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[JVM](jvm.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[.NET](dotnet.md#the-chat-can-fetch-public-keys-and-keep-keys),
+[C ABI](c-abi.md#the-chat-can-fetch-public-keys-and-keep-keys).
 
 ## Errors carry their kind
 

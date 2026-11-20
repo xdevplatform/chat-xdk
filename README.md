@@ -41,14 +41,31 @@ Python/Rust, PascalCase in .NET/Go):
    when your keys were registered; every signed action defaults its sender and
    signing-key version to these values. Optionally `setCacheKeys(true)` and
    `setSigningKeys(signingKeys)` so the decrypt/encrypt calls below need no
-   per-call key plumbing.
+   per-call key plumbing; `addSigningKeys(signingKeys)` adds more users' keys
+   later without replacing the set. Or set a `resolvePublicKeys` hook that
+   fetches `GET /2/users/{id}/public_keys`: the SDK then fetches the public
+   keys a call lacks itself, and the key cache is on (see
+   [Public keys and the hook](docs/API.md#public-keys-and-the-hook)).
 3. **Initial load** — `decryptEvents({events})`: batch-decrypts a backlog,
    extracting conversation keys from `KeyChange` events and matching signing
-   keys by user automatically. Per-event errors are collected in the result;
+   keys by user automatically. With a hook set, it fetches the public keys the
+   batch lacks and decrypts once more (`decryptEventsAsync` in JS and .NET).
+   Per-event errors are collected in the result;
    only invalid params throw. The events endpoint returns the `KeyChange` events in
    `meta.conversation_key_events`, separate from `data` — pass both together.
+   The signing keys must include those of every member who made a key change
+   (`GET /2/users/{id}/public_keys`), not only of the members whose messages
+   you read: a key change that does not verify is reported in the result's
+   `unverifiedKeyChanges`, with the member whose keys are missing, and a
+   recent one has its key dropped, so the messages under it land in `errors`
+   ([API.md](docs/API.md#signing-keys-for-key-changes)). For a batch of more
+   than one conversation, read the keys and the version to encrypt with by
+   conversation id: `conversationKeys.keysByConversation` and
+   `conversationKeys.latestVersions`.
 4. **Each new event** — `decryptEvent({eventB64, conversationKeys})`:
-   decrypts one event (webhook / poll). Throws on failure.
+   decrypts one event (webhook / poll). Throws on failure. With the key
+   cache on, `conversationKeys` can be left out, and a key change that
+   verifies here is cached as one in a batch is.
 5. **Reply** — `encryptMessage({conversationId, text})` or
    `encryptReply({conversationId, text, replyToEvent})` → POST the result to
    the X Chat API.
@@ -57,7 +74,8 @@ Python/Rust, PascalCase in .NET/Go):
    `encryptFile({file, eventB64, mediaHashKey})` with the payload's
    `eventB64` (plus `conversationKey` and `conversationKeyVersion` unless the
    key cache holds them, as for the message). `decryptFile` opens a received
-   file from its message's event. A file no message carries, such as a
+   file from its message's event, with the conversation's key map or, when
+   that is left out, the key cache. A file no message carries, such as a
    group's avatar image under the conversation key, goes through
    `encryptFileWithKey({file, key})` and `decryptFileWithKey({encrypted, key})`.
 
@@ -65,6 +83,13 @@ Python/Rust, PascalCase in .NET/Go):
 |--------|----------|
 | `decryptEvents` | Batch (initial load, pagination). Self-extracts keys; collects errors. |
 | `decryptEvent` | Single event (webhook, real-time) with cached keys. Throws on error. |
+
+**Many users, many conversations.** A server keeps one chat per signed-in
+user, for all of that user's conversations, never one per conversation, and
+gives every chat the same `resolvePublicKeys` function over one cache of
+public keys for the process. See [Many users, many
+conversations](docs/API.md#many-users-many-conversations); each example has
+the pattern as code that runs.
 
 > The conversation id is part of the message signature. The SDK signs it in its
 > canonical (colon-separated) form, so you can pass either the colon or the

@@ -7,6 +7,9 @@
 //!   CHATXDK_E2E=1 X_ACCESS_TOKEN=... CHAT_PRIVATE_KEYS_B64=... CHAT_SIGNING_KEY_VERSION=... \
 //!   CHAT_CONVERSATION_ID=... cargo test --test e2e -- --nocapture
 //!
+//! The SDK fetches the public keys it lacks through the hook
+//! `ChatCore::fetch_public_keys_with` sets: the test fetches and passes none.
+//!
 //! Flow (each numbered step asserts against the live API):
 //!   1. batch-decrypt inbound history (pagination when a second page exists)
 //!   2. rotate the conversation key (prepare -> POST /keys -> decrypt own CKCE)
@@ -27,12 +30,12 @@
 #![cfg(feature = "http")]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{
     AttachmentDescriptor, EntityDescriptor, Event, MessageAttachment, MessageContent,
-    PublicKeyInput, SigningKeyEntry,
 };
 use chatbot_rs::chat_core::{
     message_text, prep_to_request, removal_to_request, ChatCore, ReplyOptions,
@@ -51,15 +54,10 @@ fn unix_secs() -> u64 {
         .as_secs()
 }
 
-/// Signing entries -> the flat entries the prepare methods take.
-fn key_entries(pks: &[SigningKeyEntry]) -> Vec<PublicKeyInput> {
-    pks.iter()
-        .map(|pk| PublicKeyInput::new(&pk.user_id, &pk.identity_public_key, &pk.public_key_version))
-        .collect()
-}
-
 /// Poll the conversation until the event for `message_id` lands, and return it
 /// decrypted via the single-event path (`decrypt_one`) plus its sequence id.
+/// The single-event path fetches no public keys: the event is one this
+/// account sent, and the SDK holds this account's keys from the key rotation.
 ///
 /// The target envelope is matched by its raw event id before decrypting, so a
 /// decrypt failure on our own event (e.g. a broken sign->verify loop) surfaces
@@ -69,7 +67,6 @@ fn await_decrypted(
     core: &ChatCore,
     conversation_id: &str,
     conv_keys: &HashMap<String, XChatConversationKey>,
-    signing: &[SigningKeyEntry],
     message_id: &str,
 ) -> (Event, String, String) {
     let mut last_err: Option<String> = None;
@@ -82,7 +79,7 @@ fn await_decrypted(
                 continue;
             }
             let is_target = e.id == message_id;
-            let one = match core.decrypt_one(&e.encoded_event, conv_keys, signing) {
+            let one = match core.decrypt_one(&e.encoded_event, conv_keys) {
                 Ok(one) => one,
                 Err(err) => {
                     if is_target {
@@ -121,11 +118,17 @@ fn e2e_live() {
     let ver = env("CHAT_SIGNING_KEY_VERSION").expect("CHAT_SIGNING_KEY_VERSION");
     let conv = env("CHAT_CONVERSATION_ID").expect("CHAT_CONVERSATION_ID");
 
-    let api = HttpChatApi::new(token, Some("https://api.x.com".to_string()));
+    let api = Arc::new(HttpChatApi::new(
+        token,
+        Some("https://api.x.com".to_string()),
+    ));
     let mut core = ChatCore::new();
     core.load_keys(&blob, &ver).expect("load_keys");
     let my_id = api.get_my_user_id().expect("get_my_user_id");
     core.set_identity(&my_id).expect("set_identity");
+    // The SDK fetches the public keys it lacks through the API client.
+    let public_keys_api = Arc::clone(&api);
+    core.fetch_public_keys_with(move |user_id| public_keys_api.get_public_keys(user_id));
 
     // -- 1. Inbound history: batch decrypt (+ pagination when available) ----
     let (mut raw, mut key_events, next_token) =
@@ -144,23 +147,9 @@ fn e2e_live() {
         raw.extend(raw2);
     }
 
-    let mut ids = vec![my_id.clone()];
-    for e in &raw {
-        if !e.sender_id.is_empty() && !ids.contains(&e.sender_id) {
-            ids.push(e.sender_id.clone());
-        }
-    }
-    let mut signing: Vec<SigningKeyEntry> = Vec::new();
-    let mut pks_by_user: HashMap<String, Vec<SigningKeyEntry>> = HashMap::new();
-    for id in &ids {
-        if let Ok(pks) = api.get_public_keys(id) {
-            signing.extend(pks.iter().cloned());
-            pks_by_user.insert(id.clone(), pks);
-        }
-    }
-
     // The KeyChange events from meta.conversation_key_events carry the
     // conversation keys; they must be in the same batch as the messages.
+    // The SDK fetches the signing keys of whoever signed the events.
     let refs: Vec<&str> = key_events
         .iter()
         .map(String::as_str)
@@ -170,7 +159,7 @@ fn e2e_live() {
                 .map(|e| e.encoded_event.as_str()),
         )
         .collect();
-    let batch = core.decrypt_batch(&refs, &signing);
+    let batch = core.decrypt_batch(&refs);
     let decrypted = batch
         .events
         .iter()
@@ -210,22 +199,19 @@ fn e2e_live() {
             }
         }
     }
-    let partner_id = ids
+    let partner_id = raw
         .iter()
-        .find(|id| **id != my_id)
-        .cloned()
-        .expect("expected a conversation partner among the senders");
+        .map(|e| e.sender_id.as_str())
+        .find(|id| !id.is_empty() && *id != my_id.as_str())
+        .expect("expected a conversation partner among the senders")
+        .to_string();
 
     // -- 2. Key rotation: prepare -> POST /keys -> decrypt own CKCE ---------
-    let mut both_keys = key_entries(pks_by_user.get(&my_id).map(Vec::as_slice).unwrap_or(&[]));
-    both_keys.extend(key_entries(
-        pks_by_user
-            .get(&partner_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-    ));
+    // The one-to-one is named by the partner's id and no public keys are
+    // passed: the SDK reads both users' identity keys from the public keys
+    // it holds, fetching the ones it lacks.
     let prep = core
-        .prepare_conversation_key_change(&both_keys, None)
+        .prepare_conversation_key_change(&[], Some(&partner_id))
         .expect("prepare_conversation_key_change");
     let resp = api
         .add_conversation_keys(&conv, &prep_to_request(&prep))
@@ -263,7 +249,7 @@ fn e2e_live() {
                     .map(|e| e.encoded_event.as_str()),
             )
             .collect();
-        conv_keys = core.decrypt_batch(&refs, &signing).conversation_keys.keys;
+        conv_keys = core.decrypt_batch(&refs).conversation_keys.keys;
         if conv_keys.contains_key(&kv) {
             break;
         }
@@ -300,7 +286,7 @@ fn e2e_live() {
     eprintln!("sent live encrypted message: {marker:?}");
 
     let (one, seq, sent_event_b64) =
-        await_decrypted(&api, &core, &conv, &conv_keys, &signing, &body.message_id);
+        await_decrypted(&api, &core, &conv, &conv_keys, &body.message_id);
     assert_eq!(
         message_text(&one),
         Some(format!("@user {marker}").as_str()),
@@ -325,7 +311,7 @@ fn e2e_live() {
         .expect("encrypt_reaction add");
     api.send_message(&canonical_conv, &add)
         .expect("send reaction add");
-    let (one, _, _) = await_decrypted(&api, &core, &conv, &conv_keys, &signing, &add.message_id);
+    let (one, _, _) = await_decrypted(&api, &core, &conv, &conv_keys, &add.message_id);
     let Event::Message(reaction) = &one else {
         unreachable!()
     };
@@ -393,14 +379,8 @@ fn e2e_live() {
         );
         api.send_message(&canonical_conv, &media_msg)
             .expect("send media message");
-        let (one, _, media_event_b64) = await_decrypted(
-            &api,
-            &core,
-            &conv,
-            &conv_keys,
-            &signing,
-            &media_msg.message_id,
-        );
+        let (one, _, media_event_b64) =
+            await_decrypted(&api, &core, &conv, &conv_keys, &media_msg.message_id);
         let Event::Message(media_one) = &one else {
             unreachable!()
         };
@@ -436,26 +416,15 @@ fn e2e_live() {
 
     // -- 6. Optional: group create + message + member add --------------------
     if env("CHATXDK_E2E_GROUPS").as_deref() == Some("1") {
-        groups_flow(&api, &core, &my_id, &partner_id, &both_keys, &signing);
+        groups_flow(&api, &core, &my_id, &partner_id);
     }
 
     eprintln!("E2E RUST: PASS");
 }
 
-fn groups_flow(
-    api: &HttpChatApi,
-    core: &ChatCore,
-    my_id: &str,
-    partner_id: &str,
-    both_keys: &[PublicKeyInput],
-    signing: &[SigningKeyEntry],
-) {
-    let my_keys: Vec<PublicKeyInput> = both_keys
-        .iter()
-        .filter(|k| k.user_id == my_id)
-        .cloned()
-        .collect();
-
+/// The group calls pass no public keys: the SDK reads the identity keys of
+/// the members each call names from the public keys it holds.
+fn groups_flow(api: &HttpChatApi, core: &ChatCore, my_id: &str, partner_id: &str) {
     let group_id = api.initialize_group().expect("initialize_group");
     assert!(
         group_id.starts_with('g'),
@@ -466,7 +435,7 @@ fn groups_flow(
     // exercises prepare_group_members_change with the partner.
     let mut prep = core
         .prepare_group_create(
-            &my_keys,
+            &[],
             &group_id,
             &[my_id.to_string()],
             &[my_id.to_string()],
@@ -484,7 +453,7 @@ fn groups_flow(
         // with both participants (skipping the member-add below).
         prep = core
             .prepare_group_create(
-                both_keys,
+                &[],
                 &group_id,
                 &[my_id.to_string(), partner_id.to_string()],
                 &[my_id.to_string()],
@@ -517,7 +486,7 @@ fn groups_flow(
     api.send_message(&group_id, &msg)
         .expect("send group message");
     let conv_keys = HashMap::from([(kv, key)]);
-    let (one, _, _) = await_decrypted(api, core, &group_id, &conv_keys, signing, &msg.message_id);
+    let (one, _, _) = await_decrypted(api, core, &group_id, &conv_keys, &msg.message_id);
     let Event::Message(gmsg) = &one else {
         unreachable!()
     };
@@ -530,7 +499,7 @@ fn groups_flow(
     if !members.contains(&partner_id.to_string()) {
         let prep = core
             .prepare_group_members_change(
-                both_keys,
+                &[],
                 &group_id,
                 &[partner_id.to_string()],
                 &members,
@@ -548,7 +517,12 @@ fn groups_flow(
     }
 
     let prep = core
-        .prepare_group_members_remove(&my_keys, &group_id, &[partner_id.to_string()])
+        .prepare_group_members_remove(
+            &[],
+            &group_id,
+            &[partner_id.to_string()],
+            &[my_id.to_string()],
+        )
         .expect("prepare_group_members_remove");
     let body = removal_to_request(&[partner_id.to_string()], &prep);
     api.remove_group_members(&group_id, &body)

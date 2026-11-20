@@ -35,6 +35,97 @@ def _load_vectors() -> dict:
         return json.load(f)
 
 
+def _string_field(field_id: int, value: str) -> bytes:
+    """A Thrift string field: its id, then the value's length and bytes."""
+    data = value.encode("utf-8")
+    return b"\x0b" + field_id.to_bytes(2, "big") + len(data).to_bytes(4, "big") + data
+
+
+def _delivered(event_b64: str, sequence_id: str) -> str:
+    """``event_b64`` as delivered: with the sequence id the server assigns,
+    prepended as Thrift string field 1."""
+    event = _string_field(1, sequence_id) + base64.b64decode(event_b64)
+    return base64.b64encode(event).decode("ascii")
+
+
+def _delivered_action(action: dict, sender_id: str, conversation_id: str, sequence_id: str) -> str:
+    """A signed action as delivered: the event the server relays for
+    ``action``, an entry of a prepared change's ``action_signatures``, from
+    ``sender_id`` in ``conversation_id``, with the sequence id the server
+    assigns."""
+    signed = action["message_event_signature"]
+    signature = (
+        _string_field(1, signed["signature"])
+        + _string_field(2, signed["public_key_version"])
+        + _string_field(3, signed["signature_version"])
+        + b"\x00"
+    )
+    detail = base64.b64decode(action["encoded_message_event_detail"])
+    event = (
+        _string_field(1, sequence_id)
+        + _string_field(2, action["message_id"])
+        + _string_field(3, sender_id)
+        + _string_field(4, conversation_id)
+        + b"\x0c\x00\x07"
+        + detail
+        + b"\x0c\x00\x09"
+        + signature
+        + b"\x00"
+    )
+    return base64.b64encode(event).decode("ascii")
+
+
+class _Party:
+    """A core with fresh keys as user ``user_id``, and the keys others hold
+    for it."""
+
+    def __init__(self, user_id: str):
+        from chat_core import ChatCore
+
+        self.core = ChatCore()
+        self.user_id = user_id
+        generated = self.core.generate_and_register()
+        # The blob another chat imports to sign in as this user.
+        self.private_keys_b64 = generated["private_keys_b64"]
+        self.core.load_keys(self.private_keys_b64, signing_key_version="1")
+        self.core.set_identity(user_id)
+        registration = generated["registration"]
+        self.public_key = {
+            "user_id": user_id,
+            "identity_public_key": registration["public_key"],
+            "public_key_version": "1",
+        }
+        # The record GET /2/users/{id}/public_keys returns for these keys.
+        self.public_key_record = {
+            "public_key_version": "1",
+            "public_key": registration["public_key"],
+            "signing_public_key": registration["signing_public_key"],
+            "identity_public_key_signature": registration["identity_public_key_signature"],
+            "juicebox_config": None,
+        }
+
+
+def _group_page(
+    admin: _Party, member: _Party, *readers: _Party, conversation_id: str = "g900"
+) -> list[str]:
+    """A page of group ``conversation_id`` as each of ``readers`` receives
+    it: the key change ``admin`` made, then a message ``member`` sent under
+    its key. The admin signed the key change and sent no message."""
+    prepared = admin.core.prepare_conversation_key_change(
+        [each.public_key for each in (admin, member, *readers)], conversation_id
+    )
+    key_change = _delivered_action(
+        prepared["action_signatures"][0], admin.user_id, conversation_id, "2100000000000000000"
+    )
+    body = member.core.encrypt_reply(
+        conversation_id=conversation_id,
+        text="hello group",
+        conversation_key=prepared["conversation_key"],
+        conversation_key_version=prepared["conversation_key_version"],
+    )
+    return [key_change, _delivered(body["event_b64"], "2100000000000000001")]
+
+
 class TestChatCore(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -147,6 +238,99 @@ class TestChatCore(unittest.TestCase):
         core = self._loaded_core()
         with self.assertRaises(Exception):
             core.decrypt_one("not-valid-base64!!!", {}, [])
+
+    def test_a_page_whose_key_change_signer_sent_no_message_decrypts_through_the_hook(self):
+        from chat_core import message_text
+
+        admin, member, bot = _Party("5001"), _Party("5002"), _Party("5003")
+        events = _group_page(admin, member, bot)
+
+        # Without the signers' keys the key change does not verify: its key is
+        # dropped and the message does not decrypt.
+        unverified = bot.core.decrypt_batch(events)
+        self.assertEqual(unverified["events"], [])
+        self.assertEqual(
+            unverified["missing_signing_keys"],
+            {
+                "0": {"user_id": "5001", "public_key_version": "1"},
+                "1": {"user_id": "5002", "public_key_version": "1"},
+            },
+        )
+
+        records = {"5001": [admin.public_key_record], "5002": [member.public_key_record]}
+        asked = []
+
+        def fetch(user_id):
+            asked.append(user_id)
+            return records[user_id]
+
+        # The SDK asks for the keys of the admin, who made the key change, as
+        # well as for those of the member who sent the message.
+        bot.core.fetch_public_keys_with(fetch)
+        batch = bot.core.decrypt_batch(events)
+        self.assertEqual(asked, ["5001", "5002"])
+        self.assertEqual(batch["errors"], {})
+        self.assertEqual(batch["missing_signing_keys"], {})
+        self.assertEqual(batch["unverified_key_changes"], {})
+        self.assertEqual(
+            [message_text(decrypted["event"]) for decrypted in batch["events"]],
+            [None, "hello group"],
+        )
+
+        # The SDK holds the keys it fetched: the page needs no further fetch.
+        bot.core.decrypt_batch(events)
+        self.assertEqual(asked, ["5001", "5002"])
+
+    def test_a_user_whose_public_key_fetch_fails_is_logged_and_left_out(self):
+        admin, member, bot = _Party("5001"), _Party("5002"), _Party("5003")
+        events = _group_page(admin, member, bot)
+
+        def fetch(user_id):
+            if user_id == "5002":
+                raise RuntimeError("HTTP 503")
+            return [admin.public_key_record]
+
+        bot.core.fetch_public_keys_with(fetch)
+        with self.assertLogs("chatbot", level="WARNING") as logs:
+            batch = bot.core.decrypt_batch(events)
+
+        self.assertTrue(
+            any("public_keys_fetch_failed user=5002" in line for line in logs.output),
+            logs.output,
+        )
+        # The admin's keys arrived, so the key change verifies; the member's
+        # key is the one still missing.
+        self.assertEqual(batch["unverified_key_changes"], {})
+        self.assertEqual(
+            batch["missing_signing_keys"],
+            {"1": {"user_id": "5002", "public_key_version": "1"}},
+        )
+
+    def test_prepare_calls_get_their_public_keys_through_the_hook(self):
+        admin, member = _Party("5001"), _Party("5002")
+        records = {"5001": [admin.public_key_record], "5002": [member.public_key_record]}
+        asked = []
+
+        def fetch(user_id):
+            asked.append(user_id)
+            return records[user_id]
+
+        def recipients(prepared):
+            return sorted(key["user_id"] for key in prepared["conversation_participant_keys"])
+
+        admin.core.fetch_public_keys_with(fetch)
+        created = admin.core.prepare_group_create(None, "g901", ["5001", "5002"], ["5001"])
+        self.assertEqual(recipients(created), ["5001", "5002"])
+        self.assertEqual(asked, ["5001", "5002"])
+
+        # The SDK holds both users' keys: the calls that follow fetch none.
+        rotated = admin.core.prepare_conversation_key_change(conversation_id="5002")
+        self.assertEqual(recipients(rotated), ["5001", "5002"])
+        removed = admin.core.prepare_group_members_remove(
+            None, "g901", ["5002"], remaining_member_ids=["5001"]
+        )
+        self.assertEqual(recipients(removed), ["5001"])
+        self.assertEqual(asked, ["5001", "5002"])
 
 
 if __name__ == "__main__":

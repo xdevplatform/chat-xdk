@@ -107,12 +107,12 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void Conversation_Key_Prepare_And_Decrypt_Roundtrip()
+    public async Task Conversation_Key_Prepare_And_Decrypt_Roundtrip()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("910002");
-        var prepared = core.PrepareConversationKeyChange(new[]
+        var prepared = await core.PrepareConversationKeyChangeAsync(new[]
         {
             new PublicKeyInput { UserId = "910002", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "conv-1");
@@ -135,12 +135,233 @@ public class ChatCoreTests
         Assert.False(string.IsNullOrEmpty(body.XdkVersion));
     }
 
+    /// <summary>A Thrift string field: its id, then the value's length and bytes.</summary>
+    private static byte[] ThriftString(int id, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var header = new byte[]
+        {
+            11, (byte)(id >> 8), (byte)id,
+            (byte)(bytes.Length >> 24), (byte)(bytes.Length >> 16), (byte)(bytes.Length >> 8), (byte)bytes.Length,
+        };
+        return header.Concat(bytes).ToArray();
+    }
+
+    /// <summary>The event as delivered: <paramref name="eventB64"/> with the
+    /// sequence id the server assigns, prepended as Thrift string field 1.</summary>
+    internal static string Delivered(string eventB64, string sequenceId) =>
+        Convert.ToBase64String(ThriftString(1, sequenceId).Concat(Convert.FromBase64String(eventB64)).ToArray());
+
+    /// <summary>A signed action as delivered: the event the server relays for
+    /// <paramref name="action"/>, an entry of a prepared change's action
+    /// signatures, from <paramref name="senderId"/> in
+    /// <paramref name="conversationId"/>, with the sequence id the server
+    /// assigns.</summary>
+    internal static string DeliveredAction(ActionSignature action, string senderId, string conversationId, string sequenceId)
+    {
+        var signed = action.MessageEventSignature;
+        var delivered = ThriftString(1, sequenceId)
+            .Concat(ThriftString(2, action.MessageId))
+            .Concat(ThriftString(3, senderId))
+            .Concat(ThriftString(4, conversationId))
+            .Concat(new byte[] { 12, 0, 7 })
+            .Concat(Convert.FromBase64String(action.EncodedMessageEventDetail))
+            .Concat(new byte[] { 12, 0, 9 })
+            .Concat(ThriftString(1, signed.Signature))
+            .Concat(ThriftString(2, signed.PublicKeyVersion))
+            .Concat(ThriftString(3, signed.SignatureVersion))
+            .Concat(new byte[] { 0, 0 })
+            .ToArray();
+        return Convert.ToBase64String(delivered);
+    }
+
+    /// <summary>A core with fresh keys as a user, and the keys others hold for it.</summary>
+    internal sealed class Party : IDisposable
+    {
+        public Party(string userId)
+        {
+            UserId = userId;
+            var (registration, privateKeysB64) = Core.GenerateAndRegister();
+            PrivateKeysB64 = privateKeysB64;
+            Core.LoadKeys(privateKeysB64, "1");
+            Core.SetIdentity(userId);
+            var key = registration.PublicKey;
+            PublicKey = new PublicKeyInput
+            {
+                UserId = userId,
+                IdentityPublicKey = key.PublicKey,
+                PublicKeyVersion = "1",
+            };
+            ApiPublicKeys = new List<JsonElement>
+            {
+                JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+                {
+                    ["public_key_version"] = "1",
+                    ["public_key"] = key.PublicKey,
+                    ["signing_public_key"] = key.SigningPublicKey,
+                    ["identity_public_key_signature"] = key.IdentityPublicKeySignature,
+                    ["juicebox_config"] = null,
+                }),
+            };
+        }
+
+        public ChatCore Core { get; } = new();
+        public string UserId { get; }
+
+        /// <summary>This user's private-key blob, registered under key version 1.</summary>
+        public string PrivateKeysB64 { get; }
+
+        public PublicKeyInput PublicKey { get; }
+
+        /// <summary>This user's records as the X API returns them: the
+        /// <c>data</c> array of <c>GET /2/users/{id}/public_keys</c>.</summary>
+        public List<JsonElement> ApiPublicKeys { get; }
+
+        public void Dispose() => Core.Dispose();
+    }
+
+    /// <summary>A public-key fetch that serves the records of
+    /// <paramref name="parties"/> and notes each user it is asked for in
+    /// <paramref name="asked"/>. It fails for any other user.</summary>
+    internal static Func<string, Task<List<JsonElement>>> PublicKeysOf(List<string> asked, params Party[] parties) =>
+        userId =>
+        {
+            asked.Add(userId);
+            return Task.FromResult(parties.Single(party => party.UserId == userId).ApiPublicKeys);
+        };
+
+    /// <summary>A page of a group's events: the key change an admin made, who
+    /// sent no message, and a message a member sent under the new key. The
+    /// bot is a member too, and holds neither user's public keys.</summary>
+    private sealed class GroupPage : IDisposable
+    {
+        private GroupPage(Party admin, Party member, Party bot, string[] events)
+        {
+            Admin = admin;
+            Member = member;
+            Bot = bot;
+            Events = events;
+        }
+
+        public Party Admin { get; }
+        public Party Member { get; }
+        public Party Bot { get; }
+        public string[] Events { get; }
+
+        public static async Task<GroupPage> CreateAsync()
+        {
+            var admin = new Party("5001");
+            var member = new Party("5002");
+            var bot = new Party("5003");
+            var prepared = await admin.Core.PrepareConversationKeyChangeAsync(
+                new[] { admin.PublicKey, member.PublicKey, bot.PublicKey }, "g900");
+            var keyChange = DeliveredAction(prepared.ActionSignatures[0], admin.UserId, "g900", "2100000000000000000");
+            var body = member.Core.EncryptReply(
+                "g900", "hello group", prepared.ConversationKey, prepared.ConversationKeyVersion);
+            return new GroupPage(
+                admin, member, bot, new[] { keyChange, Delivered(body.EventB64, "2100000000000000001") });
+        }
+
+        public void Dispose()
+        {
+            Admin.Dispose();
+            Member.Dispose();
+            Bot.Dispose();
+        }
+    }
+
     [Fact]
-    public void DecryptBatch_Empty_Is_Safe()
+    public async Task DecryptBatch_Fetches_The_Keys_Of_The_Member_Who_Made_A_Key_Change()
+    {
+        using var page = await GroupPage.CreateAsync();
+        var bot = page.Bot.Core;
+
+        // With no way to fetch public keys the page names the keys it lacks.
+        // The key change does not verify, so its key is dropped and the
+        // message does not decrypt.
+        var unverified = await bot.DecryptBatchAsync(page.Events);
+        Assert.Empty(unverified.Events);
+        Assert.Equal("5001", unverified.MissingSigningKeys["0"].UserId);
+        Assert.Equal("5002", unverified.MissingSigningKeys["1"].UserId);
+
+        var asked = new List<string>();
+        bot.FetchPublicKeysWith(PublicKeysOf(asked, page.Admin, page.Member));
+        var result = await bot.DecryptBatchAsync(page.Events);
+        Assert.Equal(new[] { "5001", "5002" }, asked);
+        Assert.Empty(result.Errors);
+        Assert.Empty(result.MissingSigningKeys);
+        Assert.Empty(result.UnverifiedKeyChanges);
+        Assert.Equal(
+            new[] { null, "hello group" },
+            result.Events.Select(decrypted => EventHelpers.MessageText(decrypted.Event)));
+
+        // The SDK stored the keys it fetched: the next page fetches none.
+        await bot.DecryptBatchAsync(page.Events);
+        Assert.Equal(2, asked.Count);
+    }
+
+    [Fact]
+    public async Task A_Public_Key_Fetch_That_Fails_Leaves_Out_That_User_Alone()
+    {
+        using var page = await GroupPage.CreateAsync();
+        var bot = page.Bot.Core;
+
+        // The fetch serves the member's keys and fails for the admin's.
+        var asked = new List<string>();
+        bot.FetchPublicKeysWith(PublicKeysOf(asked, page.Member));
+        var result = await bot.DecryptBatchAsync(page.Events);
+
+        Assert.Equal(new[] { "5001", "5002" }, asked);
+        var missing = Assert.Single(result.MissingSigningKeys);
+        Assert.Equal("0", missing.Key);
+        Assert.Equal("5001", missing.Value.UserId);
+        Assert.Empty(result.Events);
+    }
+
+    [Fact]
+    public async Task Prepare_Calls_Passed_No_Public_Keys_Fetch_Their_Members_Keys()
+    {
+        using var admin = new Party("5001");
+        using var member = new Party("5002");
+        using var joiner = new Party("5004");
+        var asked = new List<string>();
+        admin.Core.FetchPublicKeysWith(PublicKeysOf(asked, admin, member, joiner));
+
+        // A one-to-one named by the other user's id: the keys of both users.
+        var rotated = await admin.Core.PrepareConversationKeyChangeAsync(null, member.UserId);
+        Assert.Equal("5001:5002", rotated.ConversationId);
+        Assert.Equal(new[] { "5001", "5002" }, asked);
+        Assert.Equal(
+            new[] { "5001", "5002" },
+            rotated.ConversationParticipantKeys.Select(key => key.UserId).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+
+        // The SDK stored those keys: a group of the same users fetches none.
+        var created = await admin.Core.PrepareGroupCreateAsync(
+            null, "g900", new[] { "5001", "5002" }, new[] { "5001" });
+        Assert.Equal(2, created.ConversationParticipantKeys.Count);
+        Assert.Equal(2, asked.Count);
+
+        // A member add fetches the keys of the member who joins.
+        var added = await admin.Core.PrepareGroupMembersChangeAsync(
+            null, "g900", new[] { "5004" }, new[] { "5001", "5002" }, new[] { "5001" });
+        Assert.Equal(3, added.ConversationParticipantKeys.Count);
+        Assert.Equal(new[] { "5001", "5002", "5004" }, asked);
+
+        // A removal names the members who stay.
+        var removed = await admin.Core.PrepareGroupMembersRemoveAsync(
+            null, "g900", new[] { "5004" }, new[] { "5001", "5002" });
+        Assert.Equal(
+            new[] { "5001", "5002" },
+            removed.ConversationParticipantKeys.Select(key => key.UserId).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.Equal(3, asked.Count);
+    }
+
+    [Fact]
+    public async Task DecryptBatch_Empty_Is_Safe()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
-        var result = core.DecryptBatch(Array.Empty<string>());
+        var result = await core.DecryptBatchAsync(Array.Empty<string>());
         Assert.Empty(result.Events);
     }
 
@@ -154,14 +375,14 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void PrepToRequest_Maps_The_Rest_Shape()
+    public async Task PrepToRequest_Maps_The_Rest_Shape()
     {
         // The mapper output is exactly what the X API's write endpoints take;
         // a drifted field name here breaks every flow in the live e2e.
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("1000");
-        var prep = core.PrepareConversationKeyChange(new[]
+        var prep = await core.PrepareConversationKeyChangeAsync(new[]
         {
             new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "1000:2000");
@@ -187,12 +408,12 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void RemovalToRequest_Rotates_For_Members_Who_Stay()
+    public async Task RemovalToRequest_Rotates_For_Members_Who_Stay()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("1000");
-        var prep = core.PrepareGroupMembersRemove(new[]
+        var prep = await core.PrepareGroupMembersRemoveAsync(new[]
         {
             new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "g123", new[] { "2000" });
@@ -215,13 +436,13 @@ public class ChatCoreTests
     }
 
     [Fact]
-    public void PrepareGroupCreate_Yields_Two_Signatures()
+    public async Task PrepareGroupCreate_Yields_Two_Signatures()
     {
         var v = LoadVectors();
         using var core = LoadedCore(v);
         core.SetIdentity("1000");
         const string title = "hello from the dotnet example";
-        var prep = core.PrepareGroupCreate(new[]
+        var prep = await core.PrepareGroupCreateAsync(new[]
         {
             new PublicKeyInput { UserId = "1000", IdentityPublicKey = v.IdentityPublicB64, PublicKeyVersion = "1" },
         }, "g123", new[] { "1000" }, new[] { "1000" }, title);

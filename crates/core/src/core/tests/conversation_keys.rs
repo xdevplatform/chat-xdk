@@ -291,7 +291,9 @@ fn conversation_key_result_accessors() {
 
     let result = ConversationKeyResult {
         keys,
+        keys_by_conversation: HashMap::new(),
         latest_version: Some("v1".to_string()),
+        latest_versions: HashMap::new(),
     };
 
     assert!(!result.is_empty());
@@ -305,7 +307,9 @@ fn conversation_key_result_accessors() {
 fn conversation_key_result_latest_key_none() {
     let result = ConversationKeyResult {
         keys: HashMap::new(),
+        keys_by_conversation: HashMap::new(),
         latest_version: None,
+        latest_versions: HashMap::new(),
     };
 
     assert!(result.is_empty());

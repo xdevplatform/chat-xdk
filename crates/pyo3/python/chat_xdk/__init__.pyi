@@ -1,7 +1,7 @@
 """Type stubs for chat-xdk Python bindings."""
 
 from enum import Enum
-from typing import Any, Literal, Optional, TypedDict, Union
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence, TypedDict, Union
 
 __version__: str
 
@@ -123,12 +123,59 @@ class PublicKeyInput(TypedDict):
     identity_public_key: str
     public_key_version: str
 
+class PublicKeyRecord(TypedDict, total=False):
+    """One of a user's public keys, as ``GET /2/users/:id/public_keys``
+    returns it in ``data``: what ``add_public_keys`` takes and the hook of
+    ``set_resolve_public_keys`` returns, by user id.
+
+    ``public_key`` is the identity key and ``signing_public_key`` the signing
+    key at ``public_key_version``. A record may hold other keys, such as
+    ``juicebox_config``; they are ignored. A record without a key version,
+    an identity key or a signing key is left out."""
+
+    public_key_version: Union[str, int]
+    public_key: str
+    signing_public_key: str
+    identity_public_key_signature: str
+
+# The hook ``Chat.set_resolve_public_keys`` takes: called with user ids, it
+# returns each user's public-key records by user id, leaving out a user it has
+# nothing for; ``None`` is no records at all. A record is typed as any mapping
+# as well, so that a response's parsed JSON passes a type checker as it is.
+ResolvePublicKeys = Callable[
+    [list[str]],
+    Optional[Mapping[str, Sequence[Union[PublicKeyRecord, Mapping[str, Any]]]]],
+]
+
 class ConversationKeyResult(TypedDict):
-    """Conversation keys by version, and the version to encrypt with: the
-    newest key change whose signature verified, or ``None``."""
+    """The conversation keys a batch's key changes carry, and the key version
+    to encrypt with.
+
+    ``keys_by_conversation`` and ``latest_versions`` are keyed by
+    conversation id, in the form events carry: a group's ``g…`` id, and a
+    one-to-one's two user ids ordered numerically and colon-separated.
+    ``keys`` and ``latest_version`` hold the same without the conversation
+    id, for a batch whose events all belong to one conversation.
+
+    ``keys`` maps key version to key over every conversation of the batch; a
+    version that key changes of more than one conversation carry is left out
+    of it, because a lookup by version alone cannot say which conversation's
+    key it wants. ``keys_by_conversation`` holds each key under the
+    conversation of the key change that carries it.
+
+    ``latest_versions`` maps each conversation to the version to encrypt
+    with there: from ``decrypt_events``, the newest version whose key change
+    verified, with no entry for a conversation without one; from
+    ``extract_conversation_keys``, which checks no signature, the
+    conversation's highest version in the batch. ``latest_version`` is that
+    version when every event of the batch belongs to one conversation,
+    ``None`` when that conversation has none, and ``None`` for a batch whose
+    events belong to more than one conversation."""
 
     keys: dict[str, bytes]
+    keys_by_conversation: dict[str, dict[str, bytes]]
     latest_version: Optional[str]
+    latest_versions: dict[str, str]
 
 class DecryptedEvent(TypedDict, total=False):
     """One event of a ``decrypt_events`` batch: the decrypted ``event`` and,
@@ -137,15 +184,101 @@ class DecryptedEvent(TypedDict, total=False):
     event: dict[str, Any]
     original_b64: str
 
+class UnverifiedKeyChange(TypedDict):
+    """A key change in a ``decrypt_events`` batch whose key this identity
+    decrypted but whose signature did not verify.
+
+    ``reason`` is ``"MissingSigningKey"`` when none of the signing keys the
+    call verified with is the sender's at the key version the signature names
+    (pass the public keys of ``sender_id`` as signing keys and decrypt
+    again), ``"RejectedSigningKey"`` when that key was among the signing
+    keys but its identity binding does not verify (it is in
+    ``rejected_signing_keys``, and fetching the same entry again changes
+    nothing), ``"InvalidSignature"`` when the signature does not verify
+    against the sender's signing key, and ``"Unverifiable"`` when the key
+    change carries no signature or one this SDK cannot check.
+    ``key_dropped`` says whether its key was left out of
+    ``conversation_keys``, so the messages of its conversation under that
+    key version did not decrypt; a key that was kept decrypts messages but
+    never becomes the version to encrypt with.
+    """
+
+    reason: Literal[
+        "MissingSigningKey", "RejectedSigningKey", "InvalidSignature", "Unverifiable"
+    ]
+    key_dropped: bool
+    conversation_id: Optional[str]
+    conversation_key_version: str
+    sender_id: Optional[str]
+    public_key_version: Optional[str]
+
+class UndecryptableKeyChange(TypedDict):
+    """A key change in a ``decrypt_events`` batch whose conversation key this
+    identity could not decrypt.
+
+    ``reason`` is ``"Locked"`` when no identity key is loaded,
+    ``"NotARecipient"`` when the key change holds no key for this chat's
+    user (the user ``set_identity`` names; without a session identity, it
+    holds no key at all), ``"OtherKeyVersion"`` when it holds keys for that
+    user but none at this chat's key version (check the key version given to
+    ``set_identity`` or ``import_keys``), and ``"DecryptionFailed"`` when a
+    key it holds for this chat's key version does not decrypt under the
+    loaded identity key.
+    """
+
+    reason: Literal["Locked", "NotARecipient", "OtherKeyVersion", "DecryptionFailed"]
+    conversation_id: Optional[str]
+    conversation_key_version: str
+    sender_id: Optional[str]
+
+class RejectedSigningKey(TypedDict):
+    """A signing key a ``decrypt_events`` call left out of verification
+    because its identity binding does not verify:
+    ``identity_public_key_signature`` is not the signing key's signature
+    over ``identity_public_key``."""
+
+    user_id: str
+    public_key_version: str
+
+class MissingSigningKey(TypedDict):
+    """A signing key a ``decrypt_events`` call did not have: an event's
+    signature names it, and it was not among the signing keys the call
+    verified with. ``user_id`` is the event's sender and
+    ``public_key_version`` the key version its signature names. Fetch the
+    user's public keys (``GET /2/users/:id/public_keys``), add them with
+    ``add_public_keys``, and decrypt again."""
+
+    user_id: str
+    public_key_version: str
+
 class DecryptEventsResult(TypedDict):
-    """What ``decrypt_events`` returns. ``errors`` maps the index of each
-    event left out of ``events``, as a string, to its error: one that
-    failed, or one decrypt drops, such as a member removal's title or
-    description re-encrypted under the new key."""
+    """What ``decrypt_events`` returns.
+
+    ``errors``, ``unverified_key_changes``, ``undecryptable_key_changes``
+    and ``missing_signing_keys`` are keyed by an event's index in the batch,
+    as a string, and ``rejected_signing_keys`` by a signing key's index, as
+    a string. Each is empty when it has nothing to report.
+
+    ``errors`` holds the error of each event left out of ``events``: one
+    that failed, or one decrypt drops, such as a member removal's title or
+    description re-encrypted under the new key. ``unverified_key_changes``
+    holds each key change whose signature did not verify,
+    ``undecryptable_key_changes`` each key change whose conversation key
+    this identity could not decrypt, and ``rejected_signing_keys`` each of
+    the signing keys the call verified with that it left out because its
+    identity binding does not verify. ``missing_signing_keys`` holds, for
+    each signed event whose sender's signing key was not among the keys the
+    call verified with, that sender and the key version the event's
+    signature names; ``Chat.missing_public_keys`` lists the users to fetch
+    keys for from it."""
 
     events: list[DecryptedEvent]
     conversation_keys: ConversationKeyResult
     errors: dict[str, str]
+    unverified_key_changes: dict[str, UnverifiedKeyChange]
+    undecryptable_key_changes: dict[str, UndecryptableKeyChange]
+    rejected_signing_keys: dict[str, RejectedSigningKey]
+    missing_signing_keys: dict[str, MissingSigningKey]
 
 class MessageEventSignature(TypedDict):
     """The signature of an action, as requests carry it."""
@@ -353,21 +486,34 @@ class EncryptEditParams:
     ) -> None: ...
 
 class ConversationKeyChangeParams:
-    public_keys: list[PublicKeyInput]
+    """With ``public_keys`` ``None`` or empty, the new key is encrypted to
+    the stored public keys (``Chat.add_public_keys``) of ``member_ids``, every
+    participant, yours included, or, without ``member_ids``, of the two users
+    of the one-to-one conversation ``conversation_id`` names."""
+
+    public_keys: Optional[list[PublicKeyInput]]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     conversation_id: Optional[str]
+    member_ids: Optional[list[str]]
     def __init__(
         self,
-        public_keys: list[PublicKeyInput],
+        public_keys: Optional[list[PublicKeyInput]] = None,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        member_ids: Optional[list[str]] = None,
     ) -> None: ...
 
 class GroupMembersChangeParams:
-    public_keys: list[PublicKeyInput]
+    """With ``public_keys`` ``None`` or empty, the new key is encrypted to
+    the stored public keys (``Chat.add_public_keys``) of
+    ``current_member_ids`` and ``new_member_ids``. The other positional
+    fields are required; pass them by keyword when ``public_keys`` is left
+    out."""
+
+    public_keys: Optional[list[PublicKeyInput]]
     conversation_id: str
     new_member_ids: list[str]
     current_member_ids: list[str]
@@ -382,12 +528,12 @@ class GroupMembersChangeParams:
     current_screen_capture_blocking_enabled: Optional[bool]
     def __init__(
         self,
-        public_keys: list[PublicKeyInput],
-        conversation_id: str,
-        new_member_ids: list[str],
-        current_member_ids: list[str],
-        current_admin_ids: list[str],
-        current_pending_member_ids: list[str],
+        public_keys: Optional[list[PublicKeyInput]] = None,
+        conversation_id: str = ...,
+        new_member_ids: list[str] = ...,
+        current_member_ids: list[str] = ...,
+        current_admin_ids: list[str] = ...,
+        current_pending_member_ids: list[str] = ...,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -399,7 +545,12 @@ class GroupMembersChangeParams:
     ) -> None: ...
 
 class GroupCreateParams:
-    public_keys: list[PublicKeyInput]
+    """With ``public_keys`` ``None`` or empty, the new key is encrypted to
+    the stored public keys (``Chat.add_public_keys``) of ``member_ids`` and
+    ``admin_ids``. The other positional fields are required; pass them by
+    keyword when ``public_keys`` is left out."""
+
+    public_keys: Optional[list[PublicKeyInput]]
     conversation_id: str
     member_ids: list[str]
     admin_ids: list[str]
@@ -409,10 +560,10 @@ class GroupCreateParams:
     ttl_msec: Optional[int]
     def __init__(
         self,
-        public_keys: list[PublicKeyInput],
-        conversation_id: str,
-        member_ids: list[str],
-        admin_ids: list[str],
+        public_keys: Optional[list[PublicKeyInput]] = None,
+        conversation_id: str = ...,
+        member_ids: list[str] = ...,
+        admin_ids: list[str] = ...,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -429,23 +580,31 @@ class ScreenCaptureChange(str, Enum):
     DetectionDisabled = "DetectionDisabled"
 
 class GroupMembersRemoveParams:
-    public_keys: list[PublicKeyInput]
+    """With ``public_keys`` ``None`` or empty, the new key is encrypted to
+    the stored public keys (``Chat.add_public_keys``) of
+    ``remaining_member_ids``: the members who stay, yours included. The
+    other positional fields are required; pass them by keyword when
+    ``public_keys`` is left out."""
+
+    public_keys: Optional[list[PublicKeyInput]]
     conversation_id: str
     user_ids: list[str]
     title: Optional[str]
     description: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
+    remaining_member_ids: Optional[list[str]]
     def __init__(
         self,
-        public_keys: list[PublicKeyInput],
-        conversation_id: str,
-        user_ids: list[str],
+        public_keys: Optional[list[PublicKeyInput]] = None,
+        conversation_id: str = ...,
+        user_ids: list[str] = ...,
         *,
         title: Optional[str] = None,
         description: Optional[str] = None,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
+        remaining_member_ids: Optional[list[str]] = None,
     ) -> None: ...
 
 class GroupLeaveParams:
@@ -485,14 +644,14 @@ class GroupTitleChangeParams:
 class GroupAvatarChangeParams:
     conversation_id: str
     new_avatar_url: str
-    conversation_key_version: str
+    conversation_key_version: Optional[str]
     sender_id: Optional[str]
     signing_key_version: Optional[str]
     def __init__(
         self,
         conversation_id: str,
         new_avatar_url: str,
-        conversation_key_version: str,
+        conversation_key_version: Optional[str] = None,
         *,
         sender_id: Optional[str] = None,
         signing_key_version: Optional[str] = None,
@@ -741,25 +900,25 @@ class FileEncryptorParams:
 class DecryptFileParams:
     encrypted: bytes
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     media_hash_key: str
     def __init__(
         self,
         encrypted: bytes,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
+        conversation_keys: Optional[dict[str, bytes]] = None,
+        media_hash_key: str = ...,
     ) -> None: ...
 
 class FileDecryptorParams:
     event_b64: str
-    conversation_keys: dict[str, bytes]
+    conversation_keys: Optional[dict[str, bytes]]
     media_hash_key: str
     def __init__(
         self,
         event_b64: str,
-        conversation_keys: dict[str, bytes],
-        media_hash_key: str,
+        conversation_keys: Optional[dict[str, bytes]] = None,
+        media_hash_key: str = ...,
     ) -> None: ...
 
 class EncryptFileWithKeyParams:
@@ -783,6 +942,44 @@ class Chat:
     def set_identity(self, params: SetIdentityParams) -> None: ...
     def set_cache_keys(self, enabled: bool) -> None: ...
     def set_signing_keys(self, signing_keys: list[SigningKeyEntry]) -> None: ...
+    def add_signing_keys(self, signing_keys: list[SigningKeyEntry]) -> None: ...
+
+    # Other users' public keys
+    def add_public_keys(
+        self,
+        records: Optional[Mapping[str, Sequence[Union[PublicKeyRecord, Mapping[str, Any]]]]],
+    ) -> None:
+        """Add users' public keys to the stored signing keys: ``records``
+        maps a user id to the records ``GET /2/users/{id}/public_keys``
+        returns for that user. ``None`` adds nothing.
+
+        The decrypt calls verify with the stored keys when they are passed
+        no signing keys, and ``prepare_conversation_key_change``,
+        ``prepare_group_create``, ``prepare_group_members_change`` and
+        ``prepare_group_members_remove`` encrypt to them when they are
+        passed no ``public_keys``."""
+    def missing_public_keys(
+        self, result: Union[DecryptEventsResult, Mapping[str, MissingSigningKey]]
+    ) -> list[str]:
+        """The users whose public keys a ``decrypt_events`` result was
+        missing, each once, in batch order: ``result`` is the result, or its
+        ``missing_signing_keys``. Fetch their keys, add them with
+        ``add_public_keys``, and decrypt the batch again.
+
+        A user whose lookup brought no key is not returned again for a
+        minute."""
+    def set_resolve_public_keys(self, hook: Optional[ResolvePublicKeys]) -> None:
+        """Set the hook that fetches users' public keys, or remove it with
+        ``None``.
+
+        With a hook set, ``decrypt_events`` passed no signing keys calls it
+        for ``missing_public_keys`` of its result, adds the records it
+        returns and decrypts the batch once more, and the four prepare
+        methods that encrypt a new conversation key, passed no
+        ``public_keys``, call it for the members who have no stored public
+        key. An exception the hook raises reaches the caller, and a user
+        whose lookup brought no key is not asked for again for a minute.
+        Setting a hook turns the key cache on (``set_cache_keys``)."""
 
     # Juicebox Key Storage
     def setup(self, pin: Union[str, bytes, bytearray]) -> PublicKeys: ...

@@ -8,6 +8,7 @@
     "test": "node --test",
     "start": "node server.mjs",
     "bot": "node src/bot.mjs",
+    "bots": "node src/multi-bot.mjs",
     "register": "node src/register.mjs",
     "build:wasm": "cd ../.. && make wasm"
   },

@@ -139,7 +139,7 @@ public sealed class XChatClient
     /// POST /2/chat/conversations/group — create a group conversation.
     /// <paramref name="body"/> carries <c>conversation_id</c>, <c>group_members</c>,
     /// <c>group_admins</c>, and the two-signature key change from
-    /// <see cref="ChatCore.PrepareGroupCreate"/>.
+    /// <see cref="ChatCore.PrepareGroupCreateAsync"/>.
     /// </summary>
     public Task<JsonElement> CreateConversationAsync(object body)
         => PostAsync("/2/chat/conversations/group", body);
@@ -147,7 +147,7 @@ public sealed class XChatClient
     /// <summary>
     /// POST /2/chat/conversations/{id}/members — add members to a group.
     /// <paramref name="body"/> carries <c>user_ids</c> plus the rotated key change
-    /// from <see cref="ChatCore.PrepareGroupMembersChange"/>.
+    /// from <see cref="ChatCore.PrepareGroupMembersChangeAsync"/>.
     /// </summary>
     public Task<JsonElement> AddGroupMembersAsync(string conversationId, object body)
         => PostAsync($"/2/chat/conversations/{Uri.EscapeDataString(conversationId)}/members", body);

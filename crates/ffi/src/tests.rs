@@ -1,4 +1,11 @@
 use super::*;
+use crate::files::{
+    chat_xdk_decrypt_file, chat_xdk_encrypt_file, chat_xdk_file_decryptor_finish,
+    chat_xdk_file_decryptor_free, chat_xdk_file_decryptor_new, chat_xdk_file_decryptor_push,
+};
+use crate::prepare::{
+    chat_xdk_prepare_conversation_key_change, chat_xdk_prepare_group_avatar_change,
+};
 
 /// Take a string the library returned, freeing it.
 fn take(ptr: *mut c_char) -> Option<String> {
@@ -443,6 +450,825 @@ fn a_group_removal_drops_the_title_and_description_reencryptions() {
             })
         );
     }
+    chat_xdk_free(chat);
+}
+
+#[test]
+fn decrypt_events_keys_its_diagnostics_by_index_and_its_keys_by_conversation() {
+    let v: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/sdk_vectors.json")).unwrap();
+    let text = |key: &str| v[key].as_str().unwrap().to_string();
+    let mut chat = std::ptr::null_mut();
+    data(chat_xdk_new(std::ptr::null(), &mut chat));
+    let keys = BASE64.decode(text("private_keys_concat_b64")).unwrap();
+    let import = c(&serde_json::json!({
+        "signing_key_version": text("event_recipient_key_version"),
+    })
+    .to_string());
+    data(chat_xdk_import_keys(
+        chat,
+        keys.as_ptr(),
+        keys.len(),
+        import.as_ptr(),
+    ));
+    let flow = v["event_group_removal_flow_b64"].as_array().unwrap();
+    let decrypt = |signing_keys: serde_json::Value| -> serde_json::Value {
+        let params =
+            c(&serde_json::json!({ "events": flow, "signing_keys": signing_keys }).to_string());
+        serde_json::from_str(&data(chat_xdk_decrypt_events(chat, params.as_ptr())).unwrap())
+            .unwrap()
+    };
+    let group = text("event_group_id");
+    let version = text("event_group_removal_conversation_key_version");
+    let signing_key = |identity_public_key_signature: String| {
+        serde_json::json!([{
+            "user_id": text("event_sender_id"),
+            "public_key_version": text("event_signing_key_version"),
+            "public_key": text("signing_public_b64"),
+            "identity_public_key": text("identity_public_b64"),
+            "identity_public_key_signature": identity_public_key_signature,
+        }])
+    };
+    let unverified_key_change = |reason: &str| {
+        serde_json::json!({
+            "3": {
+                "reason": reason,
+                "key_dropped": false,
+                "conversation_id": group,
+                "conversation_key_version": version,
+                "sender_id": text("event_sender_id"),
+                "public_key_version": text("event_signing_key_version"),
+            },
+        })
+    };
+
+    // Without its signer's keys the flow's key change, its fourth event, does
+    // not verify. It is sequenced before the cut-over, so its key is kept.
+    let unverified = decrypt(serde_json::json!([]));
+    assert_eq!(
+        unverified["unverified_key_changes"],
+        unverified_key_change("MissingSigningKey")
+    );
+    assert_eq!(
+        unverified["undecryptable_key_changes"],
+        serde_json::json!({})
+    );
+    assert_eq!(unverified["rejected_signing_keys"], serde_json::json!({}));
+    let conversation_keys = &unverified["conversation_keys"];
+    assert!(conversation_keys["keys"].get(&version).is_some());
+    assert_eq!(
+        conversation_keys["keys_by_conversation"][&group],
+        conversation_keys["keys"]
+    );
+    assert_eq!(conversation_keys["latest_version"], serde_json::Value::Null);
+    assert_eq!(conversation_keys["latest_versions"], serde_json::json!({}));
+
+    // A signing key whose binding signature is not its signature over the
+    // identity key is left out, and the key change says so.
+    let rejected = decrypt(signing_key(BASE64.encode([7u8; 64])));
+    assert_eq!(
+        rejected["rejected_signing_keys"],
+        serde_json::json!({
+            "0": {
+                "user_id": text("event_sender_id"),
+                "public_key_version": text("event_signing_key_version"),
+            },
+        })
+    );
+    assert_eq!(
+        rejected["unverified_key_changes"],
+        unverified_key_change("RejectedSigningKey")
+    );
+
+    let verified = decrypt(signing_key(text("identity_public_key_signature_b64")));
+    assert_eq!(verified["unverified_key_changes"], serde_json::json!({}));
+    assert_eq!(verified["rejected_signing_keys"], serde_json::json!({}));
+    assert_eq!(verified["conversation_keys"]["latest_version"], version);
+    let mut latest_versions = serde_json::Map::new();
+    latest_versions.insert(group.clone(), version.clone().into());
+    assert_eq!(
+        verified["conversation_keys"]["latest_versions"],
+        serde_json::Value::Object(latest_versions)
+    );
+
+    // extract_conversation_keys returns the same shape for the keys.
+    let events = c(&serde_json::Value::Array(flow.clone()).to_string());
+    let extracted: serde_json::Value = serde_json::from_str(
+        &data(chat_xdk_extract_conversation_keys(chat, events.as_ptr())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        extracted["keys_by_conversation"],
+        verified["conversation_keys"]["keys_by_conversation"]
+    );
+    assert_eq!(extracted["keys"], verified["conversation_keys"]["keys"]);
+    assert_eq!(extracted["latest_version"], version);
+    chat_xdk_free(chat);
+}
+
+/// A chat with fresh keys signing as `user_id`, and the signing-key entry
+/// other chats verify its events with.
+fn party(user_id: &str) -> (*mut ChatHandle, serde_json::Value) {
+    let mut chat = std::ptr::null_mut();
+    data(chat_xdk_new(std::ptr::null(), &mut chat));
+    let registration: serde_json::Value =
+        serde_json::from_str(&data(chat_xdk_generate_keypairs(chat)).unwrap()).unwrap();
+    let identity =
+        c(&serde_json::json!({ "user_id": user_id, "signing_key_version": "1" }).to_string());
+    data(chat_xdk_set_identity(chat, identity.as_ptr()));
+    let public_key = &registration["public_key"];
+    let signing_key = serde_json::json!({
+        "user_id": user_id,
+        "public_key_version": "1",
+        "public_key": public_key["signing_public_key"],
+        "identity_public_key": public_key["public_key"],
+        "identity_public_key_signature": public_key["identity_public_key_signature"],
+    });
+    (chat, signing_key)
+}
+
+/// An event a chat sent, as delivered: with the sequence id the server
+/// assigns, the event's first field.
+fn delivered(event_b64: &str) -> String {
+    let sequence_id = "2100000000000000001";
+    let mut event: Vec<u8> = vec![11, 0, 1];
+    event.extend((sequence_id.len() as u32).to_be_bytes());
+    event.extend(sequence_id.as_bytes());
+    event.extend(BASE64.decode(event_b64).unwrap());
+    BASE64.encode(event)
+}
+
+/// Whether a result succeeded, freeing its strings.
+fn succeeded(result: FfiResult) -> bool {
+    let error = take(result.error);
+    take(result.data);
+    error.is_none()
+}
+
+/// Whether the action signature `signature` verifies, under its signer's
+/// signing key, over `payload`: the comma-joined fields its event signs.
+fn signed_over(chat: *mut ChatHandle, signature: &serde_json::Value, payload: &str) -> bool {
+    let signed = &signature["message_event_signature"];
+    let public_key = c(signed["signing_public_key"].as_str().unwrap());
+    let unpadded = signed["signature"].as_str().unwrap();
+    let raw = c(&format!(
+        "{unpadded}{}",
+        "=".repeat((4 - unpadded.len() % 4) % 4)
+    ));
+    let valid = data(signing::chat_xdk_verify(
+        chat,
+        public_key.as_ptr(),
+        raw.as_ptr(),
+        payload.as_ptr(),
+        payload.len(),
+    ));
+    valid.as_deref() == Some("true")
+}
+
+#[test]
+fn add_signing_keys_adds_to_the_stored_keys_and_set_signing_keys_replaces_them() {
+    let (alice, alice_keys) = party("5001");
+    let (bob, bob_keys) = party("5002");
+    let (reader, _) = party("5003");
+    let key = BASE64.encode([7u8; 32]);
+    // Whether `reader` decrypts a message from `author` and verifies it with
+    // the signing keys it stores.
+    let reads = |author: *mut ChatHandle| {
+        let message = c(&serde_json::json!({
+            "conversation_id": "g900",
+            "text": "hi",
+            "conversation_key": key,
+            "conversation_key_version": "7",
+        })
+        .to_string());
+        let payload: serde_json::Value = serde_json::from_str(
+            &data(chat_xdk_encrypt_message(author, message.as_ptr())).unwrap(),
+        )
+        .unwrap();
+        let params = c(&serde_json::json!({
+            "event_b64": delivered(payload["event_b64"].as_str().unwrap()),
+            "conversation_keys": { "7": key },
+        })
+        .to_string());
+        succeeded(chat_xdk_decrypt_event(reader, params.as_ptr()))
+    };
+    let set = |signing_keys: serde_json::Value| {
+        let signing_keys = c(&signing_keys.to_string());
+        data(chat_xdk_set_signing_keys(reader, signing_keys.as_ptr()));
+    };
+    let add = |signing_keys: serde_json::Value| {
+        let signing_keys = c(&signing_keys.to_string());
+        data(chat_xdk_add_signing_keys(reader, signing_keys.as_ptr()));
+    };
+
+    set(serde_json::json!([alice_keys]));
+    assert!(reads(alice));
+    assert!(!reads(bob));
+
+    // Adding keeps what is stored.
+    add(serde_json::json!([bob_keys]));
+    assert!(reads(alice));
+    assert!(reads(bob));
+
+    // An entry for a stored user and key version replaces that entry alone.
+    let mut wrong = bob_keys.clone();
+    wrong["user_id"] = "5001".into();
+    add(serde_json::json!([wrong]));
+    assert!(!reads(alice));
+    assert!(reads(bob));
+
+    // Setting replaces the whole set.
+    set(serde_json::json!([alice_keys]));
+    assert!(reads(alice));
+    assert!(!reads(bob));
+
+    // Null, empty and `[]` add nothing; a malformed array is an error.
+    for nothing in ["null", "", "[]"] {
+        let nothing = c(nothing);
+        data(chat_xdk_add_signing_keys(reader, nothing.as_ptr()));
+    }
+    data(chat_xdk_add_signing_keys(reader, std::ptr::null()));
+    assert!(reads(alice));
+    let malformed = c(r#"[{"user_id":"5002"}]"#);
+    for document in [
+        error(chat_xdk_add_signing_keys(reader, malformed.as_ptr())),
+        error(chat_xdk_add_signing_keys(
+            std::ptr::null(),
+            malformed.as_ptr(),
+        )),
+    ] {
+        assert_eq!(document["kind"], "invalid_input", "{document}");
+    }
+    assert!(reads(alice));
+
+    for chat in [alice, bob, reader] {
+        chat_xdk_free(chat);
+    }
+}
+
+/// A Thrift string field: its id, then the value's length and bytes.
+fn thrift_string(id: u16, value: &str) -> Vec<u8> {
+    let mut field = vec![11u8];
+    field.extend(id.to_be_bytes());
+    field.extend((value.len() as u32).to_be_bytes());
+    field.extend(value.as_bytes());
+    field
+}
+
+/// A signed action as delivered: the event the server relays for `action`,
+/// an entry of a prepared change's `action_signatures`, from `sender_id` in
+/// `conversation_id`, sequenced where a key change that does not verify
+/// loses its key.
+fn delivered_action(action: &serde_json::Value, sender_id: &str, conversation_id: &str) -> String {
+    let text = |value: &serde_json::Value| value.as_str().unwrap().to_string();
+    let signed = &action["message_event_signature"];
+    let mut event = thrift_string(1, "2100000000000000000");
+    event.extend(thrift_string(2, &text(&action["message_id"])));
+    event.extend(thrift_string(3, sender_id));
+    event.extend(thrift_string(4, conversation_id));
+    event.extend([12u8, 0, 7]);
+    event.extend(
+        BASE64
+            .decode(text(&action["encoded_message_event_detail"]))
+            .unwrap(),
+    );
+    event.extend([12u8, 0, 9]);
+    event.extend(thrift_string(1, &text(&signed["signature"])));
+    event.extend(thrift_string(2, &text(&signed["public_key_version"])));
+    event.extend(thrift_string(3, &text(&signed["signature_version"])));
+    // The end of the signature, then the end of the event.
+    event.extend([0u8, 0]);
+    BASE64.encode(event)
+}
+
+/// The record `GET /2/users/{id}/public_keys` returns for the keys of a
+/// [`party`], given its signing-key entry, with a field the SDK does not
+/// read.
+fn public_key_record(signing_key: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "public_key_version": signing_key["public_key_version"],
+        "public_key": signing_key["identity_public_key"],
+        "signing_public_key": signing_key["public_key"],
+        "identity_public_key_signature": signing_key["identity_public_key_signature"],
+        "juicebox_config": { "realms": [] },
+    })
+}
+
+/// The entry a key change's `public_keys` holds for a [`party`], given its
+/// signing-key entry.
+fn public_key_input(signing_key: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "user_id": signing_key["user_id"],
+        "identity_public_key": signing_key["identity_public_key"],
+        "public_key_version": signing_key["public_key_version"],
+    })
+}
+
+/// A JSON document a call returned in `data`.
+fn document(result: FfiResult) -> serde_json::Value {
+    serde_json::from_str(&data(result).unwrap()).unwrap()
+}
+
+#[test]
+fn decrypt_events_names_the_signing_keys_it_lacked_and_add_public_keys_supplies_them() {
+    // An admin rotates a group's key and a member sends a message under it.
+    let (admin, admin_keys) = party("5001");
+    let (member, member_keys) = party("5002");
+    let (bot, bot_keys) = party("5003");
+    let change = c(&serde_json::json!({
+        "public_keys": [
+            public_key_input(&admin_keys),
+            public_key_input(&member_keys),
+            public_key_input(&bot_keys),
+        ],
+        "conversation_id": "g900",
+    })
+    .to_string());
+    let prepared = document(chat_xdk_prepare_conversation_key_change(
+        admin,
+        change.as_ptr(),
+    ));
+    let message = c(&serde_json::json!({
+        "conversation_id": "g900",
+        "text": "hello group",
+        "conversation_key": prepared["conversation_key"],
+        "conversation_key_version": prepared["conversation_key_version"],
+    })
+    .to_string());
+    let payload = document(chat_xdk_encrypt_message(member, message.as_ptr()));
+    let events = serde_json::json!([
+        delivered_action(&prepared["action_signatures"][0], "5001", "g900"),
+        delivered(payload["event_b64"].as_str().unwrap()),
+    ]);
+    let decrypt = || {
+        let params = c(&serde_json::json!({ "events": events }).to_string());
+        document(chat_xdk_decrypt_events(bot, params.as_ptr()))
+    };
+    let missing_users = |missing_signing_keys: &serde_json::Value| {
+        let missing_signing_keys = c(&missing_signing_keys.to_string());
+        document(chat_xdk_missing_public_keys(
+            bot,
+            missing_signing_keys.as_ptr(),
+        ))
+    };
+    let add = |records: serde_json::Value| {
+        let records = c(&records.to_string());
+        assert!(data(chat_xdk_add_public_keys(bot, records.as_ptr())).is_none());
+    };
+
+    // With no signing keys the result names the key each event needed, by
+    // the event's index.
+    let unverified = decrypt();
+    assert_eq!(unverified["events"], serde_json::json!([]));
+    assert_eq!(
+        unverified["missing_signing_keys"],
+        serde_json::json!({
+            "0": { "user_id": "5001", "public_key_version": "1" },
+            "1": { "user_id": "5002", "public_key_version": "1" },
+        })
+    );
+    assert_eq!(unverified["rejected_signing_keys"], serde_json::json!({}));
+
+    // The users to fetch keys for come in batch order, and are not asked for
+    // again at once.
+    assert_eq!(
+        missing_users(&unverified["missing_signing_keys"]),
+        serde_json::json!(["5001", "5002"])
+    );
+    assert_eq!(
+        missing_users(&unverified["missing_signing_keys"]),
+        serde_json::json!([])
+    );
+
+    // A record without its signing key is left out.
+    let mut partial = public_key_record(&admin_keys);
+    partial
+        .as_object_mut()
+        .unwrap()
+        .remove("signing_public_key");
+    add(serde_json::json!({ "5001": [partial] }));
+    assert_eq!(decrypt()["events"], serde_json::json!([]));
+
+    // Records as the X API returns them, one of them with camelCase names
+    // and its key version as a number.
+    add(serde_json::json!({
+        "5001": [public_key_record(&admin_keys)],
+        "5002": [{
+            "publicKeyVersion": 1,
+            "publicKey": member_keys["identity_public_key"],
+            "signingPublicKey": member_keys["public_key"],
+            "identityPublicKeySignature": member_keys["identity_public_key_signature"],
+        }],
+    }));
+    let verified = decrypt();
+    assert_eq!(verified["errors"], serde_json::json!({}));
+    assert_eq!(verified["missing_signing_keys"], serde_json::json!({}));
+    assert_eq!(verified["unverified_key_changes"], serde_json::json!({}));
+    let decrypted = verified["events"].as_array().unwrap();
+    assert_eq!(decrypted.len(), 2);
+    assert_eq!(decrypted[0]["event"]["type"], "KeyChange");
+    assert_eq!(decrypted[1]["event"]["type"], "Message");
+
+    // Null, empty and `{}` hold nothing; a document of another shape is an
+    // error.
+    for nothing in ["null", "", "{}"] {
+        let nothing = c(nothing);
+        assert!(data(chat_xdk_add_public_keys(bot, nothing.as_ptr())).is_none());
+        assert_eq!(
+            data(chat_xdk_missing_public_keys(bot, nothing.as_ptr())).as_deref(),
+            Some("[]")
+        );
+    }
+    assert!(data(chat_xdk_add_public_keys(bot, std::ptr::null())).is_none());
+    assert_eq!(
+        data(chat_xdk_missing_public_keys(bot, std::ptr::null())).as_deref(),
+        Some("[]")
+    );
+    // A user whose lookup found nothing may carry null or no records.
+    add(serde_json::json!({ "5004": null, "5005": [] }));
+    let malformed = c(r#"{"5001":"not a record"}"#);
+    for failed in [
+        error(chat_xdk_add_public_keys(bot, malformed.as_ptr())),
+        error(chat_xdk_add_public_keys(
+            std::ptr::null(),
+            malformed.as_ptr(),
+        )),
+        error(chat_xdk_missing_public_keys(bot, malformed.as_ptr())),
+        error(chat_xdk_missing_public_keys(
+            std::ptr::null(),
+            malformed.as_ptr(),
+        )),
+    ] {
+        assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    }
+
+    for chat in [admin, member, bot] {
+        chat_xdk_free(chat);
+    }
+}
+
+#[test]
+fn prepare_calls_read_stored_public_keys_and_missing_public_keys_for_names_the_users_without() {
+    let (admin, admin_keys) = party("5001");
+    let (member, member_keys) = party("5002");
+    let (joiner, joiner_keys) = party("5004");
+    let missing_for = |call: &str, params: &serde_json::Value| {
+        let call = c(call);
+        let params = c(&params.to_string());
+        prepare::chat_xdk_missing_public_keys_for(admin, call.as_ptr(), params.as_ptr())
+    };
+    // The users a prepared change encrypted its key to, sorted.
+    let recipients = |prepared: FfiResult| {
+        let prepared = document(prepared);
+        let mut user_ids: Vec<String> = prepared["conversation_participant_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key["user_id"].as_str().unwrap().to_string())
+            .collect();
+        user_ids.sort();
+        user_ids
+    };
+
+    let create = serde_json::json!({
+        "conversation_id": "g900",
+        "member_ids": ["5001", "5002"],
+        "admin_ids": ["5001"],
+    });
+    let add_members = serde_json::json!({
+        "public_keys": null,
+        "conversation_id": "g900",
+        "new_member_ids": ["5004"],
+        "current_member_ids": ["5001", "5002"],
+        "current_admin_ids": ["5001"],
+        "current_pending_member_ids": [],
+    });
+    let remove = serde_json::json!({
+        "public_keys": [],
+        "conversation_id": "g900",
+        "user_ids": ["5004"],
+        "remaining_member_ids": ["5001", "5002"],
+    });
+    let rotate = serde_json::json!({
+        "conversation_id": "g900",
+        "member_ids": ["5001", "5002"],
+    });
+    let direct = serde_json::json!({ "conversation_id": "5002" });
+
+    // With nothing stored, a call that passes no public keys fails naming
+    // the users it has no keys for, and the lookup names them once.
+    let params = c(&create.to_string());
+    let failed = error(prepare::chat_xdk_prepare_group_create(
+        admin,
+        params.as_ptr(),
+    ));
+    assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("no public keys are stored for user(s) 5001, 5002"),
+        "{failed}"
+    );
+    assert_eq!(
+        document(missing_for("group_create", &create)),
+        serde_json::json!(["5001", "5002"])
+    );
+    assert_eq!(
+        document(missing_for("group_create", &create)),
+        serde_json::json!([])
+    );
+    // A user not asked for before is named by the call that needs its keys.
+    assert_eq!(
+        document(missing_for("group_members_change", &add_members)),
+        serde_json::json!(["5004"])
+    );
+
+    let records = c(&serde_json::json!({
+        "5001": [public_key_record(&admin_keys)],
+        "5002": [public_key_record(&member_keys)],
+        "5004": [public_key_record(&joiner_keys)],
+    })
+    .to_string());
+    data(chat_xdk_add_public_keys(admin, records.as_ptr()));
+
+    // Each call encrypts its key to the stored keys of the members it names.
+    let params = c(&create.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_create(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    let params = c(&add_members.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_members_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002", "5004"]
+    );
+    let params = c(&remove.to_string());
+    assert_eq!(
+        recipients(prepare::chat_xdk_prepare_group_members_remove(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    let params = c(&rotate.to_string());
+    assert_eq!(
+        recipients(chat_xdk_prepare_conversation_key_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    // A one-to-one names its two users by its id: here the other user's.
+    let params = c(&direct.to_string());
+    assert_eq!(
+        recipients(chat_xdk_prepare_conversation_key_change(
+            admin,
+            params.as_ptr()
+        )),
+        ["5001", "5002"]
+    );
+    for (call, params) in [
+        ("group_create", &create),
+        ("group_members_change", &add_members),
+        ("group_members_remove", &remove),
+        ("conversation_key_change", &rotate),
+        ("conversation_key_change", &direct),
+    ] {
+        assert_eq!(
+            document(missing_for(call, params)),
+            serde_json::json!([]),
+            "{call}"
+        );
+    }
+
+    // A call that passes its public keys is missing none, whoever it names.
+    let mut passed = create.clone();
+    passed["member_ids"] = serde_json::json!(["5001", "5009"]);
+    passed["public_keys"] = serde_json::json!([public_key_input(&admin_keys)]);
+    assert_eq!(
+        document(missing_for("group_create", &passed)),
+        serde_json::json!([])
+    );
+
+    // A call that names no members reports its empty public keys as before.
+    let params = c(r#"{"conversation_id":"g900","user_ids":["5004"]}"#);
+    let failed = error(prepare::chat_xdk_prepare_group_members_remove(
+        admin,
+        params.as_ptr(),
+    ));
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("public_keys is empty: pass the public keys of the remaining members"),
+        "{failed}"
+    );
+    let params = c(r#"{"conversation_id":"g900"}"#);
+    let failed = error(chat_xdk_prepare_conversation_key_change(
+        admin,
+        params.as_ptr(),
+    ));
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("public_keys must not be empty"),
+        "{failed}"
+    );
+
+    // An unknown call, a document that does not parse and a null handle are
+    // invalid input.
+    let call = c("group_create");
+    let params = c(&create.to_string());
+    for failed in [
+        error(missing_for("group_rename", &create)),
+        error(missing_for("group_create", &serde_json::json!({}))),
+        error(prepare::chat_xdk_missing_public_keys_for(
+            std::ptr::null(),
+            call.as_ptr(),
+            params.as_ptr(),
+        )),
+    ] {
+        assert_eq!(failed["kind"], "invalid_input", "{failed}");
+    }
+
+    for chat in [admin, member, joiner] {
+        chat_xdk_free(chat);
+    }
+}
+
+#[test]
+fn file_decryption_and_the_avatar_change_read_the_key_cache_for_a_key_left_out() {
+    let (chat, signing_key) = party("5001");
+    data(chat_xdk_set_cache_keys(chat, 1));
+    let url = "https://ton.x.com/xchat_media/g900/avatar";
+    let avatar = |fields: serde_json::Value| {
+        let mut params = serde_json::json!({ "conversation_id": "g900", "new_avatar_url": url });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let params = c(&params.to_string());
+        chat_xdk_prepare_group_avatar_change(chat, params.as_ptr())
+    };
+    // The ways a params document leaves the key version out.
+    let left_out = || {
+        [
+            serde_json::json!({}),
+            serde_json::json!({ "conversation_key_version": null }),
+            serde_json::json!({ "conversation_key_version": "" }),
+        ]
+    };
+
+    // With no key cached there is no version to sign.
+    for fields in left_out() {
+        let document = error(avatar(fields));
+        assert_eq!(document["kind"], "invalid_state", "{document}");
+        assert!(
+            document["message"].as_str().unwrap().contains(
+                "conversation_key_version is not set and no conversation key is cached for 'g900'"
+            ),
+            "{document}"
+        );
+    }
+
+    // A key change the chat prepares caches its key.
+    let key_change = c(&serde_json::json!({
+        "conversation_id": "g900",
+        "public_keys": [{
+            "user_id": "5001",
+            "identity_public_key": signing_key["identity_public_key"],
+            "public_key_version": "1",
+        }],
+    })
+    .to_string());
+    let prepared: serde_json::Value = serde_json::from_str(
+        &data(chat_xdk_prepare_conversation_key_change(
+            chat,
+            key_change.as_ptr(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let version = prepared["conversation_key_version"].as_str().unwrap();
+
+    // The avatar change signs the cached key's version when none is passed,
+    // and a version that is passed as is.
+    let signed_version = |fields: serde_json::Value, version: &str| {
+        let prepared: serde_json::Value =
+            serde_json::from_str(&data(avatar(fields)).unwrap()).unwrap();
+        let signature = &prepared["action_signatures"][0];
+        let payload = format!(
+            "GroupChangeEvent.GroupAvatarUrlChange,{},5001,g900,{version},{url}",
+            signature["message_id"].as_str().unwrap()
+        );
+        signed_over(chat, signature, &payload)
+    };
+    for fields in left_out() {
+        assert!(signed_version(fields, version));
+    }
+    assert!(signed_version(
+        serde_json::json!({ "conversation_key_version": "4" }),
+        "4"
+    ));
+
+    // A message and its file, encrypted under the cached key.
+    let message = c(&serde_json::json!({
+        "conversation_id": "g900",
+        "text": "a photo",
+        "attachments": [{
+            "attachment_type": "media",
+            "media_hash_key": "photo",
+            "width": 1,
+            "height": 1,
+            "filesize_bytes": 10,
+            "filename": "photo.jpg",
+        }],
+    })
+    .to_string());
+    let payload: serde_json::Value =
+        serde_json::from_str(&data(chat_xdk_encrypt_message(chat, message.as_ptr())).unwrap())
+            .unwrap();
+    assert_eq!(payload["conversation_key_version"], version);
+    let event_b64 = &payload["event_b64"];
+    let file = b"photo bytes";
+    let encrypt = c(&serde_json::json!({
+        "file": BASE64.encode(file),
+        "event_b64": event_b64,
+        "media_hash_key": "photo",
+    })
+    .to_string());
+    let encrypted = data(chat_xdk_encrypt_file(chat, encrypt.as_ptr())).unwrap();
+    let decrypt = |fields: serde_json::Value| {
+        let mut params = serde_json::json!({
+            "encrypted": encrypted,
+            "event_b64": event_b64,
+            "media_hash_key": "photo",
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let params = c(&params.to_string());
+        chat_xdk_decrypt_file(chat, params.as_ptr())
+    };
+
+    // Without a key map the file decrypts with the cached keys, whole and in
+    // chunks.
+    for fields in [
+        serde_json::json!({}),
+        serde_json::json!({ "conversation_keys": null }),
+        serde_json::json!({ "conversation_keys": {} }),
+    ] {
+        let decrypted = data(decrypt(fields)).unwrap();
+        assert_eq!(BASE64.decode(decrypted).unwrap(), file);
+    }
+    let decryptor_params =
+        c(&serde_json::json!({ "event_b64": event_b64, "media_hash_key": "photo" }).to_string());
+    let mut decryptor = std::ptr::null_mut();
+    data(chat_xdk_file_decryptor_new(
+        chat,
+        decryptor_params.as_ptr(),
+        &mut decryptor,
+    ));
+    let chunk = c(&encrypted);
+    let mut streamed = BASE64
+        .decode(data(chat_xdk_file_decryptor_push(decryptor, chunk.as_ptr())).unwrap())
+        .unwrap();
+    streamed.extend(
+        BASE64
+            .decode(data(chat_xdk_file_decryptor_finish(decryptor)).unwrap())
+            .unwrap(),
+    );
+    chat_xdk_file_decryptor_free(decryptor);
+    assert_eq!(streamed, file);
+
+    // A key map that is passed is the only source: one without the message's
+    // version fails though the cache holds that version.
+    let no_key = format!("conversation_keys has no key for version '{version}'");
+    let other_version = serde_json::json!({
+        "conversation_keys": { "9": BASE64.encode([7u8; 32]) },
+    });
+    let document = error(decrypt(other_version));
+    assert!(
+        document["message"].as_str().unwrap().contains(&no_key),
+        "{document}"
+    );
+
+    // With the cache off there are no keys to read.
+    data(chat_xdk_set_cache_keys(chat, 0));
+    let document = error(decrypt(serde_json::json!({})));
+    assert!(
+        document["message"].as_str().unwrap().contains(&no_key),
+        "{document}"
+    );
     chat_xdk_free(chat);
 }
 

@@ -31,9 +31,11 @@ use crate::types::*;
 use crate::protocol::safe_reader::BoundedProtocol;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use p256::pkcs8::EncodePublicKey;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use thrift::protocol::{TBinaryInputProtocol, TSerializable};
+
+pub use public_keys::{KeyChangeCall, ResolvePublicKeys, PUBLIC_KEYS_RETRY_MS};
 
 /// Sequence number at or above which a conversation key change with an
 /// invalid plaintext-key signature is dropped instead of adopted. Key changes
@@ -70,20 +72,27 @@ pub struct ChatCore {
     owner_user_id: std::sync::RwLock<Option<String>>,
     /// Whether the conversation-key cache is enabled (off by default).
     cache_keys: std::sync::atomic::AtomicBool,
-    /// Per-conversation cache of the conversation key at the verified
-    /// high-water version. Keys enter only through the signature-verified
-    /// freshness pass, never from adopted-but-unverified key changes.
-    conversation_key_cache: std::sync::RwLock<HashMap<String, CachedConversationKey>>,
+    /// Per-conversation cache of conversation keys, by key version. A key
+    /// enters from a key change whose signature verified, or from a key
+    /// change this instance prepared, never from an adopted-but-unverified
+    /// key change.
+    conversation_key_cache: std::sync::RwLock<HashMap<String, BTreeMap<u64, XChatConversationKey>>>,
     /// Caller-supplied signing keys used when a decrypt call omits them.
-    /// Populated only by [`Self::set_signing_keys`] — never from event
-    /// contents.
+    /// Populated only by [`Self::set_signing_keys`] and
+    /// [`Self::add_signing_keys`] — never from event contents.
     signing_key_cache: std::sync::RwLock<Vec<SigningKeyEntry>>,
     /// This instance's feature switches from `GET /2/chat/features`; all off
     /// until an answer turns them on.
     features: std::sync::Mutex<crate::features::ChatFeatures>,
+    /// The public-key lookups [`Self::missing_public_keys`] and
+    /// [`Self::missing_public_keys_for`] asked for, each until the time it
+    /// may be asked for again.
+    public_key_lookups: std::sync::Mutex<public_keys::PublicKeyLookups>,
+    /// The hook [`Self::set_resolve_public_keys`] set.
+    resolve_public_keys: std::sync::RwLock<Option<ResolvePublicKeys>>,
 }
 
-/// A cached conversation key pinned to its verified version.
+/// A cached conversation key with its version.
 ///
 /// The key zeroizes on drop via [`XChatConversationKey`]; `Debug` redacts it.
 #[derive(Clone)]
@@ -117,6 +126,8 @@ impl ChatCore {
             conversation_key_cache: std::sync::RwLock::new(HashMap::new()),
             signing_key_cache: std::sync::RwLock::new(Vec::new()),
             features: std::sync::Mutex::new(Default::default()),
+            public_key_lookups: std::sync::Mutex::new(HashMap::new()),
+            resolve_public_keys: std::sync::RwLock::new(None),
         }
     }
 
@@ -231,11 +242,20 @@ impl ChatCore {
 
     /// Enable or disable the conversation-key cache (off by default).
     ///
-    /// While enabled, `decrypt_events` caches, per conversation, the key
-    /// whose key change carried a valid signature at the highest version
-    /// seen, and the encrypt methods resolve an omitted
-    /// `conversation_key`/`conversation_key_version` pair from it.
+    /// While enabled, the cache keeps, per conversation, the key of every
+    /// key change whose signature verified in [`Self::decrypt_events`] or
+    /// [`Self::decrypt_event`], and the key of every key change this
+    /// instance prepared (a conversation-key change, a group create, a
+    /// member add or a member removal). A call that omits its conversation
+    /// key reads it from there: the encrypt methods and the title,
+    /// description and avatar changes use the conversation's newest key, and
+    /// the decrypt methods the key at the version the event names.
     /// Disabling clears the cache; the keys zeroize on drop.
+    ///
+    /// A prepared key is cached when the prepare call returns, before its
+    /// request is sent. If the X API rejects the request, no one else holds
+    /// that key: prepare the change again, or pass the key to encrypt with
+    /// explicitly, until a newer key change verifies.
     pub fn set_cache_keys(&self, enabled: bool) {
         self.cache_keys
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -250,14 +270,34 @@ impl ChatCore {
     /// Store signing keys to use when a decrypt call omits its
     /// `signing_keys` argument.
     ///
-    /// Only this explicit call populates the store — a key carried inside an
-    /// event is never trusted for verification. Each call replaces the
-    /// previous set.
+    /// Only this call and [`Self::add_signing_keys`] populate the store — a
+    /// key carried inside an event is never trusted for verification. Each
+    /// call replaces the previous set.
     pub fn set_signing_keys(&self, entries: &[SigningKeyEntry]) {
         *self
             .signing_key_cache
             .write()
             .unwrap_or_else(|e| e.into_inner()) = entries.to_vec();
+    }
+
+    /// Add signing keys to the store [`Self::set_signing_keys`] sets,
+    /// keeping the keys it holds: an entry replaces the stored entry of the
+    /// same user and key version, and any other is added.
+    pub fn add_signing_keys(&self, entries: &[SigningKeyEntry]) {
+        let mut stored = self
+            .signing_key_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        for entry in entries {
+            let existing = stored.iter_mut().find(|stored| {
+                stored.user_id == entry.user_id
+                    && stored.public_key_version == entry.public_key_version
+            });
+            match existing {
+                Some(existing) => *existing = entry.clone(),
+                None => stored.push(entry.clone()),
+            }
+        }
     }
 
     /// Resolve the effective `sender_id`: the explicit override when present,
@@ -299,8 +339,8 @@ impl ChatCore {
     }
 
     /// Resolve the conversation key + version for an encrypt call: the
-    /// explicit pair when present, otherwise the cached verified key for the
-    /// conversation.
+    /// explicit pair when present, otherwise the conversation's newest
+    /// cached key.
     fn resolve_conversation_key(
         &self,
         conversation_key: Option<&[u8]>,
@@ -327,15 +367,8 @@ impl ChatCore {
                         canonical
                     ))
                 };
-                if !self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(no_key());
-                }
-                let cache = self
-                    .conversation_key_cache
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner());
-                let cached = cache.get(canonical.as_ref()).ok_or_else(no_key)?;
-                Ok((cached.key.clone(), cached.version.to_string()))
+                let cached = self.newest_cached_key(&canonical).ok_or_else(no_key)?;
+                Ok((cached.key, cached.version.to_string()))
             }
             _ => Err(SdkError::InvalidInput(
                 "conversation_key and conversation_key_version must be passed together \
@@ -345,22 +378,9 @@ impl ChatCore {
         }
     }
 
-    /// Look up a cached conversation key for a specific conversation and key
-    /// version. Used by the decrypt path when the caller omits its key map.
-    fn cached_key_for(&self, conversation_id: &str, version: &str) -> Option<XChatConversationKey> {
-        if !self.cache_keys.load(std::sync::atomic::Ordering::Relaxed) {
-            return None;
-        }
-        let cache = self
-            .conversation_key_cache
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let cached = cache.get(conversation_id)?;
-        (cached.version.to_string() == version).then(|| cached.key.clone())
-    }
-
     /// Resolve the signing keys for a decrypt call: the explicit slice when
-    /// non-empty, otherwise the keys stored via [`Self::set_signing_keys`].
+    /// non-empty, otherwise the keys stored via [`Self::set_signing_keys`]
+    /// and [`Self::add_signing_keys`].
     fn resolve_signing_keys(&self, param: &[SigningKeyEntry]) -> Vec<SigningKeyEntry> {
         if !param.is_empty() {
             return param.to_vec();
@@ -581,15 +601,17 @@ impl ChatCore {
         Ok(signing.private.clone())
     }
 
-    /// Enforce `reject_unverified` policy on a signature result.
+    /// Enforce `reject_unverified` policy on a signature check.
     ///
-    /// When `reject_unverified` is enabled, both `Err(reason)` (signature
-    /// present but cryptographically invalid) and `Ok(false)` (signature
-    /// missing or no matching key) are rejected for event types that carry
-    /// a signature.
+    /// When `reject_unverified` is enabled, an event of a type that carries
+    /// a signature is rejected unless its signature verified. The error says
+    /// what kept it from verifying: no signature, no signing key for its
+    /// sender, a signing key that was rejected, a payload that cannot be
+    /// rebuilt, or an invalid signature.
     fn reject_if_unverified(
         &self,
-        sig_result: &Result<bool, String>,
+        check: &SignatureCheck,
+        event: &MessageEvent,
         event_label: &str,
     ) -> Result<(), SdkError> {
         if !self
@@ -598,87 +620,71 @@ impl ChatCore {
         {
             return Ok(());
         }
-        match sig_result {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(SdkError::Crypto(CryptoError::VerificationFailed(format!(
-                "{} signature could not be verified: \
-                 signature missing or no matching signing key",
-                event_label
-            )))),
-            Err(reason) => Err(SdkError::Crypto(CryptoError::VerificationFailed(format!(
-                "{} signature verification failed: {}",
-                event_label, reason
-            )))),
-        }
+        let reason = match check {
+            SignatureCheck::Verified => return Ok(()),
+            SignatureCheck::Unsigned => format!(
+                "{event_label} signature could not be verified: the event carries no signature"
+            ),
+            SignatureCheck::MissingSigningKey => format!(
+                "{event_label} signature could not be verified: {}; pass that user's public \
+                 keys as signing keys",
+                missing_signing_key(event.sender_id.as_deref(), signature_key_version(event))
+            ),
+            SignatureCheck::RejectedSigningKey => format!(
+                "{event_label} signature could not be verified: {}",
+                rejected_signing_key(event.sender_id.as_deref(), signature_key_version(event))
+            ),
+            SignatureCheck::NoConversationKey => format!(
+                "{event_label} signature could not be verified: it signs the conversation \
+                 key, which this chat could not decrypt from the event"
+            ),
+            SignatureCheck::NoPayload => format!(
+                "{event_label} signature could not be verified: its signed payload cannot be \
+                 rebuilt from the event"
+            ),
+            SignatureCheck::UnacceptedVersion(reason) | SignatureCheck::Mismatch(reason) => {
+                format!("{event_label} signature verification failed: {reason}")
+            }
+        };
+        Err(SdkError::Crypto(CryptoError::VerificationFailed(reason)))
     }
 
-    /// Verify a message event signature against a set of signing keys.
+    /// Check a message event signature against a set of signing keys.
     ///
     /// Selects the key whose `public_key_version` matches the version embedded
-    /// in the event's `MessageEventSignature`. Returns `Ok(false)` when no
-    /// matching key is available (not verifiable, but not invalid).
+    /// in the event's `MessageEventSignature`; with none among `signing_keys`
+    /// the check is [`SignatureCheck::MissingSigningKey`]: not verifiable,
+    /// but not invalid.
     ///
     /// `plaintext_ckey_b64` is needed for CKCE v6+ verification — pass the
     /// base64-no-padding of the decrypted conversation key, or None for other
     /// event types.
-    fn verify_event_signature(
+    fn check_event_signature(
         &self,
         parsed: &crate::thrift::event::MessageEvent,
         detail: &crate::thrift::event::MessageEventDetail,
         signing_keys: &[SigningKeyEntry],
         plaintext_ckey_b64: Option<&str>,
-    ) -> Result<bool, String> {
-        let sig_data = match &parsed.message_event_signature {
-            Some(sig) => sig,
-            None => return Ok(false),
-        };
-        let signature_b64 = match &sig_data.signature {
-            Some(s) => s,
-            None => return Ok(false),
+    ) -> SignatureCheck {
+        let signature = match event_signature(parsed, signing_keys) {
+            Ok(signature) => signature,
+            Err(check) => return check,
         };
 
-        let Some(sig_version) = signature_version(parsed) else {
-            return Err("signature_version is missing or not an integer".to_string());
-        };
-        if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
-            return Err(format!(
-                "signature_version {} is no longer accepted (minimum: {})",
-                sig_version,
-                crate::signatures::MIN_SIGNATURE_VERSION
-            ));
-        }
-        if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
-            return Err(format!(
-                "signature_version {} is not supported (maximum: {})",
-                sig_version,
-                crate::signatures::MAX_SIGNATURE_VERSION
-            ));
-        }
-
-        let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
-        let signing_key_b64 = match signing_keys
-            .iter()
-            .find(|e| e.public_key_version == key_version)
-            .map(|e| e.public_key.as_str())
-        {
-            Some(k) => k,
-            None => return Ok(false),
+        let Some(payload) = build_event_signature_payload(parsed, detail, plaintext_ckey_b64)
+        else {
+            return SignatureCheck::NoPayload;
         };
 
-        let payload = match build_event_signature_payload(parsed, detail, plaintext_ckey_b64) {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-
-        let sig_bytes = base64_decode_or_empty(signature_b64);
-        match self.verify(signing_key_b64, &sig_bytes, &payload) {
-            Ok(true) => Ok(true),
-            Ok(false) => Err(format!(
+        let sig_bytes = base64_decode_or_empty(signature.signature_b64);
+        match self.verify(signature.signing_key_b64, &sig_bytes, &payload) {
+            Ok(true) => SignatureCheck::Verified,
+            Ok(false) => SignatureCheck::Mismatch(format!(
                 "ECDSA mismatch: key_version={}, payload_len={}",
-                key_version,
+                signature.key_version,
                 payload.len()
             )),
-            Err(e) => Err(format!("verify error: {}", e)),
+            Err(e) => SignatureCheck::Mismatch(format!("verify error: {}", e)),
         }
     }
 
@@ -746,6 +752,140 @@ pub(crate) fn signature_version(event: &MessageEvent) -> Option<i32> {
         .as_deref()?
         .parse::<i32>()
         .ok()
+}
+
+/// The version of its sender's signing key that an event's signature names.
+pub(crate) fn signature_key_version(event: &MessageEvent) -> Option<&str> {
+    event
+        .message_event_signature
+        .as_ref()?
+        .public_key_version
+        .as_deref()
+}
+
+/// What checking an event's signature found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SignatureCheck {
+    /// The signature verified.
+    Verified,
+    /// The event carries no signature.
+    Unsigned,
+    /// The signature's version is not one this SDK accepts: the reason.
+    UnacceptedVersion(String),
+    /// None of the signing keys given is the sender's at the key version
+    /// the signature names.
+    MissingSigningKey,
+    /// The sender's signing key at the key version the signature names was
+    /// given, and left out because its identity binding does not verify.
+    RejectedSigningKey,
+    /// The signature covers the conversation key a key change carries, and
+    /// this identity could not decrypt that key from the event.
+    NoConversationKey,
+    /// The signed payload cannot be rebuilt from the event.
+    NoPayload,
+    /// The signature does not verify against the sender's signing key: the
+    /// reason.
+    Mismatch(String),
+}
+
+impl SignatureCheck {
+    pub(crate) fn is_verified(&self) -> bool {
+        matches!(self, Self::Verified)
+    }
+}
+
+/// An event's signature and the signing key that checks it.
+pub(crate) struct EventSignature<'a> {
+    /// The signature, base64.
+    signature_b64: &'a str,
+    /// The version of its sender's signing key the signature names.
+    key_version: &'a str,
+    /// That signing key, base64.
+    signing_key_b64: &'a str,
+}
+
+/// The signature `event` carries and, among `signing_keys`, the key at the
+/// key version it names. Otherwise why the signature cannot be checked: the
+/// event carries none, its signature version is not one this SDK accepts,
+/// or no key among `signing_keys` is at that key version.
+pub(crate) fn event_signature<'a>(
+    event: &'a MessageEvent,
+    signing_keys: &'a [SigningKeyEntry],
+) -> Result<EventSignature<'a>, SignatureCheck> {
+    let Some(sig_data) = &event.message_event_signature else {
+        return Err(SignatureCheck::Unsigned);
+    };
+    let Some(signature_b64) = &sig_data.signature else {
+        return Err(SignatureCheck::Unsigned);
+    };
+
+    let Some(sig_version) = signature_version(event) else {
+        return Err(SignatureCheck::UnacceptedVersion(
+            "signature_version is missing or not an integer".to_string(),
+        ));
+    };
+    if sig_version < crate::signatures::MIN_SIGNATURE_VERSION {
+        return Err(SignatureCheck::UnacceptedVersion(format!(
+            "signature_version {} is no longer accepted (minimum: {})",
+            sig_version,
+            crate::signatures::MIN_SIGNATURE_VERSION
+        )));
+    }
+    if sig_version > crate::signatures::MAX_SIGNATURE_VERSION {
+        return Err(SignatureCheck::UnacceptedVersion(format!(
+            "signature_version {} is not supported (maximum: {})",
+            sig_version,
+            crate::signatures::MAX_SIGNATURE_VERSION
+        )));
+    }
+
+    let key_version = sig_data.public_key_version.as_deref().unwrap_or("");
+    signing_keys
+        .iter()
+        .find(|e| e.public_key_version == key_version)
+        .map(|e| EventSignature {
+            signature_b64: signature_b64.as_str(),
+            key_version,
+            signing_key_b64: e.public_key.as_str(),
+        })
+        .ok_or(SignatureCheck::MissingSigningKey)
+}
+
+/// How an error names the signing key a signature was left unverified for
+/// want of: its sender, and the version of the sender's key it names.
+pub(crate) fn missing_signing_key(
+    sender_id: Option<&str>,
+    public_key_version: Option<&str>,
+) -> String {
+    format!(
+        "no signing key for sender {} at public_key_version {} among the signing keys given",
+        sender_id.unwrap_or("<none>"),
+        public_key_version.unwrap_or("<none>")
+    )
+}
+
+/// How an error names the signing key a signature was left unverified for
+/// want of, when that key was given and rejected: its sender, and the
+/// version of the sender's key the signature names.
+pub(crate) fn rejected_signing_key(
+    sender_id: Option<&str>,
+    public_key_version: Option<&str>,
+) -> String {
+    format!(
+        "the signing key given for sender {} at public_key_version {} was rejected: its \
+         identity binding does not verify",
+        sender_id.unwrap_or("<none>"),
+        public_key_version.unwrap_or("<none>")
+    )
+}
+
+/// The id a conversation's keys and key versions are filed under: the id an
+/// event carries, with a one-to-one's two user ids ordered numerically and
+/// colon-separated whichever way the event writes them. Events carry that
+/// form already; normalizing keeps one conversation under one id if an event
+/// ever writes the pair another way.
+pub(crate) fn canonical_event_conversation_id(conversation_id: &str) -> std::borrow::Cow<'_, str> {
+    crate::pipeline::canonical_conversation_id(conversation_id, "")
 }
 
 pub(crate) fn parse_message_event(data: &[u8]) -> Result<MessageEvent, SdkError> {
@@ -1852,7 +1992,9 @@ mod decrypt;
 mod encrypt;
 mod files;
 mod group_actions;
+mod key_cache;
 mod media;
+mod public_keys;
 mod signing;
 
 // Tests

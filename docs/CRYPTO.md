@@ -1006,20 +1006,67 @@ unvalidated as the preview (see [Media Keys](#media-keys)).
 
 `set_cache_keys(true)` enables a per-conversation cache that lets the encrypt
 methods resolve an omitted `conversation_key`/`conversation_key_version` pair
-and `decrypt_event` fall back when its key map is empty. Its guardrails:
+and `decrypt_event`, `decrypt_file` and `file_decryptor` fall back when their
+key map is empty. Its guardrails:
 
-- A key enters the cache **only** when its key-change event carries a valid
-  signature — a merely adopted (unverified) key change can decrypt history but
-  never becomes an encryption key.
-- The cached version follows the per-conversation monotonic high-water mark:
-  a replayed older key change, even validly signed, never displaces a newer
-  cached key, so encryption cannot be downgraded to a stale key.
+- A key enters the cache from two places **only**: a key-change event that
+  carries a valid signature, decrypted by `decrypt_events` or
+  `decrypt_event`, and a key change this instance prepared itself, whose key
+  it made. A merely adopted (unverified) key change can decrypt history but
+  never becomes an encryption key. Key changes are adopted unverified only
+  when sequenced before late June 2026 (`sequence_id` below
+  `2070276095283454002`) or signed below signature version 6, so stored
+  history stays readable; any other key change that does not verify has its
+  key dropped. `decrypt_events` reports either kind in
+  `unverified_key_changes`, with why it did not verify: its signer's signing
+  key was not among the keys given, that key was given and rejected, its
+  signature is invalid, or it carries no signature the SDK can check.
+- The cache keeps every key it is given per conversation, by key version,
+  and encrypts with the newest. A replayed older key change, even validly
+  signed, adds a key for decryption and never displaces a newer one, so
+  encryption cannot be downgraded to a stale key. The newest verified
+  version a batch reports (`latest_versions`) follows the per-conversation
+  monotonic high-water mark of verified key changes, which a prepared key
+  does not move.
+- A prepared key is cached before its request is sent. Until the X API
+  accepts the request, no other member holds that key.
+- Keys are kept apart by conversation. A key change is verified against the
+  key its own conversation holds at its version, and a message is decrypted
+  with its own conversation's key, so two conversations whose keys share a
+  version number do not affect each other. A conversation is identified by
+  the id its events carry, which every signature covers: a group's `g…` id,
+  and a one-to-one's two user ids ordered numerically and colon-separated.
+  The SDK reads a one-to-one id written in the other order, or with a hyphen,
+  as the same conversation. In a batch result, `keys_by_conversation` and
+  `latest_versions` are keyed by that id; `keys` and `latest_version` leave
+  it out, so `keys` omits a version that two conversations of the batch both
+  use, and `latest_version` is null for a batch of more than one
+  conversation.
 - Cached keys are held in zeroize-on-drop containers, redacted from `Debug`
   output, and cleared when the cache is disabled.
-- The signing-key store (`set_signing_keys`) is populated only by that
-  explicit call — verification never trusts a key carried inside an event —
-  and the per-sender filtering plus identity-binding checks run against the
-  stored entries exactly as they do for caller-passed keys.
+- The signing-key store is populated only by `set_signing_keys`,
+  `add_signing_keys` and `add_public_keys` — verification never trusts a key
+  carried inside an event — and the per-sender filtering plus
+  identity-binding checks run against the stored entries exactly as they do
+  for caller-passed keys. A signing key whose identity binding does not
+  verify is left out of verification; `decrypt_events` reports it in
+  `rejected_signing_keys`.
+- Public keys a `resolve_public_keys` hook returns enter that store through
+  `add_public_keys` and get the same checks. A prepare call that is passed
+  no public keys encrypts its conversation key only to a stored identity key
+  whose binding verifies. The binding ties an identity key to a signing key;
+  that the pair belongs to the user it was fetched for is the X API's word,
+  as it is for keys the caller passes. The hook runs in the host language:
+  the core calls no code but its own, and only asks which users' keys are
+  missing and takes the records back.
+- A process with several signed-in users keeps one chat per user and may
+  put one cache of fetched public-key records behind the hook of all of them
+  ([API.md](API.md#many-users-many-conversations)). The records are public,
+  and each chat checks every record's identity binding itself before it
+  verifies with it or encrypts to it, so a wrong record in the cache does to
+  each chat what a wrong answer from the X API would. Nothing else is
+  shared: each chat keeps its own private keys, conversation keys, stored
+  public keys and verified key versions.
 
 ### Known Limitations
 

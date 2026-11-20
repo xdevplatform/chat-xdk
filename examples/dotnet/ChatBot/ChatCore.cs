@@ -12,10 +12,15 @@ namespace ChatBot;
 ///
 /// <list type="bullet">
 ///   <item>key management     -> LoadKeys / SetIdentity / GenerateAndRegister</item>
-///   <item>conversation keys  -> PrepareConversationKeyChange / DecryptConversationKey</item>
+///   <item>conversation keys  -> PrepareConversationKeyChangeAsync / DecryptConversationKey</item>
 ///   <item>message encryption -> EncryptReply, then EncryptMedia for its files</item>
-///   <item>event decryption   -> DecryptBatch (DecryptEvents) and DecryptOne (DecryptEvent)</item>
+///   <item>event decryption   -> DecryptBatchAsync (DecryptEventsAsync) and DecryptOne
+///   (DecryptEvent)</item>
 /// </list>
+///
+/// Other users' public keys reach the SDK through one hook,
+/// <see cref="FetchPublicKeysWith"/>: the SDK calls it for the keys a decrypt
+/// or a key change lacks, and stores what it returns.
 /// </summary>
 public sealed class ChatCore : IDisposable
 {
@@ -23,7 +28,7 @@ public sealed class ChatCore : IDisposable
     public string SigningKeyVersion { get; private set; } = "";
 
     /// <summary>
-    /// A chat whose conversation-key cache is on: <see cref="DecryptBatch"/>
+    /// A chat whose conversation-key cache is on: <see cref="DecryptBatchAsync"/>
     /// fills it from verified key changes, and the encrypt calls take the
     /// newest key from it.
     /// </summary>
@@ -67,11 +72,77 @@ public sealed class ChatCore : IDisposable
 
     public PublicKeys PublicKeys() => _chat.GetPublicKeys();
 
+    // -- Other users' public keys -------------------------------------------
+
+    /// <summary>
+    /// Have the SDK fetch the public keys it lacks with
+    /// <paramref name="fetchPublicKeys"/>, which returns one user's records:
+    /// the <c>data</c> array of <c>GET /2/users/{id}/public_keys</c>.
+    ///
+    /// This sets the SDK's <c>ResolvePublicKeys</c> hook.
+    /// <see cref="DecryptBatchAsync"/> then fetches the signing keys a page's
+    /// events name and the SDK does not hold, those of the members who made
+    /// its key changes as well as those of the senders of its messages, and
+    /// decrypts the page once more. The prepare calls that make a
+    /// conversation key fetch their members' identity keys when they are
+    /// passed no public keys. The SDK stores what arrives, and waits a minute
+    /// before it asks again for a key a lookup did not bring.
+    ///
+    /// A user whose fetch fails is logged and left out, so the keys of the
+    /// other users still arrive.
+    /// </summary>
+    public void FetchPublicKeysWith(Func<string, Task<List<JsonElement>>> fetchPublicKeys)
+    {
+        _chat.ResolvePublicKeys = async userIds =>
+        {
+            var records = new Dictionary<string, IReadOnlyList<PublicKeyRecord>>();
+            foreach (var userId in userIds)
+            {
+                try
+                {
+                    var found = await fetchPublicKeys(userId);
+                    records[userId] = found
+                        .Select(item => item.Deserialize<PublicKeyRecord>())
+                        .OfType<PublicKeyRecord>()
+                        .ToList();
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine($"public_keys_fetch_failed user={userId} err={e.Message}");
+                }
+            }
+            return records;
+        };
+    }
+
+    /// <summary>
+    /// Set the SDK's <c>ResolvePublicKeys</c> hook to
+    /// <paramref name="resolvePublicKeys"/> as it is: a function that takes
+    /// user ids and returns each user's records, by user id. A process with
+    /// several signed-in users gives every chat the same function, so they
+    /// share its lookups (see MultiUser.cs).
+    /// </summary>
+    public void ResolvePublicKeysWith(
+        Func<IReadOnlyList<string>, Task<IReadOnlyDictionary<string, IReadOnlyList<PublicKeyRecord>>>> resolvePublicKeys)
+    {
+        _chat.ResolvePublicKeys = resolvePublicKeys;
+    }
+
     // -- Conversation keys --------------------------------------------------
 
-    public PreparedConversationChange PrepareConversationKeyChange(
-        IReadOnlyList<PublicKeyInput> publicKeys, string? conversationId = null)
-        => _chat.PrepareConversationKeyChange(new ConversationKeyChangeParams(publicKeys)
+    /// <summary>
+    /// Prepare a conversation-key change: a fresh key encrypted to every
+    /// participant, and the signature the X API takes with it.
+    ///
+    /// <paramref name="publicKeys"/> are the participants' identity keys.
+    /// Pass null for a one-to-one that <paramref name="conversationId"/>
+    /// names, by its id or by the other user's id alone: the SDK reads both
+    /// users' keys from the public keys it holds, fetching the ones it lacks
+    /// through <see cref="FetchPublicKeysWith"/>.
+    /// </summary>
+    public Task<PreparedConversationChange> PrepareConversationKeyChangeAsync(
+        IReadOnlyList<PublicKeyInput>? publicKeys, string? conversationId = null)
+        => _chat.PrepareConversationKeyChangeAsync(new ConversationKeyChangeParams(publicKeys)
         {
             ConversationId = conversationId,
         });
@@ -82,19 +153,28 @@ public sealed class ChatCore : IDisposable
 
     // -- Decryption: the two paths -----------------------------------------
 
-    /// <summary>Batch path — used on initial conversation load.</summary>
-    public DecryptEventsResult DecryptBatch(IEnumerable<string> eventsB64, IEnumerable<SigningKeyEntry>? signingKeys = null)
-        => _chat.DecryptEvents(new DecryptEventsParams(eventsB64.ToList())
-        {
-            SigningKeys = signingKeys?.ToList(),
-        });
+    /// <summary>
+    /// Batch path — every page of events goes through it, the key changes
+    /// and the data events together: it extracts the conversation keys from
+    /// the KeyChange events, caches those of the key changes that verify,
+    /// then decrypts every event.
+    ///
+    /// Signatures verify with the public keys the SDK holds. The ones the
+    /// page lacks are fetched through <see cref="FetchPublicKeysWith"/>; the
+    /// result's <c>MissingSigningKeys</c> lists those that did not arrive.
+    /// </summary>
+    public Task<DecryptEventsResult> DecryptBatchAsync(IEnumerable<string> eventsB64)
+        => _chat.DecryptEventsAsync(new DecryptEventsParams(eventsB64.ToList()));
 
-    /// <summary>Single-event path — used for each new event after the initial load.</summary>
-    public JsonElement DecryptOne(string eventB64, Dictionary<string, byte[]> conversationKeys, IEnumerable<SigningKeyEntry>? signingKeys = null)
-        => _chat.DecryptEvent(new DecryptEventParams(eventB64, conversationKeys)
-        {
-            SigningKeys = signingKeys?.ToList(),
-        });
+    /// <summary>
+    /// Single-event path — decrypt one event. An empty
+    /// <paramref name="conversationKeys"/> takes the keys from the SDK's
+    /// cache, and the signature verifies with the public keys the SDK holds.
+    /// This path fetches none: an event whose sender's keys the SDK may lack
+    /// goes through <see cref="DecryptBatchAsync"/>.
+    /// </summary>
+    public JsonElement DecryptOne(string eventB64, Dictionary<string, byte[]> conversationKeys)
+        => _chat.DecryptEvent(new DecryptEventParams(eventB64, conversationKeys));
 
     // -- Message encryption -------------------------------------------------
 
@@ -187,26 +267,38 @@ public sealed class ChatCore : IDisposable
     /// Prepare a group creation: fresh key + the two required signatures. A plaintext
     /// <paramref name="title"/> is encrypted under the new key; send the result's
     /// <c>EncryptedTitle</c> as the request's <c>group_name</c>.
+    ///
+    /// Pass null for <paramref name="publicKeys"/> to have the SDK read the
+    /// identity keys of <paramref name="memberIds"/> and
+    /// <paramref name="adminIds"/> from the public keys it holds, fetching the
+    /// ones it lacks through <see cref="FetchPublicKeysWith"/>.
     /// </summary>
-    public PreparedConversationChange PrepareGroupCreate(
-        IReadOnlyList<PublicKeyInput> publicKeys,
+    public Task<PreparedConversationChange> PrepareGroupCreateAsync(
+        IReadOnlyList<PublicKeyInput>? publicKeys,
         string conversationId,
         IReadOnlyList<string> memberIds,
         IReadOnlyList<string> adminIds,
         string? title = null)
-        => _chat.PrepareGroupCreate(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds)
+        => _chat.PrepareGroupCreateAsync(new GroupCreateParams(publicKeys, conversationId, memberIds, adminIds)
         {
             Title = title,
         });
 
-    /// <summary>Prepare a member add: rotated key + the two required signatures.</summary>
-    public PreparedConversationChange PrepareGroupMembersChange(
-        IReadOnlyList<PublicKeyInput> publicKeys,
+    /// <summary>
+    /// Prepare a member add: rotated key + the two required signatures.
+    ///
+    /// Pass null for <paramref name="publicKeys"/> to have the SDK read the
+    /// identity keys of <paramref name="currentMemberIds"/> and
+    /// <paramref name="newMemberIds"/> from the public keys it holds,
+    /// fetching the ones it lacks through <see cref="FetchPublicKeysWith"/>.
+    /// </summary>
+    public Task<PreparedConversationChange> PrepareGroupMembersChangeAsync(
+        IReadOnlyList<PublicKeyInput>? publicKeys,
         string conversationId,
         IReadOnlyList<string> newMemberIds,
         IReadOnlyList<string> currentMemberIds,
         IReadOnlyList<string> currentAdminIds)
-        => _chat.PrepareGroupMembersChange(new GroupMembersChangeParams(
+        => _chat.PrepareGroupMembersChangeAsync(new GroupMembersChangeParams(
             publicKeys,
             conversationId,
             newMemberIds,
@@ -216,13 +308,23 @@ public sealed class ChatCore : IDisposable
 
     /// <summary>
     /// Prepare a member removal that rotates the key for who stays.
-    /// <paramref name="publicKeys"/> are the identity keys of the members who remain.
+    ///
+    /// <paramref name="publicKeys"/> are the identity keys of the members who
+    /// remain. Pass null, and name those members in
+    /// <paramref name="remainingMemberIds"/>, to have the SDK read their keys
+    /// from the public keys it holds, fetching the ones it lacks through
+    /// <see cref="FetchPublicKeysWith"/>; with <paramref name="publicKeys"/>
+    /// passed, <paramref name="remainingMemberIds"/> is not read.
     /// </summary>
-    public PreparedConversationChange PrepareGroupMembersRemove(
-        IReadOnlyList<PublicKeyInput> publicKeys,
+    public Task<PreparedConversationChange> PrepareGroupMembersRemoveAsync(
+        IReadOnlyList<PublicKeyInput>? publicKeys,
         string conversationId,
-        IReadOnlyList<string> userIds)
-        => _chat.PrepareGroupMembersRemove(new GroupMembersRemoveParams(publicKeys, conversationId, userIds));
+        IReadOnlyList<string> userIds,
+        IReadOnlyList<string>? remainingMemberIds = null)
+        => _chat.PrepareGroupMembersRemoveAsync(new GroupMembersRemoveParams(publicKeys, conversationId, userIds)
+        {
+            RemainingMemberIds = remainingMemberIds,
+        });
 
     // -- Media files ----------------------------------------------------------
 

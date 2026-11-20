@@ -30,27 +30,30 @@ func newConversationState() *conversationState {
 }
 
 // Bot wires the crypto core to the X Chat API and runs the reply loop.
+//
+// One Bot serves one signed-in user, in any number of conversations. A
+// process with several signed-in users keeps one chat per user and gives
+// each the same public-key resolver: see multiuser.go.
 type Bot struct {
 	core      *ChatCore
 	api       *XChatClient
 	botUserID string
 	state     map[string]*conversationState
-	// signingKeys accumulates every sender's keys; the merged set is stored
-	// in the SDK via SetSigningKeys so decrypt calls can pass nil.
-	signingKeys []chatxdk.SigningKeyEntry
-	seenSenders map[string]bool
 }
 
+// NewBot sets the bot's session identity and has the SDK fetch the public
+// keys it lacks through the API client: the signing keys that verify a
+// page's events, and the identity keys a key change is encrypted to.
 func NewBot(core *ChatCore, api *XChatClient, botUserID string) *Bot {
 	if err := core.SetIdentity(botUserID); err != nil {
 		log.Printf("set_identity_failed err=%v", err)
 	}
+	core.FetchPublicKeysWith(api.GetPublicKeys)
 	return &Bot{
-		core:        core,
-		api:         api,
-		botUserID:   botUserID,
-		state:       map[string]*conversationState{},
-		seenSenders: map[string]bool{},
+		core:      core,
+		api:       api,
+		botUserID: botUserID,
+		state:     map[string]*conversationState{},
 	}
 }
 
@@ -63,36 +66,44 @@ func (b *Bot) stateFor(conversationID string) *conversationState {
 	return st
 }
 
-// refreshSigningKeys fetches public keys for senders not seen before and
-// stores the merged set in the SDK, so decrypt calls verify against it.
-func (b *Bot) refreshSigningKeys(events []EventItem) {
-	added := false
+// decryptPage batch-decrypts one page of events and logs what the batch
+// could not use.
+//
+// The key events go into the same batch as the data events: they are the
+// only source of the conversation keys the messages decrypt under. The SDK
+// fetches the public keys the page lacks, those of the members who made its
+// key changes as well as those of the senders of its messages, and caches
+// the key of each key change that verifies.
+func (b *Bot) decryptPage(conversationID string, events []EventItem, keyEvents []string) (*chatxdk.DecryptEventsResult, error) {
+	eventsB64 := append([]string{}, keyEvents...)
 	for _, e := range events {
-		if e.SenderID == "" || e.SenderID == b.botUserID || b.seenSenders[e.SenderID] {
-			continue
-		}
-		b.seenSenders[e.SenderID] = true
-		pks, err := b.api.GetPublicKeys(e.SenderID)
-		if err != nil {
-			log.Printf("public_keys_fetch_failed sender=%s err=%v", e.SenderID, err)
-			continue
-		}
-		for _, pk := range pks {
-			b.signingKeys = append(b.signingKeys, chatxdk.SigningKeyEntry{
-				UserID:                     e.SenderID,
-				PublicKeyVersion:           str(pk["public_key_version"]),
-				PublicKey:                  str(pk["signing_public_key"]),
-				IdentityPublicKey:          str(pk["public_key"]),
-				IdentityPublicKeySignature: str(pk["identity_public_key_signature"]),
-			})
-			added = true
+		if e.EncodedEvent != "" {
+			eventsB64 = append(eventsB64, e.EncodedEvent)
 		}
 	}
-	if added {
-		if err := b.core.SetSigningKeys(b.signingKeys); err != nil {
-			log.Printf("set_signing_keys_failed err=%v", err)
-		}
+	result, err := b.core.DecryptBatch(eventsB64)
+	if err != nil {
+		return nil, err
 	}
+	for index, key := range result.MissingSigningKeys {
+		log.Printf("signing_key_missing conv=%s event=%s user=%s version=%s",
+			conversationID, index, key.UserID, key.PublicKeyVersion)
+	}
+	for index, change := range result.UnverifiedKeyChanges {
+		signer := ""
+		if change.SenderID != nil {
+			signer = *change.SenderID
+		}
+		log.Printf("key_change_unverified conv=%s event=%s reason=%s signer=%s key_dropped=%t",
+			conversationID, index, change.Reason, signer, change.KeyDropped)
+	}
+	for index, change := range result.UndecryptableKeyChanges {
+		log.Printf("key_change_undecryptable conv=%s event=%s reason=%s", conversationID, index, change.Reason)
+	}
+	for index, key := range result.RejectedSigningKeys {
+		log.Printf("signing_key_rejected index=%s user=%s version=%s", index, key.UserID, key.PublicKeyVersion)
+	}
+	return result, nil
 }
 
 // LoadBacklog batch-decrypts the conversation backlog (DecryptEvents path),
@@ -103,16 +114,7 @@ func (b *Bot) LoadBacklog(conversationID string) error {
 	if err != nil {
 		return err
 	}
-	b.refreshSigningKeys(events)
-	// The key events must be in the same batch as the messages: they are the
-	// only source of the conversation keys the messages decrypt under.
-	eventsB64 := append([]string{}, keyEvents...)
-	for _, e := range events {
-		if e.EncodedEvent != "" {
-			eventsB64 = append(eventsB64, e.EncodedEvent)
-		}
-	}
-	result, err := b.core.DecryptBatch(eventsB64, nil)
+	result, err := b.decryptPage(conversationID, events, keyEvents)
 	if err != nil {
 		return err
 	}
@@ -121,44 +123,27 @@ func (b *Bot) LoadBacklog(conversationID string) error {
 	return nil
 }
 
-// PollOnce fetches new events and replies using the single-event decrypt path.
+// PollOnce fetches the next page of events, batch-decrypts it, and replies
+// to its messages.
 func (b *Bot) PollOnce(conversationID string) error {
 	st := b.stateFor(conversationID)
 	events, keyEvents, next, err := b.api.GetEvents(conversationID, 50, st.paginationToken)
 	if err != nil {
 		return err
 	}
-	b.refreshSigningKeys(events)
-	// Key changes for this page arrive in meta, not data; only the batch
-	// path feeds the key cache, so route them through it before decrypting.
-	// This runs after the signing-key refresh: a key change from a sender
-	// missing from the store would fail verification and never be cached.
-	if len(keyEvents) > 0 {
-		if _, err := b.core.DecryptBatch(keyEvents, nil); err != nil {
-			log.Printf("key_events_decrypt_failed conv=%s err=%v", conversationID, err)
-		}
+	result, err := b.decryptPage(conversationID, events, keyEvents)
+	if err != nil {
+		return err
 	}
-	for _, item := range events {
-		if item.EncodedEvent == "" {
-			continue
+	for index, reason := range result.Errors {
+		log.Printf("decrypt_failed conv=%s event=%s err=%s", conversationID, index, reason)
+	}
+	for i := range result.Events {
+		decrypted := &result.Events[i]
+		// A reply is threaded under the raw event of its message.
+		if decrypted.OriginalB64 != "" {
+			b.maybeReply(conversationID, decrypted.OriginalB64, &decrypted.Event)
 		}
-		// nil maps: conversation keys come from the SDK's cache, signing
-		// keys from the stored set.
-		event, err := b.core.DecryptOne(item.EncodedEvent, nil, nil)
-		if err != nil {
-			log.Printf("decrypt_failed conv=%s err=%v", conversationID, err)
-			continue
-		}
-		if event.AsKeyChange() != nil {
-			// Only the batch path adopts keys into the SDK's cache; replay
-			// the key change through it so the rotated key becomes the
-			// sending key.
-			if _, err := b.core.DecryptBatch([]string{item.EncodedEvent}, nil); err != nil {
-				log.Printf("key_adopt_failed conv=%s err=%v", conversationID, err)
-			}
-			continue
-		}
-		b.maybeReply(conversationID, item.EncodedEvent, event)
 	}
 	if next != "" {
 		st.paginationToken = next
@@ -228,11 +213,4 @@ func (b *Bot) Run(conversationID string, pollInterval time.Duration) error {
 		}
 		time.Sleep(pollInterval)
 	}
-}
-
-func str(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
 }

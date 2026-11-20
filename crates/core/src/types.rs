@@ -1580,32 +1580,73 @@ impl SigningKeyEntry {
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
 #[non_exhaustive]
 pub struct ConversationKeyResult {
-    /// Map of key version → raw conversation key bytes.
+    /// Map of key version → raw conversation key bytes, over every
+    /// conversation of the batch. A version that key changes of more than
+    /// one conversation carry is left out, because a lookup by version alone
+    /// cannot say which conversation's key it wants: read
+    /// `keys_by_conversation`. For a batch of one conversation this holds
+    /// every key.
     #[serde(skip)]
     pub keys: std::collections::HashMap<String, crate::crypto::keys::XChatConversationKey>,
-    /// The version to encrypt with. From `decrypt_events`, the newest version
-    /// whose key change verified (`None` until one verifies); from
-    /// `extract_conversation_keys`, the batch's highest version.
+    /// Map of conversation id → key version → raw conversation key bytes:
+    /// each key under the conversation of the key change that carries it, so
+    /// two conversations' keys at one version stay apart. A key change that
+    /// carries no conversation id has its key in `keys` only.
+    #[serde(skip)]
+    pub keys_by_conversation: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, crate::crypto::keys::XChatConversationKey>,
+    >,
+    /// The version to encrypt with, when every event of the batch belongs to
+    /// one conversation. From `decrypt_events`, the newest version whose key
+    /// change verified, `None` until one verifies; from
+    /// `extract_conversation_keys`, the highest version in the batch. `None`
+    /// for a batch whose events belong to more than one conversation, where
+    /// one version cannot name each conversation's key: read
+    /// `latest_versions`.
     pub latest_version: Option<String>,
+    /// The version to encrypt with for each conversation of the batch. From
+    /// `decrypt_events`, the newest version whose key change verified; a
+    /// conversation without one has no entry. From
+    /// `extract_conversation_keys`, each conversation's highest version in
+    /// the batch.
+    ///
+    /// Conversation ids, here and in `keys_by_conversation`, have the form
+    /// events carry: a group's `g…` id, and a one-to-one's two user ids
+    /// ordered numerically and colon-separated.
+    #[serde(default)]
+    pub latest_versions: std::collections::HashMap<String, String>,
 }
 
 impl ConversationKeyResult {
-    /// Get a key by version.
+    /// Get a key of `keys` by version.
     pub fn get(&self, version: &str) -> Option<&crate::crypto::keys::XChatConversationKey> {
         self.keys.get(version)
     }
 
-    /// Get the latest conversation key.
+    /// Get the key of `conversation_id` at `version`: the key a key change of
+    /// that conversation carries, whichever other conversations of the batch
+    /// have a key at the same version.
+    pub fn get_for(
+        &self,
+        conversation_id: &str,
+        version: &str,
+    ) -> Option<&crate::crypto::keys::XChatConversationKey> {
+        self.keys_by_conversation.get(conversation_id)?.get(version)
+    }
+
+    /// Get the latest conversation key: the key of `keys` at
+    /// `latest_version`.
     pub fn latest_key(&self) -> Option<&crate::crypto::keys::XChatConversationKey> {
         self.latest_version.as_ref().and_then(|v| self.keys.get(v))
     }
 
-    /// Check if empty.
+    /// Whether `keys` is empty.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
-    /// Number of keys.
+    /// Number of keys in `keys`.
     pub fn len(&self) -> usize {
         self.keys.len()
     }
@@ -1624,6 +1665,271 @@ pub struct DecryptedEvent {
     pub original_b64: Option<String>,
 }
 
+/// Why a key change's signature did not verify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub enum UnverifiedKeyChangeReason {
+    /// None of the signing keys the call verified with is the sender's at
+    /// the key version the signature names: pass that user's public keys as
+    /// signing keys and decrypt again.
+    MissingSigningKey,
+    /// The sender's signing key at the key version the signature names was
+    /// among the signing keys, but its identity binding does not verify, so
+    /// the call left it out: it is listed in `rejected_signing_keys`.
+    /// Fetching the same entry again changes nothing.
+    RejectedSigningKey,
+    /// The signature does not verify against the sender's signing key.
+    InvalidSignature,
+    /// The key change carries no signature, or one this SDK cannot check:
+    /// an unsupported signature version, or one below the first whose
+    /// payload a recipient can rebuild.
+    Unverifiable,
+}
+
+/// A key change in a `decrypt_events` batch whose key this identity
+/// decrypted but whose signature did not verify.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct UnverifiedKeyChange {
+    /// Why its signature did not verify.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub reason: UnverifiedKeyChangeReason,
+    /// Whether its key was left out of `conversation_keys`, so the messages
+    /// of its conversation under that key version did not decrypt. A key
+    /// that was kept decrypts messages but never becomes the version to
+    /// encrypt with.
+    pub key_dropped: bool,
+    /// The conversation the key change belongs to.
+    pub conversation_id: Option<String>,
+    /// The conversation key version the key change carries.
+    pub conversation_key_version: String,
+    /// The user who signed the key change: the member who made it.
+    pub sender_id: Option<String>,
+    /// The version of that user's signing key the signature names.
+    pub public_key_version: Option<String>,
+}
+
+/// Why this identity could not decrypt the conversation key a key change
+/// carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub enum UndecryptableKeyChangeReason {
+    /// No identity key is loaded: load or unlock the keys, then decrypt
+    /// again.
+    Locked,
+    /// The key change holds no key for this chat's user, the user the
+    /// session identity names; without a session identity, it holds no key
+    /// at all. The user was not a member when the key change was made.
+    NotARecipient,
+    /// The key change holds keys for this chat's user, or for some user
+    /// when no session identity names one, but none at this chat's key
+    /// version: it was made for another registration of the user's keys.
+    /// Check the key version given to `set_identity` or `import_keys`.
+    OtherKeyVersion,
+    /// A key the key change holds for this chat's key version does not
+    /// decrypt under the loaded identity key: the loaded private key is not
+    /// the one registered at that version.
+    DecryptionFailed,
+}
+
+/// A key change in a `decrypt_events` batch whose conversation key this
+/// identity could not decrypt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct UndecryptableKeyChange {
+    /// Why its key could not be decrypted.
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub reason: UndecryptableKeyChangeReason,
+    /// The conversation the key change belongs to.
+    pub conversation_id: Option<String>,
+    /// The conversation key version the key change carries.
+    pub conversation_key_version: String,
+    /// The user who made the key change.
+    pub sender_id: Option<String>,
+}
+
+/// A signing key a `decrypt_events` call left out of verification because
+/// its identity binding does not verify: `identity_public_key_signature` is
+/// not the signing key's signature over `identity_public_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct RejectedSigningKey {
+    /// The entry's `user_id`.
+    pub user_id: String,
+    /// The entry's `public_key_version`.
+    pub public_key_version: String,
+}
+
+/// A signing key a `decrypt_events` call did not have: an event's signature
+/// names it, and it was not among the signing keys the call verified with.
+/// Fetch the user's public keys (`GET /2/users/{id}/public_keys`) and give
+/// them to the next call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
+#[non_exhaustive]
+pub struct MissingSigningKey {
+    /// The user who sent the event, whose signing key it is.
+    pub user_id: String,
+    /// The version of that user's key the signature names.
+    pub public_key_version: String,
+}
+
+impl MissingSigningKey {
+    /// The signing key of `user_id` at `public_key_version`.
+    pub fn new(user_id: impl Into<String>, public_key_version: impl Into<String>) -> Self {
+        Self {
+            user_id: user_id.into(),
+            public_key_version: public_key_version.into(),
+        }
+    }
+}
+
+/// One of a user's public keys, as the X API returns it in the `data` of
+/// `GET /2/users/{id}/public_keys`.
+///
+/// A record deserializes from the API's own JSON: each field under its
+/// snake_case name or the camelCase name the X API client libraries give
+/// it, a `public_key_version` written as a string or a number, and any
+/// other field, such as `juicebox_config`, ignored. A field that is absent
+/// or null is empty, and [`crate::ChatCore::add_public_keys`] leaves out a
+/// record that lacks one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct PublicKeyRecord {
+    /// The version of this key (`public_key_version`).
+    pub public_key_version: String,
+    /// The user's identity public key (`public_key`), base64.
+    pub public_key: String,
+    /// The user's signing public key (`signing_public_key`), base64.
+    pub signing_public_key: String,
+    /// The signing key's signature over the identity key
+    /// (`identity_public_key_signature`), base64: what binds the two.
+    pub identity_public_key_signature: String,
+}
+
+impl PublicKeyRecord {
+    /// A record of the four values the SDK reads.
+    pub fn new(
+        public_key_version: impl Into<String>,
+        public_key: impl Into<String>,
+        signing_public_key: impl Into<String>,
+        identity_public_key_signature: impl Into<String>,
+    ) -> Self {
+        Self {
+            public_key_version: public_key_version.into(),
+            public_key: public_key.into(),
+            signing_public_key: signing_public_key.into(),
+            identity_public_key_signature: identity_public_key_signature.into(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKeyRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RecordVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RecordVisitor {
+            type Value = PublicKeyRecord;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a public key record from GET /2/users/{id}/public_keys")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut record = PublicKeyRecord::default();
+                while let Some(name) = map.next_key::<String>()? {
+                    let field = match name.as_str() {
+                        "public_key_version" | "publicKeyVersion" => &mut record.public_key_version,
+                        "public_key" | "publicKey" => &mut record.public_key,
+                        "signing_public_key" | "signingPublicKey" => &mut record.signing_public_key,
+                        "identity_public_key_signature" | "identityPublicKeySignature" => {
+                            &mut record.identity_public_key_signature
+                        }
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                            continue;
+                        }
+                    };
+                    // A record that carries a field under both of its names
+                    // keeps the first value that is not empty.
+                    let RecordValue(value) = map.next_value()?;
+                    if field.is_empty() {
+                        *field = value;
+                    }
+                }
+                Ok(record)
+            }
+        }
+
+        deserializer.deserialize_map(RecordVisitor)
+    }
+}
+
+/// A value of a [`PublicKeyRecord`] field: a string, a whole number written
+/// as a number, or nothing.
+struct RecordValue(String);
+
+impl<'de> Deserialize<'de> for RecordValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+            type Value = RecordValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a string, a whole number or null")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(RecordValue(value.to_string()))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                // A JavaScript number arrives as a float; one that is not a
+                // whole number is no key version.
+                if value.fract() == 0.0 && (0.0..9.0e15).contains(&value) {
+                    Ok(RecordValue((value as u64).to_string()))
+                } else {
+                    Ok(RecordValue(String::new()))
+                }
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RecordValue(String::new()))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RecordValue(String::new()))
+            }
+
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(ValueVisitor)
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
+}
+
 /// Result from `decrypt_events` batch API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "js", derive(chat_xdk_macros::JsCamelCase))]
@@ -1639,6 +1945,39 @@ pub struct DecryptEventsResult {
     /// failed, or one decrypt drops, such as a member removal's title or
     /// description re-encrypted under the new key.
     pub errors: std::collections::HashMap<usize, String>,
+    /// Index → the key change at that index of the batch, for each key
+    /// change whose signature did not verify: why, and whether its key was
+    /// dropped. Empty when every key change this identity decrypted
+    /// verified.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub unverified_key_changes: std::collections::HashMap<usize, UnverifiedKeyChange>,
+    /// Index → the key change at that index of the batch, for each key
+    /// change whose conversation key this identity could not decrypt: why.
+    /// Such a key change gives the batch no key, so the messages of its
+    /// conversation under its key version did not decrypt.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub undecryptable_key_changes: std::collections::HashMap<usize, UndecryptableKeyChange>,
+    /// Index → the signing key at that index of the signing keys the call
+    /// verified with (the ones it was given, or the stored ones when it was
+    /// given none), for each signing key it left out because its identity
+    /// binding does not verify. An event signed with such a key does not
+    /// verify.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub rejected_signing_keys: std::collections::HashMap<usize, RejectedSigningKey>,
+    /// Index → the signing key the event at that index of the batch names,
+    /// for each event, of any signed type, whose sender's signing key at
+    /// that version was not among the signing keys the call verified with.
+    /// Under the default reject-unverified policy such an event is in
+    /// `errors`; otherwise it is in `events`, unverified. A key change
+    /// listed here is also in `unverified_key_changes` when this identity
+    /// decrypted its key. [`crate::ChatCore::missing_public_keys`] reads
+    /// the users to fetch keys for from this map.
+    #[serde(default)]
+    #[cfg_attr(feature = "js", js_camel(wrap))]
+    pub missing_signing_keys: std::collections::HashMap<usize, MissingSigningKey>,
 }
 
 /// A public key input entry for `prepare_conversation_key_change`,
@@ -2311,5 +2650,251 @@ mod tests {
                 "publicKeyVersion": "1",
             }])
         );
+    }
+
+    fn unverified_key_change() -> UnverifiedKeyChange {
+        UnverifiedKeyChange {
+            reason: UnverifiedKeyChangeReason::MissingSigningKey,
+            key_dropped: true,
+            conversation_id: Some("g1".to_string()),
+            conversation_key_version: "5".to_string(),
+            sender_id: Some("2".to_string()),
+            public_key_version: None,
+        }
+    }
+
+    fn undecryptable_key_change() -> UndecryptableKeyChange {
+        UndecryptableKeyChange {
+            reason: UndecryptableKeyChangeReason::NotARecipient,
+            conversation_id: Some("g1".to_string()),
+            conversation_key_version: "5".to_string(),
+            sender_id: None,
+        }
+    }
+
+    fn rejected_signing_key() -> RejectedSigningKey {
+        RejectedSigningKey {
+            user_id: "2".to_string(),
+            public_key_version: "7".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_unverified_key_change_serde() {
+        let json = serde_json::to_value(unverified_key_change()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "reason": "MissingSigningKey",
+                "key_dropped": true,
+                "conversation_id": "g1",
+                "conversation_key_version": "5",
+                "sender_id": "2",
+                "public_key_version": null,
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<UnverifiedKeyChange>(json).unwrap(),
+            unverified_key_change()
+        );
+        for (reason, name) in [
+            (
+                UnverifiedKeyChangeReason::RejectedSigningKey,
+                "RejectedSigningKey",
+            ),
+            (
+                UnverifiedKeyChangeReason::InvalidSignature,
+                "InvalidSignature",
+            ),
+            (UnverifiedKeyChangeReason::Unverifiable, "Unverifiable"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), name);
+        }
+    }
+
+    #[test]
+    fn test_undecryptable_key_change_and_rejected_signing_key_serde() {
+        let json = serde_json::to_value(undecryptable_key_change()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "reason": "NotARecipient",
+                "conversation_id": "g1",
+                "conversation_key_version": "5",
+                "sender_id": null,
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<UndecryptableKeyChange>(json).unwrap(),
+            undecryptable_key_change()
+        );
+        for (reason, name) in [
+            (UndecryptableKeyChangeReason::Locked, "Locked"),
+            (
+                UndecryptableKeyChangeReason::OtherKeyVersion,
+                "OtherKeyVersion",
+            ),
+            (
+                UndecryptableKeyChangeReason::DecryptionFailed,
+                "DecryptionFailed",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), name);
+        }
+
+        let json = serde_json::to_value(rejected_signing_key()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "user_id": "2", "public_key_version": "7" })
+        );
+        assert_eq!(
+            serde_json::from_value::<RejectedSigningKey>(json).unwrap(),
+            rejected_signing_key()
+        );
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_unverified_key_change_is_camel_case() {
+        let json =
+            serde_json::to_value(JsUnverifiedKeyChange::from(unverified_key_change())).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "reason": "missingSigningKey",
+                "keyDropped": true,
+                "conversationId": "g1",
+                "conversationKeyVersion": "5",
+                "senderId": "2",
+                "publicKeyVersion": null,
+            })
+        );
+        for (reason, name) in [
+            (
+                UnverifiedKeyChangeReason::RejectedSigningKey,
+                "rejectedSigningKey",
+            ),
+            (
+                UnverifiedKeyChangeReason::InvalidSignature,
+                "invalidSignature",
+            ),
+            (UnverifiedKeyChangeReason::Unverifiable, "unverifiable"),
+        ] {
+            let json = serde_json::to_value(JsUnverifiedKeyChangeReason::from(reason)).unwrap();
+            assert_eq!(json, name);
+        }
+    }
+
+    #[test]
+    fn test_public_key_record_reads_the_api_record_under_either_casing() {
+        let expected = PublicKeyRecord::new("7", "identity", "signing", "binding");
+
+        // The API's own record, with its other fields.
+        let snake: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "public_key_version": "7",
+            "public_key": "identity",
+            "signing_public_key": "signing",
+            "identity_public_key_signature": "binding",
+            "juicebox_config": { "max_guess_count": 20, "token_map": [] },
+            "public_key_fingerprint": null,
+        }))
+        .unwrap();
+        assert_eq!(snake, expected);
+
+        // A client library's camelCase record, with the version as a number.
+        let camel: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "publicKeyVersion": 7,
+            "publicKey": "identity",
+            "signingPublicKey": "signing",
+            "identityPublicKeySignature": "binding",
+        }))
+        .unwrap();
+        assert_eq!(camel, expected);
+
+        // A record with both names of a field keeps the value that is set.
+        let both: PublicKeyRecord = serde_json::from_value(serde_json::json!({
+            "publicKeyVersion": null,
+            "public_key_version": "7",
+            "public_key": "identity",
+            "publicKey": "",
+            "signing_public_key": "signing",
+            "identity_public_key_signature": "binding",
+        }))
+        .unwrap();
+        assert_eq!(both, expected);
+
+        // What a record lacks is empty.
+        let partial: PublicKeyRecord =
+            serde_json::from_value(serde_json::json!({ "public_key_version": 1.5 })).unwrap();
+        assert_eq!(partial, PublicKeyRecord::default());
+    }
+
+    #[cfg(feature = "js")]
+    #[test]
+    fn test_js_decrypt_events_result_keys_its_diagnostics_by_index() {
+        let result = DecryptEventsResult {
+            events: Vec::new(),
+            conversation_keys: ConversationKeyResult {
+                keys: std::collections::HashMap::new(),
+                keys_by_conversation: std::collections::HashMap::new(),
+                latest_version: None,
+                latest_versions: [("g1".to_string(), "5".to_string())].into(),
+            },
+            errors: [(3, "no key".to_string())].into(),
+            unverified_key_changes: [(3, unverified_key_change())].into(),
+            undecryptable_key_changes: [(4, undecryptable_key_change())].into(),
+            rejected_signing_keys: [(0, rejected_signing_key())].into(),
+            missing_signing_keys: [(5, MissingSigningKey::new("9", "3"))].into(),
+        };
+        let json = serde_json::to_value(JsDecryptEventsResult::from(result)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "events": [],
+                "conversationKeys": {
+                    "latestVersion": null,
+                    "latestVersions": { "g1": "5" },
+                },
+                "errors": { "3": "no key" },
+                "unverifiedKeyChanges": {
+                    "3": {
+                        "reason": "missingSigningKey",
+                        "keyDropped": true,
+                        "conversationId": "g1",
+                        "conversationKeyVersion": "5",
+                        "senderId": "2",
+                        "publicKeyVersion": null,
+                    },
+                },
+                "undecryptableKeyChanges": {
+                    "4": {
+                        "reason": "notARecipient",
+                        "conversationId": "g1",
+                        "conversationKeyVersion": "5",
+                        "senderId": null,
+                    },
+                },
+                "rejectedSigningKeys": {
+                    "0": { "userId": "2", "publicKeyVersion": "7" },
+                },
+                "missingSigningKeys": {
+                    "5": { "userId": "9", "publicKeyVersion": "3" },
+                },
+            })
+        );
+        for (reason, name) in [
+            (UndecryptableKeyChangeReason::Locked, "locked"),
+            (
+                UndecryptableKeyChangeReason::OtherKeyVersion,
+                "otherKeyVersion",
+            ),
+            (
+                UndecryptableKeyChangeReason::DecryptionFailed,
+                "decryptionFailed",
+            ),
+        ] {
+            let json = serde_json::to_value(JsUndecryptableKeyChangeReason::from(reason)).unwrap();
+            assert_eq!(json, name);
+        }
     }
 }

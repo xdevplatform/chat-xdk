@@ -50,6 +50,7 @@ a 0.7.x call to adopt.
 - [ ] `[runtime]` [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
 - [ ] `[runtime]` [Pass entities, files, URL cards and posts the SDK accepts](#entities-files-url-cards-and-posts-are-checked)
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a `latest_version` of `None`](#latest_version-comes-from-a-verified-key-change)
+- [ ] `[new]` [Let the chat fetch public keys through a hook, and read keys from its cache](#the-chat-can-fetch-public-keys-and-keep-keys)
 - [ ] `[runtime]` [Rename every read of `target_message_id` to `target_message_sequence_id`](#target_message_id-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `reply_to_event`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
 - [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
@@ -81,10 +82,11 @@ for the conversation key map `decrypt_events` returns, `payload` for a
 `key_change`, `message`, `deleted`, `receipt` and `group_change` for a
 decrypted key change, message, deletion, read receipt and group change.
 `page` is a page of `GET /2/chat/conversations/{id}/events`.
-`api.post(path, body)`, `api.put(path, body)` and `api.delete(path, body)`
-stand for your HTTP client: each sends `body` as JSON to
-`https://api.x.com` + `path` with your user access token and returns the
-parsed JSON response. `path_id` is the conversation id as a request path
+`api.post(path, body)`, `api.put(path, body)`, `api.delete(path, body)` and
+`api.get(path)` stand for your HTTP client: each sends a request to
+`https://api.x.com` + `path` with your user access token, the first three
+with `body` as JSON, and returns the parsed JSON response. `path_id` is the
+conversation id as a request path
 takes it: a group's `g…` id as is, and a one-to-one's in its hyphen form,
 `conversation_id.replace(":", "-")`. `photo_attachment(media_hash_key)`
 stands for your code that builds a photo's attachment descriptor;
@@ -333,8 +335,11 @@ chat.import_keys(ImportKeysParams(private_keys, signing_key_version=signing_key_
 ### `decrypt_events` takes `DecryptEventsParams`
 
 Pass the events in a `DecryptEventsParams`. `signing_keys` is optional and
-keyword-only; without it, the keys `set_signing_keys` stored verify the
-events. An event that fails, or one decrypt drops, is collected in the
+keyword-only; without it, the stored signing keys verify the events: the
+ones `set_signing_keys`, `add_signing_keys` and `add_public_keys` stored,
+and the ones a hook fetched (see [The chat can fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)). An event that fails,
+or one decrypt drops, is collected in the
 result's `errors` rather than raised; the call raises only for invalid
 params, such as a signing key entry without `public_key_version`
 (`InvalidInputError`) or `events` that is not a list (`TypeError`). The
@@ -891,13 +896,22 @@ payload = chat.encrypt_message(
 with, is the newest version whose key change verified, and it never moves
 back for the chat's lifetime. A key change verifies only against its
 sender's signing key, so give the chat every participant's signing keys,
-your own included, before you decrypt. It's `None` until a key change
-verifies: a key change the SDK can't verify still adds its key to
-`result["conversation_keys"]["keys"]`, for decrypting, but never becomes the
-version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.x can return `None`: fetch the missing signing keys or the
-conversation's key-change events and decrypt again, rather than encrypting
-under the highest key in `keys`:
+your own included, before you decrypt, or a hook that fetches them (see
+[The chat can fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)). It's `None` until a
+key change
+verifies: a key change the SDK can't verify never becomes the version you
+encrypt with, and one sequenced since late June 2026 also has its key left
+out of `result["conversation_keys"]["keys"]`, so the messages under it don't
+decrypt; `result["unverified_key_changes"]` holds each such key change, by
+its index in the batch, with the signing key it needs. A batch whose events
+belong to more than one conversation reports each one's version in
+`result["conversation_keys"]["latest_versions"]` and each one's keys in
+`result["conversation_keys"]["keys_by_conversation"]`, and its
+`latest_version` is `None`. Where
+0.5.x returned the batch's highest version, 0.7.x can return `None`: fetch
+the missing signing keys or the conversation's key-change events and decrypt
+again, rather than encrypting under the highest key in `keys`:
 
 ```python
 # 0.5.x
@@ -915,6 +929,58 @@ if version is None:
     # then decrypt again.
     pass
 ```
+
+### The chat can fetch public keys and keep keys
+
+From 0.7.6 a chat does more of the key handling above itself. Nothing here
+changes a call that passes its keys: each item is an argument you no longer
+have to supply.
+
+- **A hook fetches public keys.** Give the chat a hook with
+  `set_resolve_public_keys`. It takes a list of user ids and returns each
+  user's records from `GET /2/users/{id}/public_keys`, by user id.
+  `decrypt_events` then fetches the signing keys of the senders a batch
+  needs and the chat has none for, and decrypts the batch again.
+  `prepare_conversation_key_change`, `prepare_group_create`,
+  `prepare_group_members_change` and `prepare_group_members_remove` need no
+  `public_keys`: each encrypts the new key to the stored keys of the members
+  its params name (`remaining_member_ids` for a removal, and `member_ids` or
+  a one-to-one's id for a key change), and fetches the ones the chat has
+  none for. The hook is a plain function that blocks. These five methods
+  call it on the calling thread: there are no `_async` methods for it.
+  Setting it turns the key cache on.
+- **Or fetch them yourself.** `decrypt_events` lists each event whose
+  sender's signing key it did not have in `missing_signing_keys`.
+  `missing_public_keys(result)` names those users, and
+  `add_public_keys(records)` stores their records as the X API returned
+  them.
+- **`add_signing_keys` adds to the stored signing keys**, where
+  `set_signing_keys` replaces them all. With a hook set, add: replacing also
+  drops the keys the hook fetched.
+- **The key cache serves more calls.** With `set_cache_keys(True)`,
+  `decrypt_event` caches the key of a key change that verifies, as
+  `decrypt_events` does, the four prepare calls above cache the key they
+  make, and the cache keeps every key version of a conversation.
+  `decrypt_file` and `file_decryptor` then need no `conversation_keys`, and
+  `prepare_group_avatar_change` no `conversation_key_version`.
+
+```python
+# 0.7.x
+def resolve_public_keys(user_ids):
+    return {user_id: api.get(f"/2/users/{user_id}/public_keys")["data"] for user_id in user_ids}
+
+chat.set_resolve_public_keys(resolve_public_keys)
+result = chat.decrypt_events(DecryptEventsParams(events))
+for decrypted in result["events"]:
+    handle(decrypted["event"])
+created = chat.prepare_group_create(
+    GroupCreateParams(conversation_id=conversation_id, member_ids=member_ids, admin_ids=admin_ids, title=title)
+)
+```
+
+A server with many signed-in users keeps one chat per user and gives every
+chat the same hook function: see [Many users, many
+conversations](../API.md#many-users-many-conversations).
 
 ### `target_message_id` holds a different value
 
@@ -1357,12 +1423,12 @@ api.post(f"/2/chat/conversations/{path_id}/members/remove", {
 
 **Encrypt under the new key as soon as the request succeeds.** The removed
 members hold the old key, so a message encrypted under it is one they can
-read. The key cache (`set_cache_keys(True)`) adopts the new key only once
-`decrypt_events` decrypts the removal's key change from the conversation's
-events, and only if that key change verifies against your own signing key;
-until then an encrypt call that omits the key resolves the old one. Store
-the new key and version, and pass them to every encrypt and prepare call
-until the cache holds them:
+read. From 0.7.6, a chat whose key cache is on (`set_cache_keys(True)`)
+caches the new key when the prepare call returns, so an encrypt call that
+omits the key resolves the new one from then on. If the request fails,
+prepare the removal again: no other member holds the key of a request that
+failed. Without the cache, store the new key and version, and pass them to
+every encrypt and prepare call:
 
 ```python
 # 0.7.x

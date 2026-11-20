@@ -11,7 +11,11 @@ import init, {
   detectImageDimensions,
   encryptedFileSize,
 } from "../pkg/chat_xdk_wasm.js";
+import { createChat } from "../index.js";
 import { featureServer, keepOffline, reading, v1Chat, waitForV1 } from "./feature_server.mjs";
+import { keyCacheTests } from "./key_cache.mjs";
+import { keyChangeSignerTests } from "./key_change_signers.mjs";
+import { publicKeyTests } from "./public_keys.mjs";
 
 /** File encrypt params from params that carry a one-key `conversationKeys` map. */
 const withKey = ({ conversationKeys, ...rest }) => {
@@ -1455,6 +1459,22 @@ async function main() {
   assert.equal(thrown(() => locked.exportKeys()).kind, "invalidState");
   assert.equal(thrown(() => locked.importKeys({ keys: new Uint8Array(5) })).kind, "invalidInput");
   locked.free();
+
+  // 7. decryptEvents names the key changes whose signature did not verify,
+  // and reports the version to encrypt with per conversation.
+  await keyChangeSignerTests(() => new Chat());
+
+  // 8. The key cache is filled by every call that verifies or makes a key
+  // and read by every call that takes one, and addSigningKeys merges into
+  // the stored signing keys.
+  await keyCacheTests(() => new Chat());
+
+  // 9. Other users' public keys: a batch names the signing keys it lacked,
+  // addPublicKeys stores the records the X API returns, the prepare calls
+  // read their members' keys from the store, and the Async methods fetch
+  // what is missing through the hook. The hook belongs to the chat
+  // createChat makes, so these run on that chat.
+  await publicKeyTests((options) => createChat(options));
 
   console.log("api.test.mjs: all assertions passed");
 }

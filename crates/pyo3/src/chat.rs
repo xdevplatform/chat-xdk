@@ -143,10 +143,19 @@ impl Chat {
 
     /// Enable or disable the conversation-key cache (off by default).
     ///
-    /// While enabled, ``decrypt_events`` caches each conversation's latest
-    /// signature-verified key, and the encrypt methods resolve a
-    /// ``conversation_key``/``conversation_key_version`` pair left ``None``
-    /// from it. Disabling clears the cache.
+    /// While enabled, the cache keeps, per conversation, the key of every
+    /// key change whose signature verified in ``decrypt_events`` or
+    /// ``decrypt_event``, and the key of every key change this chat prepared
+    /// (a conversation-key change, a group create, a member add or a member
+    /// removal). A call that leaves its conversation key ``None`` reads it
+    /// from there: the encrypt methods and the title, description and avatar
+    /// changes use the conversation's newest key, and the decrypt methods
+    /// the key at the version the event names. Disabling clears the cache.
+    ///
+    /// A prepared key is cached when the prepare call returns, before its
+    /// request is sent. If the X API rejects the request, no one else holds
+    /// that key: prepare the change again, or pass the key to encrypt with
+    /// explicitly, until a newer key change verifies.
     pub(crate) fn set_cache_keys(&self, enabled: bool) {
         self.inner.set_cache_keys(enabled);
     }
@@ -156,12 +165,138 @@ impl Chat {
     ///
     /// Args:
     ///     signing_keys: Same list of dicts ``DecryptEventsParams`` takes.
-    ///         Each call replaces the previous set; only this call populates
-    ///         the store — keys carried inside events are never trusted.
+    ///         Each call replaces the previous set; ``add_signing_keys``
+    ///         and ``add_public_keys`` keep it. Only these three calls
+    ///         populate the store — keys carried inside events are never
+    ///         trusted.
     pub(crate) fn set_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
         let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
         self.inner.set_signing_keys(&entries);
         Ok(())
+    }
+
+    /// Add signing keys to the set ``set_signing_keys`` stores, keeping the
+    /// keys it holds.
+    ///
+    /// Args:
+    ///     signing_keys: Same list of dicts ``set_signing_keys`` takes. An
+    ///         entry replaces the stored entry of the same ``user_id`` and
+    ///         ``public_key_version``, and any other is added.
+    pub(crate) fn add_signing_keys(&self, py: Python<'_>, signing_keys: Py<PyAny>) -> PyResult<()> {
+        let entries: Vec<SigningKeyEntry> = json_field(py, &signing_keys, "signing_keys")?;
+        self.inner.add_signing_keys(&entries);
+        Ok(())
+    }
+
+    /// Add users' public keys to the stored signing keys, as
+    /// ``add_signing_keys`` adds entries.
+    ///
+    /// The decrypt calls verify with the stored keys when their
+    /// ``signing_keys`` is ``None`` or empty, and the four prepare calls
+    /// that encrypt a new conversation key (a conversation-key change, a
+    /// group create, a member add and a member removal) read their members'
+    /// identity keys from them when their ``public_keys`` is ``None`` or
+    /// empty.
+    ///
+    /// Args:
+    ///     records: Dict from user id to the list of records
+    ///         ``GET /2/users/{id}/public_keys`` returns in ``data`` for
+    ///         that user, each a dict with ``public_key_version``,
+    ///         ``public_key``, ``signing_public_key`` and
+    ///         ``identity_public_key_signature``. A record is read as the X
+    ///         API sends it: ``public_key_version`` may be a ``str`` or an
+    ///         ``int``, and any other key, such as ``juicebox_config``, is
+    ///         ignored. A record without a key version, an identity key or
+    ///         a signing key is left out. ``None`` adds nothing.
+    pub(crate) fn add_public_keys(&self, py: Python<'_>, records: Py<PyAny>) -> PyResult<()> {
+        let records: Option<HashMap<String, Vec<chat_xdk_core::PublicKeyRecord>>> =
+            json_field(py, &records, "records")?;
+        if let Some(records) = records {
+            self.inner.add_public_keys(&records);
+        }
+        Ok(())
+    }
+
+    /// The users whose public keys a ``decrypt_events`` result was missing.
+    ///
+    /// Fetch their keys (``GET /2/users/{id}/public_keys``), add them with
+    /// ``add_public_keys``, and decrypt the batch again.
+    ///
+    /// A key this call returned a user for is not asked for again for a
+    /// minute, so a lookup that brought no key is not repeated with every
+    /// batch. A key that arrives is no longer missing, and a key version
+    /// not asked for before is asked for at once.
+    ///
+    /// Args:
+    ///     result: The dict ``decrypt_events`` returned, or its
+    ///         ``missing_signing_keys`` dict.
+    ///
+    /// Returns:
+    ///     list[str]: The user ids, each once, in batch order.
+    pub(crate) fn missing_public_keys(
+        &self,
+        py: Python<'_>,
+        result: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<String>> {
+        // Only the result's missing keys cross into the core: a result also
+        // holds conversation keys as bytes, which JSON cannot carry.
+        let from_result = match result.cast::<pyo3::types::PyDict>() {
+            Ok(result) => result.get_item("missing_signing_keys")?,
+            Err(_) => None,
+        };
+        let missing = from_result.unwrap_or_else(|| result.clone()).unbind();
+        let missing: Option<HashMap<String, chat_xdk_core::MissingSigningKey>> =
+            json_field(py, &missing, "missing_signing_keys")?;
+        let missing = bindings::missing_signing_keys_in_order(missing.unwrap_or_default());
+        Ok(self.inner.missing_public_keys_among(&missing))
+    }
+
+    /// The users whose public keys the prepare call ``call`` would be
+    /// missing with ``params``: the members it encrypts its key to who have
+    /// no stored public key. Empty when ``params`` passes ``public_keys``.
+    ///
+    /// The prepare methods of ``chat_xdk.Chat`` call this before they run
+    /// the hook ``set_resolve_public_keys`` set. ``call`` is the prepare
+    /// method's name without ``prepare_``.
+    #[pyo3(name = "_missing_public_keys_for")]
+    pub(crate) fn missing_public_keys_for(
+        &self,
+        py: Python<'_>,
+        call: &str,
+        params: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<String>> {
+        Ok(match call {
+            "conversation_key_change" => {
+                let params: PyRef<'_, ConversationKeyChangeParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::ConversationKeyChange(&params))
+            }
+            "group_create" => {
+                let params: PyRef<'_, GroupCreateParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupCreate(&params))
+            }
+            "group_members_change" => {
+                let params: PyRef<'_, GroupMembersChangeParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersChange(&params))
+            }
+            "group_members_remove" => {
+                let params: PyRef<'_, GroupMembersRemoveParams> = params.extract()?;
+                let params = params.to_core(py)?;
+                self.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersRemove(&params))
+            }
+            other => {
+                return Err(invalid_input(format!(
+                    "Unknown prepare call {other:?}: expected conversation_key_change, \
+                     group_create, group_members_change or group_members_remove"
+                )))
+            }
+        })
     }
 
     /// Lock the SDK, clearing keys from memory.
@@ -282,30 +417,20 @@ impl Chat {
     ///
     /// Returns:
     ///     A dict with:
-    ///     - ``keys``: Dict mapping key version string to raw 32-byte conversation key (``bytes``)
-    ///     - ``latest_version``: The highest key version; signatures are not checked
+    ///     - ``keys``: Dict mapping key version string to raw 32-byte
+    ///       conversation key (``bytes``); a version that key changes of more
+    ///       than one conversation carry is left out
+    ///     - ``keys_by_conversation``: Dict mapping each conversation id to
+    ///       that conversation's ``keys``
+    ///     - ``latest_version``: The highest key version when every event
+    ///       belongs to one conversation, ``None`` when they belong to more
+    ///       than one; signatures are not checked
+    ///     - ``latest_versions``: Dict mapping each conversation id to its
+    ///       highest key version; signatures are not checked
     pub(crate) fn extract_conversation_keys(&self, events: Vec<String>) -> PyResult<Py<PyAny>> {
         let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
         let result = self.inner.extract_conversation_keys(&refs);
-
-        Python::attach(|py| {
-            let outer = pyo3::types::PyDict::new(py);
-
-            // Build keys dict
-            let keys_dict = pyo3::types::PyDict::new(py);
-            for (version, key) in result.keys {
-                keys_dict.set_item(version, key.encoded().to_vec().into_pyobject(py)?)?;
-            }
-            outer.set_item("keys", keys_dict)?;
-
-            // Set latest_version
-            match result.latest_version {
-                Some(v) => outer.set_item("latest_version", v)?,
-                None => outer.set_item("latest_version", py.None())?,
-            }
-
-            Ok(outer.into())
-        })
+        Python::attach(|py| Ok(conversation_keys_dict(py, result)?.into()))
     }
 
     /// Decrypt multiple events in batch.
@@ -317,20 +442,60 @@ impl Chat {
     ///
     /// Args:
     ///     params: A ``DecryptEventsParams``: the events, and the signing keys of
-    ///         all participants. The SDK matches keys by user_id and version
-    ///         and verifies each key's identity binding.
+    ///         all participants, the members who signed the batch's key
+    ///         changes included. The SDK matches keys by user_id and version
+    ///         and verifies each key's identity binding. With
+    ///         ``signing_keys`` ``None`` or empty, the stored keys
+    ///         (``set_signing_keys``, ``add_signing_keys``,
+    ///         ``add_public_keys``) are used.
+    ///
+    /// With a hook set (``set_resolve_public_keys``) and no signing keys
+    /// passed, ``chat_xdk.Chat.decrypt_events`` calls the hook for
+    /// ``missing_public_keys`` of the result, adds the records it returns
+    /// with ``add_public_keys``, and returns the result of decrypting the
+    /// batch once more. An exception the hook raises reaches the caller.
     ///
     /// Returns:
     ///     A dict with:
     ///     - ``events``: List of ``{"event": dict, "original_b64": str}``, one
     ///       per event that decrypted, of every event type
-    ///     - ``conversation_keys``: ``{"keys": dict, "latest_version": str}``;
-    ///       ``latest_version`` is the newest version whose key change
-    ///       verified, ``None`` until one verifies
+    ///     - ``conversation_keys``: ``{"keys": dict, "keys_by_conversation":
+    ///       dict, "latest_version": str, "latest_versions": dict}``;
+    ///       ``keys_by_conversation`` maps each conversation id to that
+    ///       conversation's ``keys``, ``latest_versions`` maps each of the
+    ///       batch's conversations to the newest version whose key change
+    ///       verified, and ``latest_version`` is that version when every
+    ///       event of the batch belongs to one conversation: ``None`` until
+    ///       one verifies, and ``None`` for a batch of more than one
+    ///       conversation
     ///     - ``errors``: Dict mapping event index (string, e.g. ``"0"``) to error
     ///       message, for each event left out of ``events``: one that failed,
     ///       or one decrypt drops, such as a member removal's title or
     ///       description re-encrypted under the new key
+    ///     - ``unverified_key_changes``: Dict mapping event index (string) to
+    ///       the key change there, for each key change whose signature did
+    ///       not verify: a dict with ``reason`` (``"MissingSigningKey"``,
+    ///       ``"RejectedSigningKey"``, ``"InvalidSignature"`` or
+    ///       ``"Unverifiable"``), ``key_dropped``, ``conversation_id``,
+    ///       ``conversation_key_version``, ``sender_id`` and
+    ///       ``public_key_version``
+    ///     - ``undecryptable_key_changes``: Dict mapping event index (string)
+    ///       to the key change there, for each key change whose conversation
+    ///       key this identity could not decrypt: a dict with ``reason``
+    ///       (``"Locked"``, ``"NotARecipient"``, ``"OtherKeyVersion"`` or
+    ///       ``"DecryptionFailed"``), ``conversation_id``,
+    ///       ``conversation_key_version`` and ``sender_id``
+    ///     - ``rejected_signing_keys``: Dict mapping signing key index
+    ///       (string) to the signing key there, for each one left out
+    ///       because its identity binding does not verify: a dict with
+    ///       ``user_id`` and ``public_key_version``
+    ///     - ``missing_signing_keys``: Dict mapping event index (string) to
+    ///       the signing key the event there names, for each signed event
+    ///       whose sender's signing key was not among the keys the call
+    ///       verified with: a dict with ``user_id``, the sender, and
+    ///       ``public_key_version``, the key version the event's signature
+    ///       names. ``missing_public_keys`` reads the users to fetch keys
+    ///       for from it
     pub(crate) fn decrypt_events(
         &self,
         py: Python<'_>,
@@ -357,18 +522,10 @@ impl Chat {
         }
         outer.set_item("events", events)?;
 
-        // Convert conversation keys
-        let conv_keys_dict = pyo3::types::PyDict::new(py);
-        let keys_dict = pyo3::types::PyDict::new(py);
-        for (version, key) in result.conversation_keys.keys {
-            keys_dict.set_item(version, key.encoded().to_vec().into_pyobject(py)?)?;
-        }
-        conv_keys_dict.set_item("keys", keys_dict)?;
-        match result.conversation_keys.latest_version {
-            Some(v) => conv_keys_dict.set_item("latest_version", v)?,
-            None => conv_keys_dict.set_item("latest_version", py.None())?,
-        }
-        outer.set_item("conversation_keys", conv_keys_dict)?;
+        outer.set_item(
+            "conversation_keys",
+            conversation_keys_dict(py, result.conversation_keys)?,
+        )?;
 
         // Convert errors; keys are the stringified event indices.
         let errors_dict = pyo3::types::PyDict::new(py);
@@ -377,10 +534,38 @@ impl Chat {
         }
         outer.set_item("errors", errors_dict)?;
 
+        // Each is a dict keyed by the stringified index, as `errors` is.
+        for (name, json) in [
+            (
+                "unverified_key_changes",
+                serde_json::to_string(&result.unverified_key_changes),
+            ),
+            (
+                "undecryptable_key_changes",
+                serde_json::to_string(&result.undecryptable_key_changes),
+            ),
+            (
+                "rejected_signing_keys",
+                serde_json::to_string(&result.rejected_signing_keys),
+            ),
+            (
+                "missing_signing_keys",
+                serde_json::to_string(&result.missing_signing_keys),
+            ),
+        ] {
+            let json = json.map_err(internal_err)?;
+            outer.set_item(name, json_module.call_method1("loads", (json,))?)?;
+        }
+
         Ok(outer.into())
     }
 
     /// Decrypt a raw webhook event payload.
+    ///
+    /// A key change that verifies is recorded as ``decrypt_events`` records
+    /// it: its version is the conversation's newest verified one unless a
+    /// newer is known, and while the key cache is on (``set_cache_keys``)
+    /// its key is cached.
     ///
     /// Args:
     ///     params: A ``DecryptEventParams``: the event, the conversation's key
@@ -592,7 +777,9 @@ impl Chat {
     /// Decrypt an encrypted file, as downloaded.
     ///
     /// Args:
-    ///     params: A ``DecryptFileParams``.
+    ///     params: A ``DecryptFileParams``. With its ``conversation_keys``
+    ///         left ``None`` or empty, the keys of the message's
+    ///         conversation come from the key cache (``set_cache_keys``).
     ///
     /// Returns:
     ///     Decrypted bytes.
@@ -617,7 +804,8 @@ impl Chat {
 
     /// Create an incremental decryptor for an encrypted file too large to
     /// hold in memory. Takes the params of ``decrypt_file`` apart from the
-    /// encrypted bytes, which are fed to the decryptor.
+    /// encrypted bytes, which are fed to the decryptor; a key map left
+    /// ``None`` or empty reads the key cache as it does there.
     pub(crate) fn file_decryptor(
         &self,
         py: Python<'_>,
@@ -717,6 +905,18 @@ impl Chat {
     /// one-to-one (it is derived from the two participants); pass the
     /// existing id for a group key rotation.
     ///
+    /// While the key cache is on (``set_cache_keys``) the call caches the
+    /// new key as the conversation's newest key, as every prepare call that
+    /// makes a conversation key does.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``member_ids``, or, without ``member_ids``, of the two users of the
+    /// one-to-one conversation ``conversation_id`` names. A user with no
+    /// stored key raises ``InvalidInputError`` naming the user. With a hook
+    /// set (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches
+    /// the keys of the users who have none through it.
+    ///
     /// Args:
     ///     params: A ``ConversationKeyChangeParams``.
     ///
@@ -739,7 +939,16 @@ impl Chat {
     ///
     /// Use this when adding members to an existing group. Creating the group
     /// is ``prepare_group_create``; a key rotation without a roster change is
-    /// ``prepare_conversation_key_change``.
+    /// ``prepare_conversation_key_change``. While the key cache is on
+    /// (``set_cache_keys``) the call caches the new key as the conversation's
+    /// newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``current_member_ids`` and ``new_member_ids``. A user with no stored
+    /// key raises ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     ///
     /// Args:
     ///     params: A ``GroupMembersChangeParams``.
@@ -770,7 +979,16 @@ impl Chat {
     /// Use this once, when creating a group (``conversation_id`` is the
     /// g-prefixed id minted by the initialize endpoint). Later key rotations
     /// use ``prepare_conversation_key_change``; roster additions use
-    /// ``prepare_group_members_change``.
+    /// ``prepare_group_members_change``. While the key cache is on
+    /// (``set_cache_keys``) the call caches the new key as the conversation's
+    /// newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``member_ids`` and ``admin_ids``. A user with no stored key raises
+    /// ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     ///
     /// Args:
     ///     params: A ``GroupCreateParams``.
@@ -856,7 +1074,16 @@ impl Chat {
     /// The result carries the new key, the remaining members' participant
     /// keys, and the action signatures: the removal (which names the new key
     /// version), a title and a description change for each one the params
-    /// set, re-encrypted under the new key, and the key change.
+    /// set, re-encrypted under the new key, and the key change. While the
+    /// key cache is on (``set_cache_keys``) the call caches the new key as
+    /// the conversation's newest key.
+    ///
+    /// With ``public_keys`` ``None`` or empty, the key is encrypted to the
+    /// stored public keys (``add_public_keys``) of the params'
+    /// ``remaining_member_ids``. A user with no stored key raises
+    /// ``InvalidInputError`` naming the user. With a hook set
+    /// (``set_resolve_public_keys``), ``chat_xdk.Chat`` first fetches the
+    /// keys of the users who have none through it.
     pub(crate) fn prepare_group_members_remove(
         &self,
         py: Python<'_>,
@@ -904,7 +1131,11 @@ impl Chat {
     }
 
     /// Sign a group avatar change: the avatar image's media URL, as is, and
-    /// the version of the key the image is encrypted under.
+    /// the version of the key the image is encrypted under. With
+    /// ``conversation_key_version`` left ``None`` or empty, that is the
+    /// version of the conversation's newest key in the key cache
+    /// (``set_cache_keys``), the key the encrypt methods resolve; with no
+    /// key cached the call raises ``InvalidStateError``.
     ///
     /// Returns a dict with ``action_signatures``, one entry.
     pub(crate) fn prepare_group_avatar_change(
@@ -1167,4 +1398,37 @@ impl Chat {
             .matches_registered_key(public_key_b64)
             .map_err(to_py_err)
     }
+}
+
+/// A `ConversationKeyResult` as the dict `extract_conversation_keys` returns
+/// and `decrypt_events` returns as `conversation_keys`.
+fn conversation_keys_dict(
+    py: Python<'_>,
+    result: chat_xdk_core::ConversationKeyResult,
+) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("keys", key_map_dict(py, &result.keys)?)?;
+    let keys_by_conversation = pyo3::types::PyDict::new(py);
+    for (conversation_id, keys) in &result.keys_by_conversation {
+        keys_by_conversation.set_item(conversation_id.as_str(), key_map_dict(py, keys)?)?;
+    }
+    dict.set_item("keys_by_conversation", keys_by_conversation)?;
+    match result.latest_version {
+        Some(version) => dict.set_item("latest_version", version)?,
+        None => dict.set_item("latest_version", py.None())?,
+    }
+    dict.set_item("latest_versions", result.latest_versions)?;
+    Ok(dict)
+}
+
+/// A key map as a dict mapping each key version to the raw key (`bytes`).
+fn key_map_dict<'py>(
+    py: Python<'py>,
+    keys: &HashMap<String, XChatConversationKey>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    for (version, key) in keys {
+        dict.set_item(version.as_str(), key.encoded().to_vec().into_pyobject(py)?)?;
+    }
+    Ok(dict)
 }

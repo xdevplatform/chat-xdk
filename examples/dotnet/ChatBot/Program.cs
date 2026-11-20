@@ -4,7 +4,7 @@ using ChatBot;
 // Open-source, standalone chat-xdk example bot in .NET.
 //
 // Flow (encrypt on send, decrypt on receive): load keys -> batch-decrypt the backlog ->
-// poll for new events -> decrypt each -> reply -> encrypt + sign -> send.
+// poll for new events -> batch-decrypt each page -> reply -> encrypt + sign -> send.
 //
 //   dotnet run
 

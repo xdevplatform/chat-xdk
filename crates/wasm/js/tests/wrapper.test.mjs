@@ -259,6 +259,56 @@ async function delegationTests() {
   assert.equal(viaStore.verified, true);
   chat.setSigningKeys([]);
 
+  // addSigningKeys delegation: keys added to the emptied store verify the
+  // same decrypt.
+  assert.throws(
+    () => chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys }),
+    chatXdkError("verification", /./),
+  );
+  chat.addSigningKeys(signingKeys);
+  const viaAddedKeys = chat.decryptEvent({ eventB64: v.event_message_b64, conversationKeys });
+  assert.equal(viaAddedKeys.verified, true);
+  chat.setSigningKeys([]);
+
+  // missingPublicKeys and addPublicKeys delegations: missingPublicKeys reads
+  // the sender to fetch keys for from the result it is handed, and that
+  // sender's record, as the X API returns it, then verifies the same batch.
+  const signedEvents = [v.event_key_change_b64, v.event_message_b64];
+  const lacking = chat.decryptEvents({ events: signedEvents });
+  assert.deepEqual(lacking.missingSigningKeys["1"], {
+    userId: v.event_sender_id,
+    publicKeyVersion: v.event_signing_key_version,
+  });
+  assert.deepEqual(chat.missingPublicKeys(lacking), [v.event_sender_id]);
+  chat.addPublicKeys({
+    [v.event_sender_id]: [
+      {
+        public_key_version: v.event_signing_key_version,
+        public_key: v.identity_public_b64,
+        signing_public_key: v.signing_public_b64,
+        identity_public_key_signature: v.identity_public_key_signature_b64,
+      },
+    ],
+  });
+  const viaPublicKeys = chat.decryptEvents({ events: signedEvents });
+  assert.deepEqual(viaPublicKeys.missingSigningKeys, {});
+  assert.deepEqual(viaPublicKeys.errors, {});
+  chat.setSigningKeys([]);
+
+  // The public-key hook is a function or null, and each Async method
+  // resolves to what the method it is named after returns.
+  assert.throws(
+    () => chat.setResolvePublicKeys("hook"),
+    chatXdkError("invalidInput", /resolvePublicKeys must be a function, or null to remove it/),
+  );
+  chat.setResolvePublicKeys(null);
+  const viaAsync = chat.decryptEventsAsync({ events: signedEvents, signingKeys });
+  assert.ok(viaAsync instanceof Promise);
+  assert.deepEqual(
+    (await viaAsync).events.map(({ event }) => event.type),
+    ["keyChange", "message"],
+  );
+
   // setIdentity + setCacheKeys delegations: the session identity and the
   // cached key (populated by the decryptEvents call above re-run with the
   // cache enabled) back an encryptMessage with no explicit identity or key.
@@ -832,6 +882,10 @@ async function firstBootTests() {
   await assert.rejects(
     () => createChat({ getAuthToken: "token" }),
     chatXdkError("invalidInput", /getAuthToken must be an async function/),
+  );
+  await assert.rejects(
+    () => createChat({ resolvePublicKeys: "hook" }),
+    chatXdkError("invalidInput", /resolvePublicKeys must be a function, or null to remove it/),
   );
   const keyless = await createChat();
   assertNoKeyExport(keyless);

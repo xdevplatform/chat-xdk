@@ -2,6 +2,75 @@
 
 use super::*;
 
+// The four calls that make a conversation key and encrypt it to their
+// members build their core params in the `*_params` functions below, which
+// `chat_xdk_missing_public_keys_for` builds its params with too: the prepare
+// call and the question of whose keys it would be missing read one params
+// document the same way.
+
+/// The core params of a `chat_xdk_prepare_conversation_key_change` document.
+fn conversation_key_change_params(
+    p: FfiConversationKeyChangeParams,
+) -> ConversationKeyChangeParams {
+    let mut params = ConversationKeyChangeParams::new(p.public_keys.unwrap_or_default());
+    params.member_ids = p.member_ids.unwrap_or_default();
+    params.sender_id = p.sender_id;
+    params.signing_key_version = p.signing_key_version;
+    // Core treats an absent or empty id as "derive the one-to-one id".
+    params.conversation_id = p.conversation_id;
+    params
+}
+
+/// The core params of a `chat_xdk_prepare_group_members_change` document.
+fn group_members_change_params(p: FfiGroupMembersChangeParams) -> GroupMembersChangeParams {
+    let mut params = GroupMembersChangeParams::new(
+        p.public_keys.unwrap_or_default(),
+        p.conversation_id,
+        p.new_member_ids,
+        p.current_member_ids,
+        p.current_admin_ids,
+        p.current_pending_member_ids,
+    );
+    params.sender_id = p.sender_id;
+    params.signing_key_version = p.signing_key_version;
+    params.current_title = p.current_title;
+    params.current_avatar_url = p.current_avatar_url;
+    params.current_description = p.current_description;
+    params.current_ttl_msec = p.current_ttl_msec;
+    params.current_screen_capture_blocking_enabled = p.current_screen_capture_blocking_enabled;
+    params
+}
+
+/// The core params of a `chat_xdk_prepare_group_create` document.
+fn group_create_params(p: FfiGroupCreateParams) -> GroupCreateParams {
+    let mut params = GroupCreateParams::new(
+        p.public_keys.unwrap_or_default(),
+        p.conversation_id,
+        p.member_ids,
+        p.admin_ids,
+    );
+    params.sender_id = p.sender_id;
+    params.signing_key_version = p.signing_key_version;
+    params.title = p.title;
+    params.ttl_msec = p.ttl_msec;
+    params
+}
+
+/// The core params of a `chat_xdk_prepare_group_members_remove` document.
+fn group_members_remove_params(p: FfiGroupMembersRemoveParams) -> GroupMembersRemoveParams {
+    let mut params = GroupMembersRemoveParams::new(
+        p.public_keys.unwrap_or_default(),
+        p.conversation_id,
+        p.user_ids,
+    );
+    params.remaining_member_ids = p.remaining_member_ids.unwrap_or_default();
+    params.title = p.title;
+    params.description = p.description;
+    params.sender_id = p.sender_id;
+    params.signing_key_version = p.signing_key_version;
+    params
+}
+
 /// Prepare a signed conversation-key change.
 ///
 /// `params_json` — single JSON document: `public_keys`
@@ -9,6 +78,14 @@ use super::*;
 /// `sender_id` / `signing_key_version` (unset resolves from the session
 /// identity) and `conversation_id` (absent or empty derives the one-to-one
 /// id).
+///
+/// `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+/// the stored public keys (`chat_xdk_add_public_keys`) of the users in the
+/// optional `member_ids` (every participant, the sender included), or,
+/// without `member_ids`, of the two users of the one-to-one conversation
+/// `conversation_id` names. A user with no stored key is an `invalid_input`
+/// error naming the user; `chat_xdk_missing_public_keys_for` lists those
+/// users before the call.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_conversation_key_change(
     handle: *const ChatHandle,
@@ -24,11 +101,7 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
             Err(e) => return e,
         };
 
-        let mut params = ConversationKeyChangeParams::new(p.public_keys);
-        params.sender_id = p.sender_id;
-        params.signing_key_version = p.signing_key_version;
-        // Core treats an absent or empty id as "derive the one-to-one id".
-        params.conversation_id = p.conversation_id;
+        let params = conversation_key_change_params(p);
 
         match h.inner.prepare_conversation_key_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
@@ -53,6 +126,12 @@ pub extern "C" fn chat_xdk_prepare_conversation_key_change(
 /// never false). Emits two action signatures; the result carries the
 /// encrypted title and description as `encrypted_title` and
 /// `encrypted_description`.
+///
+/// `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+/// the stored public keys (`chat_xdk_add_public_keys`) of the users in
+/// `current_member_ids` and `new_member_ids`. A user with no stored key is
+/// an `invalid_input` error naming the user;
+/// `chat_xdk_missing_public_keys_for` lists those users before the call.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_members_change(
     handle: *const ChatHandle,
@@ -68,21 +147,7 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
             Err(e) => return e,
         };
 
-        let mut params = GroupMembersChangeParams::new(
-            p.public_keys,
-            p.conversation_id,
-            p.new_member_ids,
-            p.current_member_ids,
-            p.current_admin_ids,
-            p.current_pending_member_ids,
-        );
-        params.sender_id = p.sender_id;
-        params.signing_key_version = p.signing_key_version;
-        params.current_title = p.current_title;
-        params.current_avatar_url = p.current_avatar_url;
-        params.current_description = p.current_description;
-        params.current_ttl_msec = p.current_ttl_msec;
-        params.current_screen_capture_blocking_enabled = p.current_screen_capture_blocking_enabled;
+        let params = group_members_change_params(p);
 
         match h.inner.prepare_group_members_change(&params) {
             Ok(res) => match json_prepared_change(&res) {
@@ -103,6 +168,12 @@ pub extern "C" fn chat_xdk_prepare_group_members_change(
 /// `ttl_msec`. Emits two action signatures; the result carries the
 /// encrypted title as `encrypted_title`. A create sets no avatar; set it
 /// afterwards with `chat_xdk_prepare_group_avatar_change`.
+///
+/// `public_keys` may be absent, `null` or `[]`. The key is then encrypted to
+/// the stored public keys (`chat_xdk_add_public_keys`) of the users in
+/// `member_ids` and `admin_ids`. A user with no stored key is an
+/// `invalid_input` error naming the user; `chat_xdk_missing_public_keys_for`
+/// lists those users before the call.
 #[no_mangle]
 pub extern "C" fn chat_xdk_prepare_group_create(
     handle: *const ChatHandle,
@@ -118,12 +189,7 @@ pub extern "C" fn chat_xdk_prepare_group_create(
             Err(e) => return e,
         };
 
-        let mut params =
-            GroupCreateParams::new(p.public_keys, p.conversation_id, p.member_ids, p.admin_ids);
-        params.sender_id = p.sender_id;
-        params.signing_key_version = p.signing_key_version;
-        params.title = p.title;
-        params.ttl_msec = p.ttl_msec;
+        let params = group_create_params(p);
 
         match h.inner.prepare_group_create(&params) {
             Ok(res) => match json_prepared_change(&res) {
@@ -221,6 +287,13 @@ pub(crate) fn ffi_prepared_change(
 /// under the new key; pass each one the group has) and `sender_id` /
 /// `signing_key_version`.
 ///
+/// `public_keys` may be absent, `null` or `[]` when the optional
+/// `remaining_member_ids` names the members who stay, yours included. The
+/// key is then encrypted to their stored public keys
+/// (`chat_xdk_add_public_keys`). A user with no stored key is an
+/// `invalid_input` error naming the user; `chat_xdk_missing_public_keys_for`
+/// lists those users before the call.
+///
 /// Returns JSON `PreparedConversationChange`: `conversation_key` is the new
 /// raw key base64, and `action_signatures` is the removal, a title and a
 /// description change for each one set, marked as key-rotation
@@ -239,13 +312,83 @@ pub extern "C" fn chat_xdk_prepare_group_members_remove(
             Ok(p) => p,
             Err(e) => return e,
         };
-        let mut params =
-            GroupMembersRemoveParams::new(p.public_keys, p.conversation_id, p.user_ids);
-        params.title = p.title;
-        params.description = p.description;
-        params.sender_id = p.sender_id;
-        params.signing_key_version = p.signing_key_version;
+        let params = group_members_remove_params(p);
         ffi_prepared_change(h.inner.prepare_group_members_remove(&params))
+    })
+}
+
+/// The users whose public keys one of the four prepare calls that encrypt a
+/// new conversation key would be missing.
+///
+/// `call` names the prepare call: `conversation_key_change`, `group_create`,
+/// `group_members_change` or `group_members_remove`; any other value is an
+/// `invalid_input` error. `params_json` is the params document that call's
+/// `chat_xdk_prepare_*` function takes, read the same way.
+///
+/// Returns in `data` a JSON array of user id strings (`[]` when none): the
+/// members the call encrypts its key to who have no stored public key, and
+/// none when the document passes `public_keys`. Fetch their keys
+/// (`GET /2/users/{id}/public_keys`), add them with
+/// `chat_xdk_add_public_keys`, then make the prepare call.
+///
+/// A user this call returned is not returned again for a minute while no
+/// key is stored for that user, so a lookup that brought no key is not
+/// repeated with every call.
+#[no_mangle]
+pub extern "C" fn chat_xdk_missing_public_keys_for(
+    handle: *const ChatHandle,
+    call: *const c_char,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let call = try_str!(call);
+        let params_json = try_str!(params_json);
+        let missing = match call {
+            "conversation_key_change" => {
+                let params = match parse_params(params_json) {
+                    Ok(p) => conversation_key_change_params(p),
+                    Err(e) => return e,
+                };
+                h.inner
+                    .missing_public_keys_for(KeyChangeCall::ConversationKeyChange(&params))
+            }
+            "group_create" => {
+                let params = match parse_params(params_json) {
+                    Ok(p) => group_create_params(p),
+                    Err(e) => return e,
+                };
+                h.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupCreate(&params))
+            }
+            "group_members_change" => {
+                let params = match parse_params(params_json) {
+                    Ok(p) => group_members_change_params(p),
+                    Err(e) => return e,
+                };
+                h.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersChange(&params))
+            }
+            "group_members_remove" => {
+                let params = match parse_params(params_json) {
+                    Ok(p) => group_members_remove_params(p),
+                    Err(e) => return e,
+                };
+                h.inner
+                    .missing_public_keys_for(KeyChangeCall::GroupMembersRemove(&params))
+            }
+            other => {
+                return err_result(&format!(
+                    "Unknown call '{}': pass conversation_key_change, group_create, \
+                     group_members_change or group_members_remove",
+                    other
+                ))
+            }
+        };
+        ok_user_ids(&missing)
     })
 }
 
@@ -322,10 +465,12 @@ pub extern "C" fn chat_xdk_prepare_group_title_change(
 /// Sign a group avatar change.
 ///
 /// `params_json` — `conversation_id`, `new_avatar_url` (the media URL of
-/// the avatar image, signed and sent as is), `conversation_key_version`
-/// (the version of the key the image is encrypted under), plus optional
-/// `sender_id` / `signing_key_version` (unset resolves from the session
-/// identity).
+/// the avatar image, signed and sent as is), plus optional
+/// `conversation_key_version` (the version of the key the image is
+/// encrypted under; absent, null or empty signs the version of the
+/// conversation's newest key in the opt-in key cache, and fails with an
+/// `invalid_state` error when none is cached) and `sender_id` /
+/// `signing_key_version` (unset resolves from the session identity).
 ///
 /// Returns JSON `PreparedAction`: `action_signatures`, one entry.
 #[no_mangle]
@@ -342,10 +487,11 @@ pub extern "C" fn chat_xdk_prepare_group_avatar_change(
             Ok(p) => p,
             Err(e) => return e,
         };
+        // Core reads an empty version as "sign the newest cached key's".
         let mut params = GroupAvatarChangeParams::new(
             p.conversation_id,
             p.new_avatar_url,
-            p.conversation_key_version,
+            p.conversation_key_version.unwrap_or_default(),
         );
         params.sender_id = p.sender_id;
         params.signing_key_version = p.signing_key_version;

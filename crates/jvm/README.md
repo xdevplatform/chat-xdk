@@ -43,14 +43,35 @@ import java.util.Map;
 try (Chat chat = new Chat()) {
     // Load a key blob + its registered version, then set the session once:
     // identity, the opt-in conversation-key cache, and the signing-key store.
+    // The cache keeps the key of every key change that verifies in
+    // decryptEvents or decryptEvent, and of every key change this chat
+    // prepares.
     chat.importKeys(new ImportKeysParams(exportedBytes, registeredKeyVersion));
     chat.setIdentity(new SetIdentityParams(myUserId, registeredKeyVersion));
     chat.setCacheKeys(true);
     chat.setSigningKeys(signingKeys);
+    // setSigningKeys replaces the stored keys; addSigningKeys adds to them,
+    // such as the keys of a member who joins later.
+    chat.addSigningKeys(newMemberSigningKeys);
 
     // Batch load — unset (null) signing keys fall back to the store; the
     // verified conversation keys populate the cache.
     DecryptEventsResult batch = chat.decryptEvents(new DecryptEventsParams(rawEventB64List));
+
+    // A key change verifies with the signing keys of the member who made it.
+    // One that did not verify is here, by its index in the batch; when its key
+    // was dropped, the messages under it are in batch.errors. For
+    // MissingSigningKey, add the public keys of change.senderId
+    // (GET /2/users/{id}/public_keys) and decrypt again.
+    batch.unverifiedKeyChanges.forEach((index, change) ->
+            System.err.println(index + " " + change.reason + " " + change.senderId));
+    // Key changes whose key this chat could not decrypt, and signing keys
+    // left out because their identity binding does not verify, are reported
+    // the same way: batch.undecryptableKeyChanges, batch.rejectedSigningKeys.
+
+    // The version to encrypt with: for a batch of one conversation,
+    // batch.conversationKeys.latestVersion; for any batch,
+    // batch.conversationKeys.latestVersions.get(conversationId).
 
     // Individual events: the empty key map and unset signing keys resolve
     // from the session stores.
@@ -68,11 +89,99 @@ try (Chat chat = new Chat()) {
 }
 ```
 
-Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
+The key cache keeps every key version of a conversation, not only the newest.
+With the key cache on, calls that omit their conversation key read it from
+the cache: the encrypt methods and the group title, description and avatar
+changes use the conversation's newest key, and `decryptEvent`, `decryptFile`
+and `fileDecryptor` the key at the version the event names. So
+`DecryptFileParams` and `FileDecryptorParams` can be created without a key
+map, and `GroupAvatarChangeParams` without a key version. A value that is
+passed is used as is.
+
+## Other users' public keys
+
+`decryptEvents` verifies each event with its sender's signing key, and the
+four prepare calls that make a conversation key (`prepareGroupCreate`,
+`prepareGroupMembersChange`, `prepareGroupMembersRemove`,
+`prepareConversationKeyChange`) encrypt it to each member's identity key.
+Both are in the records `GET /2/users/{id}/public_keys` returns. Set a
+resolver that fetches those records, and the chat gets the keys it is
+missing by itself:
+
+```java
+ObjectMapper mapper = new ObjectMapper();
+chat.setResolvePublicKeys(userIds -> {
+    Map<String, List<PublicKeyRecord>> records = new HashMap<>();
+    for (String userId : userIds) {
+        // The "data" array of GET /2/users/{id}/public_keys, fetched with
+        // your X API client.
+        JsonNode data = fetchPublicKeys(userId);
+        records.put(userId, List.of(mapper.treeToValue(data, PublicKeyRecord[].class)));
+    }
+    return records;
+});
+
+// No signing keys passed: the chat calls the resolver for the users whose
+// keys the page is missing, stores what it returns, and decrypts once more.
+DecryptEventsResult page = chat.decryptEvents(new DecryptEventsParams(rawEventB64List));
+
+// No public keys passed: the chat calls the resolver for the members it has
+// no stored keys for, then encrypts the new key to the stored keys.
+PreparedConversationChange created =
+        chat.prepareGroupCreate(new GroupCreateParams(groupId, memberIds, adminIds));
+```
+
+- Only `decryptEvents` and the four prepare calls above call the resolver.
+  `decryptEvent` does not: it verifies with the signing keys it is passed,
+  or with the stored ones.
+- Setting a resolver turns the key cache on (`setCacheKeys(true)`). The
+  resolver runs on the calling thread, at most once per call, and an
+  exception it throws is thrown by the decrypt or prepare call.
+- `page.missingSigningKeys` lists, by event index, the user id and key
+  version of each signing key the page still lacks. A lookup that did not
+  bring its key is not repeated for a minute, so the resolver is not called
+  with every page for a key it cannot find.
+- Without a resolver, do the same by hand: `chat.missingPublicKeys(page)`
+  returns the users to fetch, `chat.addPublicKeys(records)` stores their
+  records, and a second `decryptEvents` reads them.
+- With no `publicKeys`, the prepare calls read the stored keys of
+  `memberIds` and `adminIds` (create), `currentMemberIds` and `newMemberIds`
+  (members change), `remainingMemberIds` (members remove), and `memberIds`
+  or the two users of a one-to-one `conversationId` (key change). A member
+  with no stored key fails the call with an `INVALID_INPUT` error that names
+  the member.
+- A call that passes `signingKeys` or `publicKeys` uses them as is and never
+  calls the resolver.
+
+### Many users, many conversations
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one for each signed-in user and use it for all of
+  that user's conversations; never create one per conversation. The chat
+  keeps conversation keys by conversation and public keys by user id.
+- **One resolver for every chat.** Give each chat the same
+  `PublicKeyResolver`, over one cache of `GET /2/users/{id}/public_keys`
+  answers for the whole process. Have the cache share a lookup that is under
+  way, drop a lookup that failed so the next call tries again, and expire
+  each answer after a few minutes so a key a user registers later is picked
+  up.
+  [`examples/jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java`](../../examples/jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java)
+  has one (`SharedPublicKeys`), with
+  [`UserChats`](../../examples/jvm/src/main/java/com/example/chatbot/UserChats.java)
+  for the chats.
+- **Add keys, don't replace them.** `setSigningKeys` replaces every stored
+  key, the ones the resolver fetched included, and the chat then waits a
+  minute before it asks the resolver for them again. With a resolver set,
+  add keys with `addSigningKeys` or `addPublicKeys`.
+
+See [Many users, many
+conversations](../../docs/API.md#many-users-many-conversations).
 
 ## API
 
 See the **JVM** column of the unified tables in [`docs/API.md`](../../docs/API.md) for the full method list, parameters, and return types. Files (media) are covered under [Files (Media)](../../docs/API.md#files-media).
+
+Stateless helpers (base64/hex, MIME sniff, image dimensions) live on **`ChatXdkUtilities`**.
 
 ## Network access
 

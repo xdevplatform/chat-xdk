@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,7 @@ import java.util.function.Function;
  *
  * <ul>
  *   <li>Key generation and Juicebox-backed storage ({@link #generateKeypairs}, {@link #setup}, {@link #unlock})</li>
+ *   <li>Other users' public keys ({@link #setResolvePublicKeys}, {@link #addPublicKeys}, {@link #missingPublicKeys})</li>
  *   <li>Event decryption ({@link #extractConversationKeys}, {@link #decryptEvents}, {@link #decryptEvent})</li>
  *   <li>Signed conversation-key changes ({@link #prepareConversationKeyChange}, {@link #prepareGroupCreate}, {@link #prepareGroupMembersChange})</li>
  *   <li>Group metadata decryption with the conversation key ({@link #decrypt})</li>
@@ -77,6 +79,9 @@ public final class Chat implements AutoCloseable {
     private Pointer handle;
     private boolean disposed;
     private final Cleaner.Cleanable cleanable;
+
+    /** The resolver {@link #setResolvePublicKeys} set, or null. */
+    private volatile PublicKeyResolver publicKeyResolver;
 
     /**
      * Create a Chat SDK instance without a Juicebox config, which manages its keys with
@@ -207,11 +212,23 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Enable or disable the conversation-key cache (off by default). While enabled,
-     * {@link #decryptEvents} caches, per conversation, the key whose key change
-     * carried a valid signature at the highest version seen, and the encrypt
-     * methods resolve a null {@code conversationKey}/{@code conversationKeyVersion}
-     * pair from it. Disabling clears the cache.
+     * Enable or disable the conversation-key cache (off by default; setting a public-key
+     * resolver with {@link #setResolvePublicKeys} turns it on).
+     *
+     * <p>While enabled, the cache keeps, per conversation, the key of every key change
+     * whose signature verified in {@link #decryptEvents} or {@link #decryptEvent}, and
+     * the key of every key change this chat prepared
+     * ({@link #prepareConversationKeyChange}, {@link #prepareGroupCreate},
+     * {@link #prepareGroupMembersChange} or {@link #prepareGroupMembersRemove}). A call
+     * that omits its conversation key reads it from there: the encrypt methods and the
+     * title, description and avatar changes use the conversation's newest key, and
+     * {@link #decryptEvent}, {@link #decryptFile} and {@link #fileDecryptor} the key at
+     * the version the event names. Disabling clears the cache.
+     *
+     * <p>A prepared key is cached when the prepare call returns, before its request is
+     * sent. If the X API rejects the request, no one else holds that key: prepare the
+     * change again, or pass the key to encrypt with explicitly, until a newer key change
+     * verifies.
      */
     public void setCacheKeys(boolean enabled) {
         throwIfDisposed();
@@ -245,8 +262,9 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Store signing keys to use when a decrypt call's params leave {@code signingKeys}
-     * null (or empty). Only this explicit call populates the store — a key carried inside
-     * an event is never trusted for verification. Each call replaces the previous set.
+     * null (or empty). Each call replaces the previous set; add to it with
+     * {@link #addSigningKeys} or {@link #addPublicKeys}. Only these three calls populate the
+     * store — a key carried inside an event is never trusted for verification.
      */
     public void setSigningKeys(List<SigningKeyEntry> keys) throws Exception {
         throwIfDisposed();
@@ -255,6 +273,133 @@ public final class Chat implements AutoCloseable {
             FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_set_signing_keys(handle, j));
         } finally {
             Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Add signing keys to the set {@link #setSigningKeys} stores, keeping the keys it
+     * holds: an entry replaces the stored entry of the same
+     * {@link SigningKeyEntry#userId} and {@link SigningKeyEntry#publicKeyVersion}, and
+     * any other is added.
+     */
+    public void addSigningKeys(List<SigningKeyEntry> keys) throws Exception {
+        throwIfDisposed();
+        String json = ChatJson.MAPPER.writeValueAsString(keys);
+        try (Memory j = FfiStrings.utf8(json)) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_add_signing_keys(handle, j));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Add users' public keys to the stored signing keys, as {@link #addSigningKeys} adds entries:
+     * {@code records} holds, by user id, the records {@code GET /2/users/{id}/public_keys}
+     * returns for that user.
+     *
+     * <p>The decrypt calls verify with the stored keys when they are passed no signing keys, and
+     * {@link #prepareConversationKeyChange}, {@link #prepareGroupCreate},
+     * {@link #prepareGroupMembersChange} and {@link #prepareGroupMembersRemove} read their
+     * members' identity keys from them when they are passed no public keys. A record without a
+     * key version, an identity key or a signing key is left out. Null adds nothing.
+     */
+    public void addPublicKeys(Map<String, List<PublicKeyRecord>> records) throws Exception {
+        throwIfDisposed();
+        if (records == null) {
+            return;
+        }
+        String json = ChatJson.MAPPER.writeValueAsString(records);
+        try (Memory j = FfiStrings.utf8(json)) {
+            FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_add_public_keys(handle, j));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * The users whose public keys {@code result} was missing: the sender of each event in
+     * {@link DecryptEventsResult#missingSigningKeys}, once each, in batch order. Fetch their keys
+     * ({@code GET /2/users/{id}/public_keys}), add them with {@link #addPublicKeys}, and decrypt
+     * the batch again; a resolver ({@link #setResolvePublicKeys}) does this for you.
+     *
+     * <p>A key this call returned a user for is not asked for again for a minute: a lookup that
+     * did not bring the key is not repeated with every batch. A key that arrives is no longer
+     * missing, and a key version not asked for before is asked for at once.
+     */
+    public List<String> missingPublicKeys(DecryptEventsResult result) throws Exception {
+        throwIfDisposed();
+        Objects.requireNonNull(result, "result");
+        String json = ChatJson.MAPPER.writeValueAsString(
+                result.missingSigningKeys == null ? Map.of() : result.missingSigningKeys);
+        try (Memory j = FfiStrings.utf8(json)) {
+            return parseUserIds(
+                    FfiStrings.consume(ChatNative.INSTANCE.chat_xdk_missing_public_keys(handle, j)));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * The users whose public keys a prepare call that makes a conversation key would be missing:
+     * the members it encrypts its key to who have no stored key with a valid identity binding.
+     * {@code call} names the prepare call and {@code paramsJson} is its params document. Empty
+     * when the params pass public keys. A user this call returned is not returned again for a
+     * minute while no key of that user is stored.
+     */
+    List<String> missingPublicKeysFor(String call, String paramsJson) throws Exception {
+        throwIfDisposed();
+        try (Memory c = FfiStrings.utf8(call);
+                Memory j = FfiStrings.utf8(paramsJson)) {
+            return parseUserIds(FfiStrings.consume(
+                    ChatNative.INSTANCE.chat_xdk_missing_public_keys_for(handle, c, j)));
+        } finally {
+            Reference.reachabilityFence(this);
+        }
+    }
+
+    /**
+     * Set the resolver that fetches users' public keys, or remove it with null. With a resolver
+     * set:
+     *
+     * <ul>
+     *   <li>{@link #decryptEvents}, when it is passed no signing keys, calls the resolver for
+     *       {@link #missingPublicKeys} of its result, adds what it returns with
+     *       {@link #addPublicKeys}, and decrypts the batch once more.</li>
+     *   <li>{@link #prepareConversationKeyChange}, {@link #prepareGroupCreate},
+     *       {@link #prepareGroupMembersChange} and {@link #prepareGroupMembersRemove}, when they
+     *       are passed no public keys, call it for the members whose keys are not stored and add
+     *       what it returns before they read the stored keys.</li>
+     * </ul>
+     *
+     * <p>The resolver runs on the calling thread, and an exception it throws is thrown by the
+     * call that ran it. A lookup that did not bring the key it was made for is not repeated for a
+     * minute, so the resolver is not called again for a key it cannot find.
+     *
+     * <p>Setting a resolver turns the key cache on ({@link #setCacheKeys}); removing it leaves
+     * the cache on.
+     */
+    public void setResolvePublicKeys(PublicKeyResolver resolver) {
+        throwIfDisposed();
+        if (resolver != null) {
+            setCacheKeys(true);
+        }
+        publicKeyResolver = resolver;
+    }
+
+    /**
+     * Before a prepare call that passes no public keys, fetch the keys of the members it lacks
+     * through the resolver and store them. {@code call} names the prepare call, {@code publicKeys}
+     * are the public keys its params pass, and {@code paramsJson} is its params document.
+     */
+    private void resolvePublicKeysFor(String call, List<PublicKeyInput> publicKeys, String paramsJson)
+            throws Exception {
+        PublicKeyResolver resolver = publicKeyResolver;
+        if (resolver == null || (publicKeys != null && !publicKeys.isEmpty())) {
+            return;
+        }
+        List<String> missing = missingPublicKeysFor(call, paramsJson);
+        if (!missing.isEmpty()) {
+            addPublicKeys(resolver.resolve(missing));
         }
     }
 
@@ -497,7 +642,10 @@ public final class Chat implements AutoCloseable {
      *
      * @param events Base64-encoded raw event strings received from the webhook.
      *     Pass only {@code KeyChange} events — other event types are ignored.
-     * @return Decrypted keys and {@link ConversationKeyBundle#latestVersion}. Pass
+     * @return Decrypted keys and {@link ConversationKeyBundle#latestVersion}; signatures are not
+     *     checked. {@link ConversationKeyBundle#latestVersion} is the batch's highest key version
+     *     when every event belongs to one conversation, and null when they belong to more than
+     *     one: read {@link ConversationKeyBundle#latestVersions}. Pass
      *     {@link ConversationKeyBundle#keys} to {@link #decryptEvent}.
      */
     public ConversationKeyBundle extractConversationKeys(List<String> events) throws Exception {
@@ -516,10 +664,15 @@ public final class Chat implements AutoCloseable {
      * Decrypt a webhook event and return it as a {@link JsonNode}.
      *
      * <p>Under the default reject-unverified policy, a signed event with no usable signing key
-     * (passed or stored via {@link #setSigningKeys}) throws; only after
-     * {@link #setRejectUnverified}(false) are such events returned with {@code verified: false}.
+     * (passed or stored via {@link #setSigningKeys} and {@link #addSigningKeys}) throws; only
+     * after {@link #setRejectUnverified}(false) are such events returned with
+     * {@code verified: false}.
      * A member removal's title and description, re-encrypted under the new key, aren't changes:
      * they throw a {@link ChatXdkException} of kind {@code INVALID_INPUT} under either policy.
+     *
+     * <p>A key change that verifies is recorded as {@link #decryptEvents} records it: while the
+     * key cache is on ({@link #setCacheKeys}), its key is cached, so later calls that omit their
+     * conversation key resolve it.
      *
      * @return A {@link JsonNode} with a {@code "type"} field indicating the event kind
      *     ({@code "Message"}, {@code "KeyChange"}, {@code "GroupChange"}, etc.).
@@ -546,10 +699,48 @@ public final class Chat implements AutoCloseable {
      * failures are recorded in {@link DecryptEventsResult#errors} — this method never throws per-event.
      * A member removal's title and description, re-encrypted under the new key, aren't changes:
      * they are recorded there too.
+     *
+     * <p>The signing keys must include those of every member who signed a key change in the batch,
+     * whether or not that member sent a message in it: a recent key change whose signature does not
+     * verify has its key dropped, and every message under that key then fails.
+     * {@link DecryptEventsResult#unverifiedKeyChanges} holds each such key change with why it did
+     * not verify and, when its signer's key was missing, the {@link UnverifiedKeyChange#senderId}
+     * and {@link UnverifiedKeyChange#publicKeyVersion} to fetch: add that user's public keys and
+     * decrypt again. {@link DecryptEventsResult#undecryptableKeyChanges} holds each key change
+     * whose key this chat could not decrypt, and {@link DecryptEventsResult#rejectedSigningKeys}
+     * each signing key left out because its identity binding does not verify.
+     *
+     * <p>{@link DecryptEventsResult#missingSigningKeys} holds, for each event of any signed type
+     * whose sender's signing key the call did not have, the user and key version to fetch.
+     * With a resolver set ({@link #setResolvePublicKeys}) and no signing keys passed, this call
+     * fetches them itself: it calls the resolver once for {@link #missingPublicKeys} of the
+     * result, adds the records it returns with {@link #addPublicKeys}, and decrypts the batch
+     * once more. The result is that second decrypt's, so it still lists the keys the resolver
+     * did not bring. An exception the resolver throws is thrown by this call.
+     *
+     * <p>For a batch whose events belong to more than one conversation, read
+     * {@link ConversationKeyBundle#keysByConversation} and
+     * {@link ConversationKeyBundle#latestVersions} by conversation id:
+     * {@link ConversationKeyBundle#latestVersion} is null for such a batch.
      */
     public DecryptEventsResult decryptEvents(DecryptEventsParams parameters) throws Exception {
         throwIfDisposed();
         Objects.requireNonNull(parameters, "parameters");
+        DecryptEventsResult result = decryptEventsOnce(parameters);
+        PublicKeyResolver resolver = publicKeyResolver;
+        if (resolver == null || (parameters.signingKeys != null && !parameters.signingKeys.isEmpty())) {
+            return result;
+        }
+        List<String> missing = missingPublicKeys(result);
+        if (missing.isEmpty()) {
+            return result;
+        }
+        addPublicKeys(resolver.resolve(missing));
+        return decryptEventsOnce(parameters);
+    }
+
+    /** Decrypt a batch with the signing keys the params pass, or the stored ones when they pass none. */
+    private DecryptEventsResult decryptEventsOnce(DecryptEventsParams parameters) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.set("events", ChatJson.MAPPER.valueToTree(parameters.events == null ? List.of() : parameters.events));
         if (parameters.signingKeys != null) {
@@ -579,6 +770,12 @@ public final class Chat implements AutoCloseable {
                 errNode.fields().forEachRemaining(e -> errors.put(e.getKey(), e.getValue().asText("")));
             }
             out.errors = errors;
+            out.unverifiedKeyChanges =
+                    parseIndexed(root.get("unverified_key_changes"), UnverifiedKeyChange.class);
+            out.undecryptableKeyChanges =
+                    parseIndexed(root.get("undecryptable_key_changes"), UndecryptableKeyChange.class);
+            out.rejectedSigningKeys = parseIndexed(root.get("rejected_signing_keys"), RejectedSigningKey.class);
+            out.missingSigningKeys = parseIndexed(root.get("missing_signing_keys"), MissingSigningKey.class);
             return out;
         } finally {
             Reference.reachabilityFence(this);
@@ -595,13 +792,23 @@ public final class Chat implements AutoCloseable {
      *
      * <p>Leave {@code conversationId} null on a one-to-one to derive the canonical
      * id from the two participants; pass the existing id for a group rotation.
+     *
+     * <p>With no {@code publicKeys}, the call encrypts the new key to the stored public keys
+     * ({@link #addPublicKeys}) of {@code memberIds}, or, when {@code conversationId} names a
+     * one-to-one, by its id or by the other user's id, of its two users. It throws a
+     * {@link ChatXdkException} of kind {@code INVALID_INPUT} naming each member who has no
+     * stored key. With a resolver set ({@link #setResolvePublicKeys}), it first calls the
+     * resolver for those members and adds the records it returns.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareConversationKeyChange(ConversationKeyChangeParams parameters)
             throws Exception {
         throwIfDisposed();
-        return callPrepare(
-                buildPrepareConversationKeyChangeJson(parameters),
-                ChatNative.INSTANCE::chat_xdk_prepare_conversation_key_change);
+        String paramsJson = buildPrepareConversationKeyChangeJson(parameters);
+        resolvePublicKeysFor("conversation_key_change", parameters.publicKeys, paramsJson);
+        return callPrepare(paramsJson, ChatNative.INSTANCE::chat_xdk_prepare_conversation_key_change);
     }
 
     /**
@@ -616,13 +823,22 @@ public final class Chat implements AutoCloseable {
      * new conversation key, signs the ciphertext, and returns it as
      * {@code encryptedTitle} and {@code encryptedDescription}. The current avatar URL is
      * signed as is.
+     *
+     * <p>With no {@code publicKeys}, the call encrypts the new key to the stored public keys
+     * ({@link #addPublicKeys}) of {@code currentMemberIds} and {@code newMemberIds}, and throws
+     * a {@link ChatXdkException} of kind {@code INVALID_INPUT} naming each member who has no
+     * stored key. With a resolver set ({@link #setResolvePublicKeys}), it first calls the
+     * resolver for those members and adds the records it returns.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupMembersChange(GroupMembersChangeParams parameters)
             throws Exception {
         throwIfDisposed();
-        return callPrepare(
-                buildPrepareGroupMembersChangeJson(parameters),
-                ChatNative.INSTANCE::chat_xdk_prepare_group_members_change);
+        String paramsJson = buildPrepareGroupMembersChangeJson(parameters);
+        resolvePublicKeysFor("group_members_change", parameters.publicKeys, paramsJson);
+        return callPrepare(paramsJson, ChatNative.INSTANCE::chat_xdk_prepare_group_members_change);
     }
 
     /**
@@ -638,13 +854,22 @@ public final class Chat implements AutoCloseable {
      * signs the ciphertext, and returns it as {@code encryptedTitle}, the
      * {@code group_name} the create request sends. A create sets no avatar; set it
      * afterwards with {@link #prepareGroupAvatarChange}.
+     *
+     * <p>With no {@code publicKeys}, the call encrypts the new key to the stored public keys
+     * ({@link #addPublicKeys}) of {@code memberIds} and {@code adminIds}, and throws a
+     * {@link ChatXdkException} of kind {@code INVALID_INPUT} naming each member who has no
+     * stored key. With a resolver set ({@link #setResolvePublicKeys}), it first calls the
+     * resolver for those members and adds the records it returns.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupCreate(GroupCreateParams parameters)
             throws Exception {
         throwIfDisposed();
-        return callPrepare(
-                buildPrepareGroupCreateJson(parameters),
-                ChatNative.INSTANCE::chat_xdk_prepare_group_create);
+        String paramsJson = buildPrepareGroupCreateJson(parameters);
+        resolvePublicKeysFor("group_create", parameters.publicKeys, paramsJson);
+        return callPrepare(paramsJson, ChatNative.INSTANCE::chat_xdk_prepare_group_create);
     }
 
     /**
@@ -692,13 +917,22 @@ public final class Chat implements AutoCloseable {
      * who stay ({@code publicKeys}). The result carries the new key and the action
      * signatures: the removal, a title and a description change for each one the
      * params set, re-encrypted under the new key, and the conversation-key change.
+     *
+     * <p>With no {@code publicKeys}, the call encrypts the new key to the stored public keys
+     * ({@link #addPublicKeys}) of {@code remainingMemberIds}, and throws a
+     * {@link ChatXdkException} of kind {@code INVALID_INPUT} naming each member who has no
+     * stored key. With a resolver set ({@link #setResolvePublicKeys}), it first calls the
+     * resolver for those members and adds the records it returns.
+     *
+     * <p>While the key cache is on ({@link #setCacheKeys}), the new key is cached when
+     * the call returns.
      */
     public PreparedConversationChange prepareGroupMembersRemove(GroupMembersRemoveParams parameters)
             throws Exception {
         throwIfDisposed();
-        return callPrepare(
-                buildPrepareGroupMembersRemoveJson(parameters),
-                ChatNative.INSTANCE::chat_xdk_prepare_group_members_remove);
+        String paramsJson = buildPrepareGroupMembersRemoveJson(parameters);
+        resolvePublicKeysFor("group_members_remove", parameters.publicKeys, paramsJson);
+        return callPrepare(paramsJson, ChatNative.INSTANCE::chat_xdk_prepare_group_members_remove);
     }
 
     /** Sign leaving a group. Does not rotate the conversation key. */
@@ -719,7 +953,13 @@ public final class Chat implements AutoCloseable {
 
     /**
      * Sign a group avatar change: the avatar image's media URL, as is, and the version of
-     * the key the image is encrypted under.
+     * the key the image is encrypted under. With
+     * {@link GroupAvatarChangeParams#conversationKeyVersion} null or empty, the call signs
+     * the version of the conversation's newest key in the opt-in key cache
+     * ({@link #setCacheKeys}), the key the encrypt methods resolve.
+     *
+     * @throws ChatXdkException of kind {@link ChatXdkException.Kind#INVALID_STATE} if the
+     *     key version is left out and no key of the conversation is cached.
      */
     public PreparedAction prepareGroupAvatarChange(GroupAvatarChangeParams parameters)
             throws Exception {
@@ -990,7 +1230,9 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
-     * Decrypt an encrypted file (e.g. an image or video), as downloaded.
+     * Decrypt an encrypted file (e.g. an image or video), as downloaded. With
+     * {@link DecryptFileParams#conversationKeys} null or empty, the conversation's keys come
+     * from the opt-in key cache ({@link #setCacheKeys}).
      *
      * @return Decrypted bytes.
      * @throws ChatXdkException if the key version is missing, the event is not an encrypted
@@ -1188,18 +1430,49 @@ public final class Chat implements AutoCloseable {
             b.keys = Map.of();
             return b;
         }
+        b.keys = parseKeyMap(root.get("keys"));
+        Map<String, Map<String, byte[]>> keysByConversation = new LinkedHashMap<>();
+        JsonNode keysByConversationEl = root.get("keys_by_conversation");
+        if (keysByConversationEl != null && keysByConversationEl.isObject()) {
+            keysByConversationEl
+                    .fields()
+                    .forEachRemaining(e -> keysByConversation.put(e.getKey(), parseKeyMap(e.getValue())));
+        }
+        b.keysByConversation = keysByConversation;
+        if (root.hasNonNull("latest_version")) {
+            b.latestVersion = root.get("latest_version").asText();
+        }
+        Map<String, String> latestVersions = new LinkedHashMap<>();
+        JsonNode latestVersionsEl = root.get("latest_versions");
+        if (latestVersionsEl != null && latestVersionsEl.isObject()) {
+            latestVersionsEl.fields().forEachRemaining(e -> latestVersions.put(e.getKey(), e.getValue().asText()));
+        }
+        b.latestVersions = latestVersions;
+        return b;
+    }
+
+    /** Parse a key map, {@code {"version": "base64", ...}}. */
+    private static Map<String, byte[]> parseKeyMap(JsonNode keysEl) {
         Map<String, byte[]> keys = new LinkedHashMap<>();
-        JsonNode keysEl = root.get("keys");
         if (keysEl != null && keysEl.isObject()) {
             keysEl.fields()
                     .forEachRemaining(
                             e -> keys.put(e.getKey(), Base64.getDecoder().decode(e.getValue().asText())));
         }
-        b.keys = keys;
-        if (root.hasNonNull("latest_version")) {
-            b.latestVersion = root.get("latest_version").asText();
+        return keys;
+    }
+
+    /** Parse an object keyed by index, as a string, into its entries. */
+    private static <T> Map<String, T> parseIndexed(JsonNode node, Class<T> type) throws Exception {
+        Map<String, T> entries = new LinkedHashMap<>();
+        if (node != null && node.isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                entries.put(field.getKey(), ChatJson.MAPPER.treeToValue(field.getValue(), type));
+            }
         }
-        return b;
+        return entries;
     }
 
     private static Object[][] serializeEntities(List<EntityDescriptor> entities) {
@@ -1359,12 +1632,42 @@ public final class Chat implements AutoCloseable {
         n.set(field, ChatJson.MAPPER.valueToTree(ids == null ? List.of() : ids));
     }
 
+    /**
+     * Write a prepare call's {@code public_keys}: the keys the params pass, or an empty list
+     * when they pass none, which has the call read the stored public keys.
+     */
+    private static void putPublicKeys(ObjectNode n, List<PublicKeyInput> publicKeys) {
+        n.set("public_keys", ChatJson.MAPPER.valueToTree(publicKeys == null ? List.of() : publicKeys));
+    }
+
+    /** Write a list of user ids the stored public keys are read for, left out when there are none. */
+    private static void putOptionalIds(ObjectNode n, String field, List<String> ids) {
+        if (ids != null && !ids.isEmpty()) {
+            n.set(field, ChatJson.MAPPER.valueToTree(ids));
+        }
+    }
+
+    /** Parse a JSON array of user ids. */
+    private static List<String> parseUserIds(String json) throws Exception {
+        List<String> userIds = new ArrayList<>();
+        if (json.isEmpty()) {
+            return userIds;
+        }
+        JsonNode root = ChatJson.MAPPER.readTree(json);
+        if (root != null && root.isArray()) {
+            for (JsonNode el : root) {
+                userIds.add(el.asText());
+            }
+        }
+        return userIds;
+    }
+
     private static String buildPrepareGroupMembersRemoveJson(GroupMembersRemoveParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
-        n.set("public_keys", ChatJson.MAPPER.valueToTree(
-                p.publicKeys == null ? List.of() : p.publicKeys));
+        putPublicKeys(n, p.publicKeys);
         n.put("conversation_id", p.conversationId);
         putIds(n, "user_ids", p.userIds);
+        putOptionalIds(n, "remaining_member_ids", p.remainingMemberIds);
         if (p.title != null) {
             n.put("title", p.title);
         }
@@ -1400,7 +1703,10 @@ public final class Chat implements AutoCloseable {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
         n.put("new_avatar_url", p.newAvatarUrl);
-        n.put("conversation_key_version", p.conversationKeyVersion);
+        // A version left out is omitted, so the core signs the newest cached key's.
+        if (p.conversationKeyVersion != null && !p.conversationKeyVersion.isEmpty()) {
+            n.put("conversation_key_version", p.conversationKeyVersion);
+        }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
@@ -1510,18 +1816,19 @@ public final class Chat implements AutoCloseable {
     private static String buildPrepareConversationKeyChangeJson(ConversationKeyChangeParams p)
             throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
-        n.set("public_keys", ChatJson.MAPPER.valueToTree(p.publicKeys));
+        putPublicKeys(n, p.publicKeys);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         if (p.conversationId != null) {
             n.put("conversation_id", p.conversationId);
         }
+        putOptionalIds(n, "member_ids", p.memberIds);
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 
     private static String buildPrepareGroupMembersChangeJson(GroupMembersChangeParams p)
             throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
-        n.set("public_keys", ChatJson.MAPPER.valueToTree(p.publicKeys));
+        putPublicKeys(n, p.publicKeys);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         n.put("conversation_id", p.conversationId);
         n.set("new_member_ids", ChatJson.MAPPER.valueToTree(
@@ -1554,7 +1861,7 @@ public final class Chat implements AutoCloseable {
 
     private static String buildPrepareGroupCreateJson(GroupCreateParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
-        n.set("public_keys", ChatJson.MAPPER.valueToTree(p.publicKeys));
+        putPublicKeys(n, p.publicKeys);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         n.put("conversation_id", p.conversationId);
         n.set("member_ids", ChatJson.MAPPER.valueToTree(p.memberIds == null ? List.of() : p.memberIds));

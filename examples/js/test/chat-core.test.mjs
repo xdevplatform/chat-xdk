@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { ChatCore } from "../src/chat-core.mjs";
+import { delivered, deliveredAction } from "../../../crates/wasm/js/tests/frame.mjs";
+import { ChatCore, messageText } from "../src/chat-core.mjs";
 
 const vectors = JSON.parse(
   await readFile(new URL("../../../tests/fixtures/sdk_vectors.json", import.meta.url), "utf8"),
@@ -69,7 +70,7 @@ test("group title change signs the encrypted title, which decrypts back", async 
 
 test("conversation key prepare -> decrypt round-trip", async () => {
   const core = await loadedCore();
-  const prepared = core.prepareConversationKeyChange({
+  const prepared = await core.prepareConversationKeyChangeAsync({
     publicKeys: [
       {
         userId: vectors.event_sender_id,
@@ -116,6 +117,126 @@ test("session cache: decryptBatch feeds the key cache, encryptReply omits the ke
   assert.ok(body.xdk_version);
 });
 
+/**
+ * A core with fresh keys as user `userId`, the entry a prepare call takes for
+ * it, and its record as GET /2/users/{id}/public_keys returns it.
+ */
+async function party(userId) {
+  const core = await ChatCore.create();
+  const { registration, privateKeysB64 } = core.generateAndRegister();
+  core.loadKeys(privateKeysB64, "1");
+  core.setIdentity(userId);
+  const key = registration.publicKey;
+  return {
+    core,
+    userId,
+    publicKey: { userId, identityPublicKey: key.publicKey, publicKeyVersion: "1" },
+    record: {
+      public_key_version: "1",
+      public_key: key.publicKey,
+      signing_public_key: key.signingPublicKey,
+      identity_public_key_signature: key.identityPublicKeySignature,
+    },
+  };
+}
+
+/**
+ * Resolves to the page a bot receives after `admin` rotates the key of the
+ * group of the three and `member` sends a message under it: the key change,
+ * then the message. The admin sent none of the page's messages.
+ */
+async function groupPage(admin, member, bot) {
+  const prepared = await admin.core.prepareConversationKeyChangeAsync({
+    publicKeys: [admin, member, bot].map((each) => each.publicKey),
+    conversationId: "g900",
+  });
+  const keyChange = deliveredAction(prepared.actionSignatures[0], admin.userId, "g900", "2100000000000000000");
+  const body = member.core.encryptReply({
+    conversationId: "g900",
+    text: "hello group",
+    conversationKey: prepared.conversationKey,
+    conversationKeyVersion: prepared.conversationKeyVersion,
+  });
+  return [keyChange, delivered(body.event_b64, "2100000000000000001")];
+}
+
+test("decryptBatchAsync fetches the keys of the member who made a key change", async () => {
+  const [admin, member, bot] = await Promise.all(["5001", "5002", "5003"].map(party));
+  const events = await groupPage(admin, member, bot);
+
+  // Without the admin's keys the key change does not verify: its key is
+  // dropped and the message does not decrypt.
+  assert.deepEqual(bot.core.decryptBatch(events).events, []);
+
+  const directory = { [admin.userId]: [admin.record], [member.userId]: [member.record] };
+  const asked = [];
+  bot.core.fetchPublicKeysWith(async (userId) => {
+    asked.push(userId);
+    return directory[userId];
+  });
+  const page = await bot.core.decryptBatchAsync(events);
+  assert.deepEqual(asked, ["5001", "5002"]);
+  assert.deepEqual(page.errors, {});
+  assert.deepEqual(page.missingSigningKeys, {});
+  assert.deepEqual(page.unverifiedKeyChanges, {});
+  assert.deepEqual(
+    page.events.map(({ event }) => messageText(event)),
+    [null, "hello group"],
+  );
+  // The raw event a reply to the message quotes.
+  assert.equal(page.events[1].originalB64, events[1]);
+
+  // The fetched keys are stored: the same page fetches nothing more.
+  asked.length = 0;
+  const again = await bot.core.decryptBatchAsync(events);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(again.errors, {});
+});
+
+test("decryptBatchAsync keeps going when one user's keys cannot be fetched", async () => {
+  const [admin, member, bot] = await Promise.all(["5001", "5002", "5003"].map(party));
+  const events = await groupPage(admin, member, bot);
+
+  bot.core.fetchPublicKeysWith(async (userId) => {
+    if (userId === member.userId) throw new Error("HTTP 503");
+    return [admin.record];
+  });
+  const page = await bot.core.decryptBatchAsync(events);
+  // The admin's key change verified. Only the member's message, whose
+  // signing key is still missing, is left out.
+  assert.deepEqual(
+    page.events.map(({ event }) => event.type),
+    ["keyChange"],
+  );
+  assert.deepEqual(page.unverifiedKeyChanges, {});
+  assert.deepEqual(page.missingSigningKeys, { 1: { userId: "5002", publicKeyVersion: "1" } });
+  assert.deepEqual(Object.keys(page.errors), ["1"]);
+});
+
+test("prepareConversationKeyChangeAsync fetches the keys of both users of a one-to-one", async () => {
+  const [sender, partner] = await Promise.all(["5001", "5002"].map(party));
+  const directory = { [sender.userId]: [sender.record], [partner.userId]: [partner.record] };
+  const asked = [];
+  sender.core.fetchPublicKeysWith(async (userId) => {
+    asked.push(userId);
+    return directory[userId];
+  });
+
+  // The one-to-one is named by the partner's id, and no public keys are
+  // passed.
+  const prepared = await sender.core.prepareConversationKeyChangeAsync({ conversationId: partner.userId });
+  assert.deepEqual(asked.sort(), ["5001", "5002"]);
+  assert.deepEqual(prepared.conversationParticipantKeys.map((key) => key.userId).sort(), ["5001", "5002"]);
+  // Each user decrypts the key the change holds for that user.
+  for (const user of [sender, partner]) {
+    const own = prepared.conversationParticipantKeys.find((key) => key.userId === user.userId);
+    assert.deepEqual(
+      Array.from(user.core.decryptConversationKey(own.encryptedConversationKey)),
+      Array.from(prepared.conversationKey),
+    );
+  }
+});
+
 test("decryptBatch on an empty list is safe", async () => {
   const core = await loadedCore();
   const result = core.decryptBatch([], []);
@@ -143,7 +264,7 @@ test("decryptOne falls back to the session stores", async () => {
 test("prepToRequest maps the X API request shape", async () => {
   const { prepToRequest } = await import("../src/chat-core.mjs");
   const core = await loadedCore();
-  const prep = core.prepareConversationKeyChange({
+  const prep = await core.prepareConversationKeyChangeAsync({
     publicKeys: [
       {
         userId: vectors.event_sender_id,
@@ -173,7 +294,7 @@ test("prepToRequest maps the X API request shape", async () => {
 test("removalToRequest rotates the key for the members who stay", async () => {
   const { removalToRequest } = await import("../src/chat-core.mjs");
   const core = await loadedCore();
-  const prep = core.prepareGroupMembersRemove({
+  const prep = await core.prepareGroupMembersRemoveAsync({
     publicKeys: [
       {
         userId: vectors.event_sender_id,
@@ -206,9 +327,9 @@ test("removalToRequest rotates the key for the members who stay", async () => {
   assert.equal(body.conversationParticipantKeys, undefined);
 });
 
-test("prepareGroupCreate yields the two required signatures", async () => {
+test("prepareGroupCreateAsync yields the two required signatures", async () => {
   const core = await loadedCore();
-  const prep = core.prepareGroupCreate({
+  const prep = await core.prepareGroupCreateAsync({
     publicKeys: [
       {
         userId: vectors.event_sender_id,

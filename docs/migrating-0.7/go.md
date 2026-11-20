@@ -48,6 +48,7 @@ that nothing reports, and `[new]` a 0.7.x call to adopt.
 - [ ] `[runtime]` [Pass key versions as the X API returns them](#key-versions-are-integers-written-as-strings)
 - [ ] `[runtime]` [Pass entities, files, URL cards and posts the SDK accepts](#entities-files-url-cards-and-posts-are-checked)
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a nil `LatestVersion`](#latestversion-comes-from-a-verified-key-change)
+- [ ] `[new]` [Let the chat fetch public keys through a hook, and read keys from its cache](#the-chat-can-fetch-public-keys-and-keep-keys)
 - [ ] `[runtime]` [Rename every read of `target_message_id` to `target_message_sequence_id`](#target_message_id-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `ReplyToEvent`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
 - [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
@@ -82,10 +83,11 @@ for a `*SendPayload`, `prepared` for a `*PreparedConversationChange`,
 `event` for a decrypted `*Event`, and `page` for a page of
 `GET /2/chat/conversations/{id}/events`, decoded into a struct whose `Data`
 holds each event's `ID` and `EncodedEvent`. `must(err)` stands for your
-error handling. `api.Post(path, body)`, `api.Put(path, body)` and
-`api.Delete(path, body)` stand for your HTTP client: each sends `body` as
-JSON to `https://api.x.com` + `path` with your user access token and returns
-the parsed JSON response as a `map[string]any`. `pathID` is the conversation
+error handling. `api.Post(path, body)`, `api.Put(path, body)`,
+`api.Delete(path, body)` and `api.Get(path)` stand for your HTTP client: each
+sends a request to `https://api.x.com` + `path` with your user access token,
+the first three with `body` as JSON, and returns the parsed JSON response as
+a `map[string]any`. `pathID` is the conversation
 id as a request path takes it: a group's `g…` id as is, and a one-to-one's
 in its hyphen form, `strings.ReplaceAll(conversationID, ":", "-")`.
 `photoAttachment(mediaHashKey)` stands for your code that builds a photo's
@@ -327,7 +329,10 @@ must(chat.ImportKeys(chatxdk.ImportKeysParams{Keys: privateKeys, SigningKeyVersi
 ### `DecryptEvents` takes `DecryptEventsParams`
 
 Pass the events in a `DecryptEventsParams`. `SigningKeys` is optional;
-`nil` verifies with the keys `SetSigningKeys` stored. Per-event errors,
+`nil` verifies with the stored signing keys: the ones `SetSigningKeys`,
+`AddSigningKeys` and `AddPublicKeys` stored, and the ones a hook fetched
+(see [The chat can fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)). Per-event errors,
 events decrypt drops included, are still collected in the result's `Errors`,
 and the call returns an error only for invalid params. The result holds the
 decrypted events, of every event type, in `Events`, each a
@@ -882,13 +887,22 @@ must(err)
 the newest version whose key change verified, and it never moves back for
 the chat's lifetime. A key change verifies only against its sender's
 signing key, so give the chat every participant's signing keys, your own
-included, before you decrypt. It's `nil` until a key change verifies: a key
-change the SDK can't verify still adds its key to
-`result.ConversationKeys.Keys`, for decrypting, but never becomes the
-version you encrypt with. Where 0.5.x returned the batch's highest version,
-0.7.x can return `nil`: fetch the missing signing keys or the conversation's
-key-change events and decrypt again, rather than encrypting under the
-highest key in `Keys`:
+included, before you decrypt, or a hook that fetches them (see [The chat can
+fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)).
+It's `nil` until a key change verifies: a key
+change the SDK can't verify never becomes the version you encrypt with, and
+one sequenced since late June 2026 also has its key left out of
+`result.ConversationKeys.Keys`, so the messages under it don't decrypt;
+`result.UnverifiedKeyChanges` holds each such key change, by its index in the
+batch, with the signing key it needs. A batch whose events belong to more
+than one conversation reports each one's version in
+`result.ConversationKeys.LatestVersions` and each one's keys in
+`result.ConversationKeys.KeysByConversation`, and its `LatestVersion` is
+`nil`. Where 0.5.x returned the batch's
+highest version, 0.7.x can return `nil`: fetch the missing signing keys or
+the conversation's key-change events and decrypt again, rather than
+encrypting under the highest key in `Keys`:
 
 ```go
 // 0.5.x
@@ -909,6 +923,75 @@ if result.ConversationKeys.LatestVersion == nil {
 }
 version := *result.ConversationKeys.LatestVersion
 ```
+
+### The chat can fetch public keys and keep keys
+
+From 0.7.6 a chat does more of the key handling above itself. Nothing here
+changes a call that passes its keys: each item is an argument you no longer
+have to supply.
+
+- **A hook fetches public keys.** Give the chat a function with
+  `SetResolvePublicKeys`. It takes user ids and returns each user's records
+  from `GET /2/users/{id}/public_keys`, by user id. `DecryptEvents` then
+  fetches the signing keys of the senders a batch needs and the chat has
+  none for, and decrypts the batch again. `PrepareConversationKeyChange`,
+  `PrepareGroupCreate`, `PrepareGroupMembersChange` and
+  `PrepareGroupMembersRemove` need no `PublicKeys`: each encrypts the new
+  key to the stored keys of the members its params name
+  (`RemainingMemberIDs` for a removal, and `MemberIDs` or a one-to-one's id
+  for a key change), and fetches the ones the chat has none for. The hook
+  blocks: these five existing methods call it and wait for what it returns,
+  and an error it returns is the call's error. Setting it turns the key
+  cache on.
+- **Or fetch them yourself.** `DecryptEvents` lists each event whose
+  sender's signing key it did not have in `MissingSigningKeys`.
+  `MissingPublicKeys(result)` names those users, and `AddPublicKeys(records)`
+  stores their records as the X API returned them.
+- **`AddSigningKeys` adds to the stored signing keys**, where
+  `SetSigningKeys` replaces them all. With a hook set, add: replacing also
+  drops the keys the hook fetched.
+- **The key cache serves more calls.** With `SetCacheKeys(true)`,
+  `DecryptEvent` caches the key of a key change that verifies, as
+  `DecryptEvents` does, the four prepare calls above cache the key they
+  make, and the cache keeps every key version of a conversation.
+  `DecryptFile` and `FileDecryptor` then need no `ConversationKeys`, and
+  `PrepareGroupAvatarChange` no `ConversationKeyVersion`.
+
+```go
+// 0.7.x
+chat.SetResolvePublicKeys(func(ids []string) (map[string][]chatxdk.PublicKeyRecord, error) {
+	records := map[string][]chatxdk.PublicKeyRecord{}
+	for _, id := range ids {
+		response, err := api.Get("/2/users/" + id + "/public_keys")
+		if err != nil {
+			return nil, err
+		}
+		data, err := json.Marshal(response["data"])
+		if err != nil {
+			return nil, err
+		}
+		var found []chatxdk.PublicKeyRecord
+		if err := json.Unmarshal(data, &found); err != nil {
+			return nil, err
+		}
+		records[id] = found
+	}
+	return records, nil
+})
+result, err := chat.DecryptEvents(chatxdk.DecryptEventsParams{Events: events})
+must(err)
+for i := range result.Events {
+	handle(&result.Events[i].Event)
+}
+created, err := chat.PrepareGroupCreate(chatxdk.GroupCreateParams{
+	ConversationID: conversationID, MemberIDs: memberIDs, AdminIDs: adminIDs, Title: title,
+})
+must(err)
+```
+
+A server with many signed-in users keeps one chat per user and gives every
+chat the same hook function: see [Many users, many
+conversations](../API.md#many-users-many-conversations).
 
 ### `target_message_id` holds a different value
 
@@ -1457,12 +1540,12 @@ must(err)
 
 **Encrypt under the new key as soon as the request succeeds.** The removed
 members hold the old key, so a message encrypted under it is one they can
-read. The key cache (`SetCacheKeys(true)`) adopts the new key only once
-`DecryptEvents` decrypts the removal's key change from the conversation's
-events, and only if that key change verifies against your own signing key;
-until then an encrypt call that omits the key resolves the old one. Store
-the new key and version, and pass them to every encrypt and prepare call
-until the cache holds them:
+read. From 0.7.6, a chat whose key cache is on (`SetCacheKeys(true)`) caches
+the new key when the prepare call returns, so an encrypt call that omits the
+key resolves the new one from then on. If the request fails, prepare the
+removal again: no other member holds the key of a request that failed.
+Without the cache, store the new key and version, and pass them to every
+encrypt and prepare call:
 
 ```go
 // 0.7.x

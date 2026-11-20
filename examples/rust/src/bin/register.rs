@@ -168,10 +168,7 @@ fn register(env: &HashMap<String, String>, force: bool) -> Result<(), String> {
     // Reconcile: if our exact public key is already on the account, adopt it
     // rather than POSTing again (a prior POST may have applied after erroring).
     let existing = api.get_public_keys(&user_id)?;
-    let version = if let Some(found) = existing
-        .iter()
-        .find(|k| k.identity_public_key == our_public_key)
-    {
+    let version = if let Some(found) = existing.iter().find(|k| k.public_key == our_public_key) {
         println!("Public key already registered on the account; skipping POST.");
         found.public_key_version.clone()
     } else {

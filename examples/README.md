@@ -7,8 +7,9 @@ API over HTTP, and showcases the messaging core:
 - **Key management** — import existing private keys (or generate + register new ones)
 - **Conversation keys** — prepare/decrypt the symmetric key shared by participants
 - **Encryption** — turn a reply into an encrypted, signed message for the X API
-- **Decryption** — both paths: batch (`decryptEvents`) on initial load and
-  single-event (`decryptEvent`) for each new event
+- **Decryption** — every page of events through the batch path
+  (`decryptEvents`), which fetches the public keys it lacks through a hook;
+  each crypto core also wraps the single-event path (`decryptEvent`)
 
 Every example is a small bot: it reads incoming DMs, decrypts them, generates a
 reply (a simple echo), encrypts the reply, and sends it back.
@@ -50,8 +51,10 @@ Each example separates two layers so the crypto is easy to read and test:
 
 1. **A crypto core** — a thin wrapper around the chat-xdk binding that does
    key unlock/import, conversation-key handling, message encryption, and the
-   two decryption paths. This layer never touches the network, so it can be
-   unit-tested directly.
+   two decryption paths. This layer makes no network calls of its own, so it
+   can be unit-tested directly. The one thing it needs from the network,
+   other users' public keys, comes through a fetch function the I/O layer
+   hands it.
 2. **A thin I/O layer** — config from environment variables, local/in-memory
    conversation state, and X Chat API calls over plain HTTP.
 
@@ -71,6 +74,91 @@ flowchart LR
 
 The offline test exercises the crypto core directly; only the I/O layer touches
 the network.
+
+### Signing keys for key changes
+
+A bot verifies each event with the signing keys of the user who sent it, which
+come from the X API (`GET /2/users/{id}/public_keys`). A key change is signed
+by the member who made it, who may have sent none of the messages on the page.
+Without that member's keys a recent key change does not verify, its key is
+dropped, and the messages under it do not decrypt.
+
+The SDK fetches those keys itself, through a hook. Each example's crypto core
+sets the hook once, in `fetchPublicKeysWith` (`fetch_public_keys_with`,
+`FetchPublicKeysWith`). The hook is given user ids. It fetches each user's
+public keys with the example's X API client and returns the records as the API
+sent them, by user id. A user whose fetch fails is logged and left out, so one
+user's failure does not fail the page.
+
+Each bot sends every page of events, key changes and messages together,
+through the batch decrypt. When the page names signing keys the SDK does not
+hold, the SDK calls the hook for those users, stores what it returns, and
+decrypts the page once more. The bot replies to the messages in the result,
+and logs what the result still reports: `missingSigningKeys`,
+`unverifiedKeyChanges`, `undecryptableKeyChanges` and `rejectedSigningKeys`.
+
+| Language | Set the hook | Batch decrypt that calls it |
+|----------|--------------|-----------------------------|
+| JavaScript | `createChat({ resolvePublicKeys })` or `chat.setResolvePublicKeys(hook)` | `await chat.decryptEventsAsync(...)` |
+| .NET | `chat.ResolvePublicKeys = hook` | `await chat.DecryptEventsAsync(...)` |
+| Python | `chat.set_resolve_public_keys(hook)` | `chat.decrypt_events(...)` |
+| Go | `chat.SetResolvePublicKeys(hook)` | `chat.DecryptEvents(...)` |
+| JVM | `chat.setResolvePublicKeys(resolver)` | `chat.decryptEvents(...)` |
+| Rust | `chat.set_resolve_public_keys(Some(hook))` | `chat.decrypt_events(...)` |
+
+In JavaScript and .NET the hook returns a promise or a task, so only the
+`Async` methods call it. In the other four languages the hook blocks, and the
+usual methods call it.
+
+The hook also serves the calls that make a conversation key:
+`prepareConversationKeyChange`, `prepareGroupCreate`,
+`prepareGroupMembersChange` and `prepareGroupMembersRemove` (their `Async`
+forms in JavaScript and .NET). A call that passes no public keys encrypts the
+key to the public keys the SDK holds for its members, and fetches the ones it
+lacks.
+
+The browser app in [`js/public/`](js/public) drives the lower-level WASM
+`Chat`, which has no hook. It does the same steps by hand: `missingPublicKeys`
+names the users to fetch, and `addPublicKeys` stores their records.
+
+### Many signed-in users in one process
+
+Each bot serves one signed-in user. A server that signs many users in follows
+two rules, and every example has them as code with an offline test:
+
+- **One chat per signed-in user.** A chat holds one user's private keys and
+  signs as that user. Keep one per signed-in user, for all of that user's
+  conversations, and never one per conversation: the chat keeps conversation
+  keys by conversation and public keys by user id. `UserChats` does this: it
+  returns the user's chat, and creates it on the first call.
+- **One public-keys hook for every chat.** Other users' public keys are the
+  same whichever chat asks. `SharedPublicKeys` is one hook function over one
+  cache of `GET /2/users/{id}/public_keys` answers for the whole process, so
+  two chats that meet the same user cost one request. It shares a lookup
+  that is under way, drops a lookup that failed so the next call tries
+  again, and fetches an answer again after its TTL (5 minutes unless you say
+  otherwise), so a key a user registers later is picked up.
+
+| Language | File | Shared hook | One chat per user |
+|----------|------|-------------|-------------------|
+| JavaScript | [`js/src/multi-user.mjs`](js/src/multi-user.mjs) | `sharedPublicKeys(getPublicKeys, { ttlMs })` | `UserChats.chatFor(user)` |
+| Python | [`python/multi_user.py`](python/multi_user.py) | `SharedPublicKeys(fetch, ttl_seconds).resolve` | `UserChats.chat_for(...)` |
+| Go | [`go/multiuser.go`](go/multiuser.go) | `NewSharedPublicKeys(fetch, ttl).Resolve` | `UserChats.ChatFor(...)` |
+| Rust | [`rust/src/multi_user.rs`](rust/src/multi_user.rs) | `SharedPublicKeys::new(fetch)`, and its `hook()` | `UserChats::chat_for(...)` |
+| .NET | [`dotnet/ChatBot/MultiUser.cs`](dotnet/ChatBot/MultiUser.cs) | `new SharedPublicKeys(fetch, ttl).ResolveAsync` | `UserChats.ChatFor(...)` |
+| JVM | [`SharedPublicKeys.java`](jvm/src/main/java/com/example/chatbot/SharedPublicKeys.java), [`UserChats.java`](jvm/src/main/java/com/example/chatbot/UserChats.java) | `new SharedPublicKeys(fetcher)` | `UserChats.chatFor(...)` |
+
+Each example's multi-user test signs two users in and checks that their
+chats fetch the keys of a user they both meet once, that one chat serves two
+conversations, and that the shared hook retries a failed lookup and fetches
+again after its TTL. The JavaScript example also runs one bot per signed-in
+user this way: [`js/src/multi-bot.mjs`](js/src/multi-bot.mjs).
+
+With a hook set, give a chat keys you already hold with `addSigningKeys` or
+`addPublicKeys`. `setSigningKeys` replaces every stored key, the fetched
+ones included. [Many users, many
+conversations](../docs/API.md#many-users-many-conversations) has the rest:
+what a chat keeps, and when a key a user registers later is picked up.
 
 ## Running an example
 

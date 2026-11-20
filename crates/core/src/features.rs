@@ -503,7 +503,6 @@ pub(crate) mod shared {
     /// The value of [`super::API_BASE_URL_ENV`] as a binding handed it over,
     /// for a core that cannot read the environment itself.
     static API_BASE_URL: RwLock<Option<String>> = RwLock::new(None);
-    static CLOCK: RwLock<Option<fn() -> u64>> = RwLock::new(None);
 
     fn requests() -> MutexGuard<'static, Requests> {
         static REQUESTS: OnceLock<Mutex<Requests>> = OnceLock::new();
@@ -513,29 +512,14 @@ pub(crate) mod shared {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Milliseconds on the registered clock, else on a monotonic system
-    /// clock. WebAssembly has no system clock, so its binding registers one.
+    /// Milliseconds on the core's clock, which a WebAssembly binding
+    /// registers.
     fn now_ms() -> u64 {
-        if let Some(clock) = *CLOCK.read().unwrap_or_else(PoisonError::into_inner) {
-            return clock();
-        }
-        system_ms()
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn system_ms() -> u64 {
-        static START: OnceLock<std::time::Instant> = OnceLock::new();
-        let elapsed = START.get_or_init(std::time::Instant::now).elapsed();
-        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn system_ms() -> u64 {
-        0
+        crate::clock::now_ms()
     }
 
     pub(crate) fn set_clock(clock: fn() -> u64) {
-        *CLOCK.write().unwrap_or_else(PoisonError::into_inner) = Some(clock);
+        crate::clock::set_clock(clock);
     }
 
     pub(crate) fn set_default_endpoint(endpoint: Option<&str>) {

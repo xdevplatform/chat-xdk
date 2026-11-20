@@ -51,6 +51,7 @@ call to adopt.
 - [ ] `[runtime]` [Pass user ids and key versions as strings of digits](#user-ids-and-key-versions-are-strings-of-digits)
 - [ ] `[runtime]` [Pass entities, files, URL cards and posts the SDK accepts](#entities-files-url-cards-and-posts-are-checked)
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a `null` `latest_version`](#latest_version-comes-from-a-verified-key-change)
+- [ ] `[new]` [Ask the chat whose public keys it lacks, and read keys from its cache](#the-chat-can-fetch-public-keys-and-keep-keys)
 - [ ] `[runtime]` [Rename every read of `target_message_id` to `target_message_sequence_id`](#target_message_id-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `reply_to_event`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
 - [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
@@ -400,9 +401,11 @@ take(chat_xdk_import_keys(chat, keys, keys_len, "{\"signing_key_version\":\"1\"}
 ### Decrypt with params documents
 
 `chat_xdk_decrypt_events` and `chat_xdk_decrypt_event` each take one
-document. Leave out `signing_keys` to verify with the keys
-`chat_xdk_set_signing_keys` stored, and `conversation_keys` to resolve the
-key from the key cache. A batch's result holds the decrypted events, of
+document. Leave out `signing_keys` to verify with the stored signing keys,
+the ones `chat_xdk_set_signing_keys`, `chat_xdk_add_signing_keys` and
+`chat_xdk_add_public_keys` stored (see [The chat can fetch public keys and
+keep keys](#the-chat-can-fetch-public-keys-and-keep-keys)), and
+`conversation_keys` to resolve the key from the key cache. A batch's result holds the decrypted events, of
 every event type, under `events`, and the events left out under `errors`,
 events decrypt drops included; `chat_xdk_decrypt_event` fails for one.
 
@@ -863,13 +866,22 @@ A batch's `conversation_keys.latest_version`, the version to encrypt with,
 is the newest version whose key change verified, and it never moves back
 for the chat's lifetime. A key change verifies only against its sender's
 signing key, so give the chat every participant's signing keys, your own
-included, before you decrypt. It's `null` until a key change verifies: a
-key change the SDK can't verify still adds its key to
-`conversation_keys.keys`, for decrypting, but never becomes the version you
-encrypt with. Where 0.5.x returned the batch's highest version, 0.7.x can
-return `null`: fetch the missing signing keys or the conversation's
-key-change events and decrypt again, rather than encrypting under the
-highest key in `keys`:
+included, before you decrypt, or add the keys the batch reports missing and
+decrypt again (see [The chat can fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)). It's `null` until a
+key change verifies: a
+key change the SDK can't verify never becomes the version you encrypt with,
+and one sequenced since late June 2026 also has its key left out of
+`conversation_keys.keys`, so the messages under it don't decrypt; the
+result's `unverified_key_changes` holds each such key change, by its index
+in the batch, with the signing key it needs. A batch whose events belong to
+more than one conversation reports each one's version in
+`conversation_keys.latest_versions` and each one's keys in
+`conversation_keys.keys_by_conversation`, and its `latest_version` is `null`.
+Where 0.5.x returned the batch's
+highest version, 0.7.x can return `null`: fetch the missing signing keys or
+the conversation's key-change events and decrypt again, rather than
+encrypting under the highest key in `keys`:
 
 ```c
 // 0.5.x
@@ -891,6 +903,64 @@ if (version == NULL) {
     return;
 }
 ```
+
+### The chat can fetch public keys and keep keys
+
+From 0.7.6 a chat does more of the key handling above itself. Nothing here
+changes a call that passes its keys: each item is a field you can leave out.
+
+- **The chat says whose public keys it lacks.** A batch result lists, in
+  `missing_signing_keys`, each event whose sender's signing key the call did
+  not have. `chat_xdk_missing_public_keys` takes that object and returns the
+  users to fetch, and `chat_xdk_add_public_keys` stores their records as
+  `GET /2/users/{id}/public_keys` returns them, by user id. A lookup that
+  brought no key is not asked for again for a minute. The C ABI takes no
+  callback: the bindings over it build their public-key hooks from these two
+  calls, and so can your code.
+- **The prepare calls read the stored keys.** The documents of
+  `chat_xdk_prepare_conversation_key_change`,
+  `chat_xdk_prepare_group_create`, `chat_xdk_prepare_group_members_change`
+  and `chat_xdk_prepare_group_members_remove` may leave out `public_keys`.
+  Each call then encrypts the new key to the stored keys of the members its
+  document names (`remaining_member_ids` for a removal, and `member_ids` or
+  a one-to-one's id for a key change).
+  `chat_xdk_missing_public_keys_for` returns the members such a call has no
+  key for.
+- **`chat_xdk_add_signing_keys` adds to the stored signing keys**, where
+  `chat_xdk_set_signing_keys` replaces them all.
+- **The key cache serves more calls.** With
+  `chat_xdk_set_cache_keys(chat, 1)`, `chat_xdk_decrypt_event` caches the
+  key of a key change that verifies, as `chat_xdk_decrypt_events` does, the
+  four prepare calls above cache the key they make, and the cache keeps
+  every key version of a conversation. The documents of
+  `chat_xdk_decrypt_file` and `chat_xdk_file_decryptor_new` may then leave
+  out `conversation_keys`, and the document of
+  `chat_xdk_prepare_group_avatar_change` its `conversation_key_version`.
+
+```c
+// 0.7.x
+// {"events": ["..."]}
+char *batch = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
+
+// {"1": {"user_id": "4202", "public_key_version": "1"}}
+char *user_ids = take(chat_xdk_missing_public_keys(chat, missing_signing_keys_json));
+
+// {"4202": [{"public_key_version": "1", "public_key": "...", "signing_public_key": "...",
+//  "identity_public_key_signature": "..."}]}
+take(chat_xdk_add_public_keys(chat, public_keys_json));
+char *again = take(chat_xdk_decrypt_events(chat, decrypt_events_json));
+
+// {"conversation_id": "g1", "member_ids": ["4201", "4202"], "admin_ids": ["4201"]}
+char *created = take(chat_xdk_prepare_group_create(chat, group_create_json));
+```
+
+`missing_signing_keys_json` is the `missing_signing_keys` object of `batch`,
+and `user_ids` a JSON array such as `["4202"]`. `public_keys_json` holds, for
+each of those users, the `data` array of `GET /2/users/{id}/public_keys`.
+
+A server with many signed-in users keeps one chat per user and one cache of
+public keys for all of them: see [Many users, many
+conversations](../API.md#many-users-many-conversations).
 
 ### `target_message_id` holds a different value
 
@@ -1338,12 +1408,12 @@ api_post("/2/chat/conversations/g1/members/remove", remove_request_json);
 
 **Encrypt under the new key as soon as the request succeeds.** The removed
 members hold the old key, so a message encrypted under it is one they can
-read. The key cache (`chat_xdk_set_cache_keys(chat, 1)`) adopts the new key
-only once `chat_xdk_decrypt_events` decrypts the removal's key change from
-the conversation's events, and only if that key change verifies against
-your own signing key; until then an encrypt call that omits the key
-resolves the old one. Store the new key and version, and pass them to every
-encrypt and prepare call until the cache holds them:
+read. From 0.7.6, a chat whose key cache is on
+(`chat_xdk_set_cache_keys(chat, 1)`) caches the new key when the prepare
+call returns, so an encrypt call that omits the key resolves the new one
+from then on. If the request fails, prepare the removal again: no other
+member holds the key of a request that failed. Without the cache, store the
+new key and version, and pass them to every encrypt and prepare call:
 
 ```c
 // 0.7.x

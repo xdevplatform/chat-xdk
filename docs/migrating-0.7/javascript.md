@@ -51,6 +51,7 @@ first call), `[runtime]` a change in behavior that nothing reports, and
 - [ ] `[runtime]` [Pass millisecond values as safe integers](#millisecond-values-are-safe-integers)
 - [ ] `[runtime]` [Pass entities, files, URL cards and posts the SDK accepts](#entities-files-url-cards-and-posts-are-checked)
 - [ ] `[runtime]` [Store every participant's signing keys, and handle a `latestVersion` of `null`](#latestversion-comes-from-a-verified-key-change)
+- [ ] `[new]` [Let the chat fetch public keys through a hook, and read keys from its cache](#the-chat-can-fetch-public-keys-and-keep-keys)
 - [ ] `[runtime]` [Rename every read of `targetMessageId` to `targetMessageSequenceId`](#targetmessageid-holds-a-different-value)
 - [ ] `[runtime]` [Reply with `replyToEvent`, whose preview recipients check exactly](#a-reply-preview-quotes-its-message-exactly)
 - [ ] `[runtime]` [Open media a reply quotes with the reply's event and the whole key map, and show it as the reply's claim](#media-a-reply-quotes-opens-with-the-replys-event)
@@ -84,10 +85,10 @@ returns, `payload` for a `SendPayload`, `prepared` for a
 and `groupChange` for a decrypted keyChange, message, messageDeleted,
 readReceipt and groupChange event, `err` for an error a call threw, and
 `page` for a page of `GET /2/chat/conversations/{id}/events`.
-`api.post(path, body)`, `api.put(path, body)` and `api.delete(path, body)`
-stand for your HTTP client: each sends `body` as JSON to `https://api.x.com`
-+ `path` with your user access token, and resolves to the parsed JSON
-response. `pathId` is the conversation id as a request path takes it: a
+`api.post(path, body)`, `api.put(path, body)`, `api.delete(path, body)` and
+`api.get(path)` stand for your HTTP client: each sends a request to
+`https://api.x.com` + `path` with your user access token, the first three
+with `body` as JSON, and resolves to the parsed JSON response. `pathId` is the conversation id as a request path takes it: a
 group's `g…` id as is, and a one-to-one's in its hyphen form,
 `conversationId.replaceAll(":", "-")`. `photoAttachment(mediaHashKey)`
 stands for your code that builds a photo's attachment descriptor;
@@ -382,7 +383,10 @@ chat.importKeys({ keys: privateKeys, signingKeyVersion });
 ### `decryptEvents` takes a params object
 
 Pass `{ events, signingKeys }`. `signingKeys` is optional; without it, the
-keys `setSigningKeys` stored verify the events. An event that fails, or one
+stored signing keys verify the events: the ones `setSigningKeys`,
+`addSigningKeys` and `addPublicKeys` stored, and the ones a hook fetched
+(see [The chat can fetch public keys and keep
+keys](#the-chat-can-fetch-public-keys-and-keep-keys)). An event that fails, or one
 decrypt drops, is collected in the result's `errors` rather than thrown;
 the call throws only for invalid params, such as `events` that is not an
 array of strings or a malformed `signingKeys` entry. The result holds the
@@ -943,12 +947,21 @@ const payload = chat.encryptMessage({
 newest version whose key change verified, and it never moves back for the
 chat's lifetime. A key change verifies only against its sender's signing
 key, so give the chat every participant's signing keys, your own included,
-before you decrypt. It's `null` until a key change verifies: a key change
-the SDK can't verify still adds its key to `result.conversationKeys.keys`,
-for decrypting, but never becomes the version you encrypt with. Where 0.5.x
-returned the batch's highest version, 0.7.x can return `null`: fetch the
-missing signing keys or the conversation's key-change events and decrypt
-again, rather than encrypting under the highest key in `keys`:
+before you decrypt, or a hook that fetches them (see [The chat can fetch
+public keys and keep keys](#the-chat-can-fetch-public-keys-and-keep-keys)).
+It's `null` until a key change verifies: a key change
+the SDK can't verify never becomes the version you encrypt with, and one
+sequenced since late June 2026 also has its key left out of
+`result.conversationKeys.keys`, so the messages under it don't decrypt;
+`result.unverifiedKeyChanges` holds each such key change, by its index in the
+batch, with the signing key it needs. A batch whose events belong to more
+than one conversation reports each one's version in
+`result.conversationKeys.latestVersions` and each one's keys in
+`result.conversationKeys.keysByConversation`, and its `latestVersion` is
+`null`. Where 0.5.x returned the batch's
+highest version, 0.7.x can return `null`: fetch the missing signing keys or
+the conversation's key-change events and decrypt again, rather than
+encrypting under the highest key in `keys`:
 
 ```js
 // 0.5.x
@@ -966,6 +979,57 @@ if (version === null) {
   // then decrypt again.
 }
 ```
+
+### The chat can fetch public keys and keep keys
+
+From 0.7.6 a chat does more of the key handling above itself. Nothing here
+changes a call that passes its keys: each item is an argument you no longer
+have to supply.
+
+- **A hook fetches public keys.** Give the chat a `resolvePublicKeys`
+  function, in `createChat`'s options or with `setResolvePublicKeys`. It
+  takes user ids and resolves to each user's records from
+  `GET /2/users/{id}/public_keys`, by user id. `decryptEventsAsync` then
+  fetches the signing keys of the senders a batch needs and the chat has
+  none for, and decrypts the batch again.
+  `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+  `prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync` need
+  no `publicKeys`: each encrypts the new key to the stored keys of the
+  members its params name (`remainingMemberIds` for a removal, and
+  `memberIds` or a one-to-one's id for a key change), and fetches the ones
+  the chat has none for. Only these five methods call the hook. Setting it
+  turns the key cache on.
+- **Or fetch them yourself.** `decryptEvents` lists each event whose
+  sender's signing key it did not have in `missingSigningKeys`.
+  `missingPublicKeys(result)` names those users, and `addPublicKeys(records)`
+  stores their records as the X API returned them.
+- **`addSigningKeys` adds to the stored signing keys**, where
+  `setSigningKeys` replaces them all. With a hook set, add: replacing also
+  drops the keys the hook fetched.
+- **The key cache serves more calls.** With `setCacheKeys(true)`,
+  `decryptEvent` caches the key of a key change that verifies, as
+  `decryptEvents` does, the four prepare calls above cache the key they
+  make, and the cache keeps every key version of a conversation.
+  `decryptFile` and `fileDecryptor` then need no `conversationKeys`, and
+  `prepareGroupAvatarChange` no `conversationKeyVersion`.
+
+```js
+// 0.7.x
+chat.setResolvePublicKeys(async (ids) =>
+  Object.fromEntries(
+    await Promise.all(
+      ids.map(async (id) => [id, (await api.get(`/2/users/${id}/public_keys`)).data]),
+    ),
+  ),
+);
+const result = await chat.decryptEventsAsync({ events });
+for (const { event } of result.events) handle(event);
+const created = await chat.prepareGroupCreateAsync({ conversationId, memberIds, adminIds, title });
+```
+
+A server with many signed-in users keeps one chat per user and gives every
+chat the same hook function: see [Many users, many
+conversations](../API.md#many-users-many-conversations).
 
 ### `targetMessageId` holds a different value
 
@@ -1431,12 +1495,12 @@ await api.post(`/2/chat/conversations/${pathId}/members/remove`, {
 
 **Encrypt under the new key as soon as the request succeeds.** The removed
 members hold the old key, so a message encrypted under it is one they can
-read. The key cache (`setCacheKeys(true)`) adopts the new key only once
-`decryptEvents` decrypts the removal's key change from the conversation's
-events, and only if that key change verifies against your own signing key;
-until then an encrypt call that omits the key resolves the old one. Store
-the new key and version, and pass them to every encrypt and prepare call
-until the cache holds them:
+read. From 0.7.6, a chat whose key cache is on (`setCacheKeys(true)`) caches
+the new key when the prepare call returns, so an encrypt call that omits the
+key resolves the new one from then on. If the request fails, prepare the
+removal again: no other member holds the key of a request that failed.
+Without the cache, store the new key and version, and pass them to every
+encrypt and prepare call:
 
 ```js
 // 0.7.x

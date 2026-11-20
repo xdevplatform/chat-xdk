@@ -96,14 +96,37 @@ type PublicKeyInput struct {
 	PublicKeyVersion string `json:"public_key_version"`
 }
 
-// ConversationKeyBundle holds decrypted conversation key material keyed by version.
-// Keys maps version string -> raw 32-byte conversation key. LatestVersion is
-// the version to encrypt with: from DecryptEvents, the newest version whose
-// key change verified (nil until one verifies); from ExtractConversationKeys,
-// the batch's highest version.
+// ConversationKeyBundle holds the conversation keys a batch's key changes
+// carry, and the key version to encrypt with.
+//
+// KeysByConversation and LatestVersions are keyed by conversation id, in the
+// form events carry: a group's "g…" id, and a one-to-one's two user ids
+// ordered numerically and colon-separated. Keys and LatestVersion hold the
+// same without the conversation id, for a batch whose events all belong to
+// one conversation.
+//
+// Keys maps version string -> raw 32-byte conversation key, over every
+// conversation of the batch. A version that key changes of more than one
+// conversation carry is left out of it, because a lookup by version alone
+// cannot say which conversation's key it wants: read KeysByConversation,
+// which holds each key under the conversation of the key change that carries
+// it.
+//
+// LatestVersions maps each conversation to the version to encrypt with
+// there. From DecryptEvents it holds the newest version whose key change
+// verified; a conversation without one has no entry. From
+// ExtractConversationKeys, which checks no signature, it holds each
+// conversation's highest version in the batch.
+//
+// LatestVersion is that version when every event of the batch belongs to one
+// conversation, and nil when that conversation has none. It is nil for a
+// batch whose events belong to more than one conversation, where one version
+// cannot name each conversation's key: read LatestVersions.
 type ConversationKeyBundle struct {
-	Keys          map[string][]byte `json:"keys"`
-	LatestVersion *string           `json:"latest_version"`
+	Keys               map[string][]byte            `json:"keys"`
+	KeysByConversation map[string]map[string][]byte `json:"keys_by_conversation"`
+	LatestVersion      *string                      `json:"latest_version"`
+	LatestVersions     map[string]string            `json:"latest_versions"`
 }
 
 // DecryptedEvent is one event DecryptEvents decrypted, of any event type.
@@ -114,14 +137,202 @@ type DecryptedEvent struct {
 	OriginalB64 string `json:"original_b64,omitempty"`
 }
 
-// DecryptEventsResult is the batch decrypt API. Errors maps the index of each
-// event left out of Events, as a string, to its error: one that failed, or one
-// decrypt drops, such as a member removal's title or description re-encrypted
-// under the new key.
+// UnverifiedKeyChangeReason is why a key change's signature did not verify.
+type UnverifiedKeyChangeReason string
+
+const (
+	// UnverifiedKeyChangeMissingSigningKey: none of the signing keys the call
+	// verified with is the sender's at the key version the signature names.
+	// Pass that user's public keys as signing keys and decrypt again.
+	UnverifiedKeyChangeMissingSigningKey UnverifiedKeyChangeReason = "MissingSigningKey"
+	// UnverifiedKeyChangeRejectedSigningKey: the sender's signing key at that
+	// key version was among the signing keys, but its identity binding does
+	// not verify, so the call left it out: it is in RejectedSigningKeys.
+	// Fetching the same entry again changes nothing.
+	UnverifiedKeyChangeRejectedSigningKey UnverifiedKeyChangeReason = "RejectedSigningKey"
+	// UnverifiedKeyChangeInvalidSignature: the signature does not verify
+	// against the sender's signing key.
+	UnverifiedKeyChangeInvalidSignature UnverifiedKeyChangeReason = "InvalidSignature"
+	// UnverifiedKeyChangeUnverifiable: the key change carries no signature,
+	// or one this SDK cannot check: an unsupported signature version, or one
+	// below the first whose payload a recipient can rebuild.
+	UnverifiedKeyChangeUnverifiable UnverifiedKeyChangeReason = "Unverifiable"
+)
+
+// UnverifiedKeyChange is a key change in a DecryptEvents batch whose key this
+// identity decrypted but whose signature did not verify.
+type UnverifiedKeyChange struct {
+	// Reason is why its signature did not verify.
+	Reason UnverifiedKeyChangeReason `json:"reason"`
+	// KeyDropped is whether its key was left out of ConversationKeys, so the
+	// messages of its conversation under that key version did not decrypt. A
+	// key that was kept decrypts messages but never becomes the version to
+	// encrypt with.
+	KeyDropped bool `json:"key_dropped"`
+	// ConversationID is the conversation the key change belongs to.
+	ConversationID *string `json:"conversation_id"`
+	// ConversationKeyVersion is the conversation key version the key change
+	// carries.
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	// SenderID is the user who signed the key change: the member who made it.
+	SenderID *string `json:"sender_id"`
+	// PublicKeyVersion is the version of that user's signing key the
+	// signature names.
+	PublicKeyVersion *string `json:"public_key_version"`
+}
+
+// UndecryptableKeyChangeReason is why this identity could not decrypt the
+// conversation key a key change carries.
+type UndecryptableKeyChangeReason string
+
+const (
+	// UndecryptableKeyChangeLocked: no identity key is loaded. Load or unlock
+	// the keys, then decrypt again.
+	UndecryptableKeyChangeLocked UndecryptableKeyChangeReason = "Locked"
+	// UndecryptableKeyChangeNotARecipient: the key change holds no key for
+	// this chat's user, the user SetIdentity names; without a session
+	// identity, it holds no key at all. The user was not a member when the
+	// key change was made.
+	UndecryptableKeyChangeNotARecipient UndecryptableKeyChangeReason = "NotARecipient"
+	// UndecryptableKeyChangeOtherKeyVersion: the key change holds keys for
+	// this chat's user, or for some user when no session identity names one,
+	// but none at this chat's key version: it was made for another
+	// registration of the user's keys. Check the key version given to
+	// SetIdentity or ImportKeys.
+	UndecryptableKeyChangeOtherKeyVersion UndecryptableKeyChangeReason = "OtherKeyVersion"
+	// UndecryptableKeyChangeDecryptionFailed: a key the key change holds for
+	// this chat's key version does not decrypt under the loaded identity key:
+	// the loaded private key is not the one registered at that version.
+	UndecryptableKeyChangeDecryptionFailed UndecryptableKeyChangeReason = "DecryptionFailed"
+)
+
+// UndecryptableKeyChange is a key change in a DecryptEvents batch whose
+// conversation key this identity could not decrypt.
+type UndecryptableKeyChange struct {
+	// Reason is why its key could not be decrypted.
+	Reason UndecryptableKeyChangeReason `json:"reason"`
+	// ConversationID is the conversation the key change belongs to.
+	ConversationID *string `json:"conversation_id"`
+	// ConversationKeyVersion is the conversation key version the key change
+	// carries.
+	ConversationKeyVersion string `json:"conversation_key_version"`
+	// SenderID is the user who made the key change.
+	SenderID *string `json:"sender_id"`
+}
+
+// RejectedSigningKey is a signing key a DecryptEvents call left out of
+// verification because its identity binding does not verify:
+// IdentityPublicKeySignature is not the signing key's signature over
+// IdentityPublicKey.
+type RejectedSigningKey struct {
+	// UserID is the entry's UserID.
+	UserID string `json:"user_id"`
+	// PublicKeyVersion is the entry's PublicKeyVersion.
+	PublicKeyVersion string `json:"public_key_version"`
+}
+
+// MissingSigningKey is the signing key a signed event in a DecryptEvents
+// batch needed and the call did not verify with.
+type MissingSigningKey struct {
+	// UserID is the user who signed the event: its sender.
+	UserID string `json:"user_id"`
+	// PublicKeyVersion is the version of that user's signing key the
+	// event's signature names.
+	PublicKeyVersion string `json:"public_key_version"`
+}
+
+// PublicKeyRecord is one of a user's public keys, as the X API returns it in
+// the data of GET /2/users/{id}/public_keys. AddPublicKeys stores records,
+// and a SetResolvePublicKeys hook returns them.
+//
+// A record unmarshals from the API's own JSON: public_key_version may be
+// written as a string or as a number, and any other field, such as
+// juicebox_config, is ignored.
+type PublicKeyRecord struct {
+	// PublicKeyVersion is the version of this key.
+	PublicKeyVersion string `json:"public_key_version"`
+	// PublicKey is the user's identity public key, base64.
+	PublicKey string `json:"public_key"`
+	// SigningPublicKey is the user's signing public key, base64.
+	SigningPublicKey string `json:"signing_public_key"`
+	// IdentityPublicKeySignature is the signing key's signature over the
+	// identity key, base64: what binds the two.
+	IdentityPublicKeySignature string `json:"identity_public_key_signature"`
+}
+
+// UnmarshalJSON reads a record as the X API sends it.
+func (r *PublicKeyRecord) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		PublicKeyVersion           keyVersion `json:"public_key_version"`
+		PublicKey                  string     `json:"public_key"`
+		SigningPublicKey           string     `json:"signing_public_key"`
+		IdentityPublicKeySignature string     `json:"identity_public_key_signature"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*r = PublicKeyRecord{
+		PublicKeyVersion:           string(wire.PublicKeyVersion),
+		PublicKey:                  wire.PublicKey,
+		SigningPublicKey:           wire.SigningPublicKey,
+		IdentityPublicKeySignature: wire.IdentityPublicKeySignature,
+	}
+	return nil
+}
+
+// keyVersion is a key version read from JSON that writes it as a string or
+// as a number.
+type keyVersion string
+
+func (v *keyVersion) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var text string
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		*v = keyVersion(text)
+		return nil
+	}
+	// A number keeps the digits it was written with; null leaves the
+	// version empty.
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return err
+	}
+	*v = keyVersion(number.String())
+	return nil
+}
+
+// DecryptEventsResult is the batch decrypt API.
+//
+// Errors, UnverifiedKeyChanges, UndecryptableKeyChanges and
+// MissingSigningKeys are keyed by an event's index in the batch, as a
+// string, and RejectedSigningKeys by a signing key's index, as a string.
+// Each is empty when it has nothing to report.
+//
+// Errors holds the error of each event left out of Events: one that failed,
+// or one decrypt drops, such as a member removal's title or description
+// re-encrypted under the new key. UnverifiedKeyChanges holds each key change
+// whose signature did not verify, with why and whether its key was dropped.
+// UndecryptableKeyChanges holds each key change whose conversation key this
+// identity could not decrypt, with why; such a key change gives the batch no
+// key, so the messages of its conversation under its key version did not
+// decrypt. RejectedSigningKeys holds each of the signing keys the call
+// verified with (SigningKeys, or the stored ones when it was given none)
+// that it left out because its identity binding does not verify; an event
+// signed with such a key does not verify. MissingSigningKeys holds, for each
+// signed event whose sender's signing key was not among the signing keys the
+// call verified with, that sender and the key version the signature names:
+// a key change, a message, or any other signed event. Chat.MissingPublicKeys
+// lists the users to fetch public keys for.
 type DecryptEventsResult struct {
-	Events           []DecryptedEvent      `json:"events"`
-	ConversationKeys ConversationKeyBundle `json:"conversation_keys"`
-	Errors           map[string]string     `json:"errors"`
+	Events                  []DecryptedEvent                  `json:"events"`
+	ConversationKeys        ConversationKeyBundle             `json:"conversation_keys"`
+	Errors                  map[string]string                 `json:"errors"`
+	UnverifiedKeyChanges    map[string]UnverifiedKeyChange    `json:"unverified_key_changes"`
+	UndecryptableKeyChanges map[string]UndecryptableKeyChange `json:"undecryptable_key_changes"`
+	RejectedSigningKeys     map[string]RejectedSigningKey     `json:"rejected_signing_keys"`
+	MissingSigningKeys      map[string]MissingSigningKey      `json:"missing_signing_keys"`
 }
 
 // PreparedConversationChange is returned by PrepareConversationKeyChange,
@@ -151,11 +362,21 @@ type PreparedConversationChange struct {
 // ConversationKeyChangeParams are the parameters for PrepareConversationKeyChange.
 // SenderID and SigningKeyVersion are optional overrides: empty resolves from
 // the session identity set via SetIdentity.
+//
+// PublicKeys are the identity keys of every participant, the sender
+// included. Leave them nil to encrypt the key to the public keys this Chat
+// has stored (AddPublicKeys, or a SetResolvePublicKeys hook) for the users
+// in MemberIDs, or, without MemberIDs, for the two users of the one-to-one
+// conversation ConversationID names.
 type ConversationKeyChangeParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity
 	PublicKeys        []PublicKeyInput `json:"public_keys"`
 	ConversationID    string           `json:"conversation_id,omitempty"` // empty = derive the one-to-one id
+	// MemberIDs are the user ids of every participant, the sender included.
+	// They are read only when PublicKeys is empty, to name the users whose
+	// stored public keys the key is encrypted to.
+	MemberIDs []string `json:"member_ids,omitempty"`
 }
 
 // GroupMembersChangeParams are the parameters for PrepareGroupMembersChange.
@@ -164,6 +385,11 @@ type ConversationKeyChangeParams struct {
 // CurrentDescription are plaintext: the call encrypts each under the new
 // conversation key it generates. CurrentAvatarURL is the avatar's media URL,
 // signed as is.
+//
+// PublicKeys are the identity keys of the current and the new members.
+// Leave them nil to encrypt the key to the public keys this Chat has stored
+// (AddPublicKeys, or a SetResolvePublicKeys hook) for the users in
+// CurrentMemberIDs and NewMemberIDs.
 type GroupMembersChangeParams struct {
 	SenderID                            string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion                   string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -185,6 +411,11 @@ type GroupMembersChangeParams struct {
 // the session identity set via SetIdentity. Title is plaintext: the create
 // encrypts it under the new conversation key. A create sets no avatar; set it
 // afterwards with PrepareGroupAvatarChange.
+//
+// PublicKeys are the identity keys of every member, the creator included.
+// Leave them nil to encrypt the key to the public keys this Chat has stored
+// (AddPublicKeys, or a SetResolvePublicKeys hook) for the users in MemberIDs
+// and AdminIDs.
 type GroupCreateParams struct {
 	SenderID          string           `json:"sender_id,omitempty"`           // empty = session identity
 	SigningKeyVersion string           `json:"signing_key_version,omitempty"` // empty = session identity
@@ -464,11 +695,13 @@ const (
 //
 // PublicKeys are the identity keys of the members who stay, yours included:
 // the call rotates the conversation key for them, and a member left out can't
-// read what the group sends under the new key. Title and Description are the
-// group's current plaintext metadata; pass each one the group has. Each one
-// set is encrypted under the new key and signed with the removal as a
-// key-rotation re-encryption, which recipients' decrypt drops rather than show
-// as a change.
+// read what the group sends under the new key. Leave them nil and name those
+// members in RemainingMemberIDs to encrypt the key to the public keys this
+// Chat has stored for them (AddPublicKeys, or a SetResolvePublicKeys hook).
+// Title and Description are the group's current plaintext metadata; pass each
+// one the group has. Each one set is encrypted under the new key and signed
+// with the removal as a key-rotation re-encryption, which recipients' decrypt
+// drops rather than show as a change.
 type GroupMembersRemoveParams struct {
 	// PublicKeys are the identity keys of the members who stay, yours included.
 	PublicKeys     []PublicKeyInput `json:"public_keys"`
@@ -479,6 +712,10 @@ type GroupMembersRemoveParams struct {
 	Description       string   `json:"description,omitempty"` // empty = unset
 	SenderID          string   `json:"sender_id,omitempty"`
 	SigningKeyVersion string   `json:"signing_key_version,omitempty"`
+	// RemainingMemberIDs are the user ids of the members who stay, yours
+	// included. They are read only when PublicKeys is empty, to name the
+	// users whose stored public keys the new key is encrypted to.
+	RemainingMemberIDs []string `json:"remaining_member_ids,omitempty"`
 }
 
 // GroupLeaveParams are the parameters for PrepareGroupLeave.
@@ -514,13 +751,14 @@ type GroupTitleChangeParams struct {
 // A group's avatar URL is not encrypted. NewAvatarURL is the media URL of the
 // avatar image, which the app encrypts under the conversation key and uploads
 // first; ConversationKeyVersion is the version of the key the image is
-// encrypted under.
+// encrypted under. Leave it empty to sign the version of the conversation's
+// newest key in the opt-in key cache (SetCacheKeys).
 type GroupAvatarChangeParams struct {
 	ConversationID         string `json:"conversation_id"`
 	NewAvatarURL           string `json:"new_avatar_url"`
-	ConversationKeyVersion string `json:"conversation_key_version"`
-	SenderID               string `json:"sender_id,omitempty"`           // empty = session identity
-	SigningKeyVersion      string `json:"signing_key_version,omitempty"` // empty = session identity
+	ConversationKeyVersion string `json:"conversation_key_version,omitempty"` // empty = newest cached key's version
+	SenderID               string `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string `json:"signing_key_version,omitempty"`      // empty = session identity
 }
 
 // GroupDescriptionChangeParams are the parameters for PrepareGroupDescriptionChange.
@@ -656,7 +894,7 @@ type DecryptEventParams struct {
 	// (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// SigningKeys verify the event; nil or empty uses the keys stored via
-	// SetSigningKeys.
+	// SetSigningKeys, AddSigningKeys and AddPublicKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 
@@ -666,7 +904,7 @@ type DecryptEventsParams struct {
 	// the conversation keys the messages among them are decrypted with.
 	Events []string `json:"events"`
 	// SigningKeys are the signing keys of all participants; nil or empty uses
-	// the keys stored via SetSigningKeys.
+	// the keys stored via SetSigningKeys, AddSigningKeys and AddPublicKeys.
 	SigningKeys []SigningKeyEntry `json:"signing_keys,omitempty"`
 }
 
@@ -706,7 +944,9 @@ type DecryptFileParams struct {
 	// passed to DecryptEvent.
 	EventB64 string `json:"event_b64"`
 	// ConversationKeys is the conversation's key map, as passed to
-	// DecryptEvent; it must hold the key for the message's version.
+	// DecryptEvent; it must hold the key for the message's version. Leave it
+	// nil (or empty) to take the conversation's keys from the opt-in key
+	// cache (SetCacheKeys).
 	ConversationKeys map[string][]byte `json:"conversation_keys"`
 	// MediaHashKey is the file's media hash key from the decrypted message: a
 	// media attachment, a link card's banner or favicon, or media quoted in
@@ -718,7 +958,7 @@ type DecryptFileParams struct {
 // DecryptFile apart from the encrypted file, which is fed to the decryptor.
 type FileDecryptorParams struct {
 	EventB64         string            `json:"event_b64"`
-	ConversationKeys map[string][]byte `json:"conversation_keys"`
+	ConversationKeys map[string][]byte `json:"conversation_keys"` // nil or empty = key cache
 	MediaHashKey     string            `json:"media_hash_key"`
 }
 

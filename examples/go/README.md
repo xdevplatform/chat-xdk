@@ -12,9 +12,11 @@ registered on first run); conversation state is in memory.
 | [`chatcore.go`](chatcore.go) | All encryption logic — the only file that touches `chatxdk`. |
 | [`xapi.go`](xapi.go) | The X Chat API I/O layer (plain HTTP). |
 | [`bot.go`](bot.go) | The receive → decrypt → reply → encrypt → send loop. |
+| [`multiuser.go`](multiuser.go) | Many signed-in users in one process: one chat per user, one shared public-key lookup. |
 | [`main.go`](main.go) | Entrypoint: config, key load/generate, run. |
 | [`register/main.go`](register/main.go) | One-time public-key registration (`go run ./register`). |
 | [`chatcore_test.go`](chatcore_test.go) | Offline test driving the real binding (no mocks). |
+| [`multiuser_test.go`](multiuser_test.go) | Offline test of the multi-user helpers, on the real binding. |
 
 ## Prerequisites
 
@@ -57,6 +59,45 @@ retrying. Set `CHAT_PIN` to additionally back the keys up in Juicebox
 `CHAT_PRIVATE_KEYS_B64` and `CHAT_SIGNING_KEY_VERSION` lines to paste into
 `.env`. `state/` is gitignored — never commit key blobs.
 
+## Many signed-in users in one process
+
+A chat holds one user's private keys and signs as that user. A server with
+several signed-in users keeps **one chat per user**, for all of that user's
+conversations, and never one per conversation: the chat keeps its
+conversation keys by conversation, and the public keys it has met by user id.
+
+Other users' public keys are the same whichever chat asks, so the chats share
+**one public-key hook**. [`multiuser.go`](multiuser.go) has both parts:
+
+- `NewSharedPublicKeys(fetch, ttl)` returns a `SharedPublicKeys`, whose
+  `Resolve` method is that hook. It keeps the answers of
+  `GET /2/users/{id}/public_keys` by user id for the whole process, so two
+  chats that meet the same user cost one request. Calls that ask for a user
+  whose lookup is under way wait for that lookup. A lookup that fails is
+  dropped, so the next call tries again. An answer is served for `ttl`
+  (`PublicKeysTTL` is 5 minutes) and then fetched again, so a key a user
+  registers later is picked up.
+- `UserChats` keeps one `ChatCore` per signed-in user, each created with that
+  hook: `chats.ChatFor(userID, privateKeysB64, signingKeyVersion)`.
+  `chats.Close(userID)` signs a user out.
+
+```go
+shared := NewSharedPublicKeys(api.GetPublicKeys, PublicKeysTTL)
+chats := NewUserChats(shared.Resolve)
+
+// On each request, for the signed-in user it belongs to:
+chat, err := chats.ChatFor(userID, privateKeysB64, signingKeyVersion)
+if err != nil {
+	return err
+}
+result, err := chat.DecryptBatch(eventsB64)
+```
+
+With a hook set, add keys you already hold with the SDK's `AddSigningKeys` or
+`AddPublicKeys`. `SetSigningKeys` replaces every stored key, the fetched ones
+included, and the chat then waits a minute before it asks the hook for them
+again.
+
 ## Test it (offline, no credentials)
 
 ```bash
@@ -65,7 +106,10 @@ CGO_ENABLED=1 go test ./...
 
 The test imports the fixture private keys, checks the binding reproduces the
 committed public-key/signature vectors, and runs a real encrypt → decrypt
-round-trip plus a conversation-key ECIES round-trip.
+round-trip plus a conversation-key ECIES round-trip. The multi-user test signs
+two users in, and checks that their chats fetch the keys of a user they both
+meet once, that one chat serves two conversations, and that the shared lookup
+shares a fetch under way, retries a failure and fetches again after its TTL.
 
 ## License
 

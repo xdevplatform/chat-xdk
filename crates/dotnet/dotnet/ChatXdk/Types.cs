@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -244,6 +245,72 @@ namespace ChatXdk
     }
 
     /// <summary>
+    /// One of a user's public keys, as the X API returns it: an element of the <c>data</c>
+    /// array of <c>GET /2/users/{id}/public_keys</c>. That array deserializes into records as
+    /// it is, with <c>JsonSerializer.Deserialize&lt;List&lt;PublicKeyRecord&gt;&gt;</c>: a
+    /// <c>public_key_version</c> written as a string or as a number is read, and the fields the
+    /// SDK does not use, such as <c>juicebox_config</c>, are ignored. Pass a user's records to
+    /// <see cref="Chat.AddPublicKeys"/>, or return them from <see cref="Chat.ResolvePublicKeys"/>.
+    /// A record without a key version, an identity key or a signing key is left out.
+    /// </summary>
+    public sealed class PublicKeyRecord
+    {
+        /// <summary>The version of this key.</summary>
+        [JsonPropertyName("public_key_version")]
+        [JsonConverter(typeof(PublicKeyVersionConverter))]
+        public string PublicKeyVersion { get; init; } = "";
+
+        /// <summary>The user's base64 identity public key.</summary>
+        [JsonPropertyName("public_key")]
+        public string PublicKey { get; init; } = "";
+
+        /// <summary>The user's base64 signing public key.</summary>
+        [JsonPropertyName("signing_public_key")]
+        public string SigningPublicKey { get; init; } = "";
+
+        /// <summary>
+        /// The signing key's base64 signature over the identity key, which binds the two.
+        /// </summary>
+        [JsonPropertyName("identity_public_key_signature")]
+        public string IdentityPublicKeySignature { get; init; } = "";
+    }
+
+    /// <summary>
+    /// Reads a public key version the X API writes as a JSON string or as a whole number, and
+    /// writes it as a string. A null, or a number that is not a whole number, reads as empty.
+    /// </summary>
+    internal sealed class PublicKeyVersionConverter : JsonConverter<string>
+    {
+        public override bool HandleNull => true;
+
+        public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.String:
+                    return reader.GetString() ?? "";
+                case JsonTokenType.Null:
+                    return "";
+                case JsonTokenType.Number:
+                    if (reader.TryGetInt64(out var whole))
+                        return whole.ToString(CultureInfo.InvariantCulture);
+                    if (reader.TryGetUInt64(out var large))
+                        return large.ToString(CultureInfo.InvariantCulture);
+                    // A whole number written with a fraction or an exponent, such as 7.0.
+                    return reader.TryGetDouble(out var number)
+                        && number >= 0 && number < 9.0e15 && Math.Floor(number) == number
+                        ? ((ulong)number).ToString(CultureInfo.InvariantCulture)
+                        : "";
+                default:
+                    throw new JsonException("public_key_version must be a string or a number");
+            }
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value);
+    }
+
+    /// <summary>
     /// Returned by <see cref="Chat.PrepareConversationKeyChange"/>,
     /// <see cref="Chat.PrepareGroupCreate"/>, <see cref="Chat.PrepareGroupMembersChange"/>, and
     /// <see cref="Chat.PrepareGroupMembersRemove"/>. Carries everything needed to POST the change.
@@ -307,19 +374,48 @@ namespace ChatXdk
 
     /// <summary>
     /// Conversation keys from <see cref="Chat.ExtractConversationKeys"/> or nested inside
-    /// <see cref="DecryptEventsResult"/>.
+    /// <see cref="DecryptEventsResult"/>: the conversation keys a batch's key changes carry, and
+    /// the key version to encrypt with.
+    /// <see cref="KeysByConversation"/> and <see cref="LatestVersions"/> are keyed by
+    /// conversation id, in the form events carry: a group's <c>g…</c> id, and a one-to-one's
+    /// two user ids ordered numerically and colon-separated. <see cref="Keys"/> and
+    /// <see cref="LatestVersion"/> hold the same without the conversation id, for a batch whose
+    /// events all belong to one conversation.
     /// </summary>
     public sealed class ConversationKeyBundle
     {
-        /// <summary>Version string → raw 32-byte conversation key.</summary>
+        /// <summary>
+        /// Version string → raw 32-byte conversation key, over every conversation of the batch.
+        /// A version that key changes of more than one conversation carry is left out, because a
+        /// lookup by version alone cannot say which conversation's key it wants: read
+        /// <see cref="KeysByConversation"/>.
+        /// </summary>
         public Dictionary<string, byte[]> Keys { get; init; } = new();
 
         /// <summary>
-        /// The version to encrypt with: from <see cref="Chat.DecryptEvents"/>, the newest version
-        /// whose key change verified (<see langword="null"/> until one verifies); from
-        /// <see cref="Chat.ExtractConversationKeys"/>, the batch's highest version.
+        /// Conversation id → version string → raw 32-byte conversation key: each key under the
+        /// conversation of the key change that carries it, so two conversations' keys at one
+        /// version stay apart.
+        /// </summary>
+        public Dictionary<string, Dictionary<string, byte[]>> KeysByConversation { get; init; } = new();
+
+        /// <summary>
+        /// The version to encrypt with, when every event of the batch belongs to one
+        /// conversation: that conversation's entry in <see cref="LatestVersions"/>,
+        /// <see langword="null"/> when it has none. <see langword="null"/> for a batch whose
+        /// events belong to more than one conversation, where one version cannot name each
+        /// conversation's key: read <see cref="LatestVersions"/>.
         /// </summary>
         public string? LatestVersion { get; init; }
+
+        /// <summary>
+        /// Conversation id → the version to encrypt with there. From
+        /// <see cref="Chat.DecryptEvents"/>, the newest version whose key change verified; a
+        /// conversation without one has no entry. From
+        /// <see cref="Chat.ExtractConversationKeys"/>, which checks no signature, each
+        /// conversation's highest version in the batch.
+        /// </summary>
+        public Dictionary<string, string> LatestVersions { get; init; } = new();
     }
 
     /// <summary>Width and height from <see cref="ChatXdkUtilities.DetectImageDimensions"/>.</summary>
@@ -342,7 +438,143 @@ namespace ChatXdk
         public string? OriginalB64 { get; init; }
     }
 
-    /// <summary>Result of <see cref="Chat.DecryptEvents"/>.</summary>
+    /// <summary>Why a key change's signature did not verify.</summary>
+    public enum UnverifiedKeyChangeReason
+    {
+        /// <summary>
+        /// None of the signing keys the call verified with is the sender's at the key version the
+        /// signature names: pass that user's public keys as signing keys and decrypt again.
+        /// </summary>
+        MissingSigningKey,
+        /// <summary>
+        /// The sender's signing key at that key version was among the signing keys, but its
+        /// identity binding does not verify, so the call left it out: it is in
+        /// <see cref="DecryptEventsResult.RejectedSigningKeys"/>. Fetching the same entry again
+        /// changes nothing.
+        /// </summary>
+        RejectedSigningKey,
+        /// <summary>The signature does not verify against the sender's signing key.</summary>
+        InvalidSignature,
+        /// <summary>
+        /// The key change carries no signature, or one this SDK cannot check: an unsupported
+        /// signature version, or one below the first whose payload a recipient can rebuild.
+        /// </summary>
+        Unverifiable,
+    }
+
+    /// <summary>
+    /// A key change in a <see cref="Chat.DecryptEvents"/> batch whose key this identity
+    /// decrypted but whose signature did not verify.
+    /// </summary>
+    public sealed class UnverifiedKeyChange
+    {
+        /// <summary>Why its signature did not verify.</summary>
+        public UnverifiedKeyChangeReason Reason { get; init; }
+
+        /// <summary>
+        /// Whether its key was left out of <see cref="DecryptEventsResult.ConversationKeys"/>,
+        /// so the messages of its conversation under that key version did not decrypt. A key
+        /// that was kept decrypts messages but never becomes the version to encrypt with.
+        /// </summary>
+        public bool KeyDropped { get; init; }
+
+        /// <summary>The conversation the key change belongs to.</summary>
+        public string? ConversationId { get; init; }
+
+        /// <summary>The conversation key version the key change carries.</summary>
+        public string ConversationKeyVersion { get; init; } = "";
+
+        /// <summary>The user who signed the key change: the member who made it.</summary>
+        public string? SenderId { get; init; }
+
+        /// <summary>The version of that user's signing key the signature names.</summary>
+        public string? PublicKeyVersion { get; init; }
+    }
+
+    /// <summary>
+    /// Why this identity could not decrypt the conversation key a key change carries.
+    /// </summary>
+    public enum UndecryptableKeyChangeReason
+    {
+        /// <summary>No identity key is loaded: load or unlock the keys, then decrypt again.</summary>
+        Locked,
+        /// <summary>
+        /// The key change holds no key for this chat's user, the user
+        /// <see cref="Chat.SetIdentity"/> names; without a session identity, it holds no key at
+        /// all. The user was not a member when the key change was made.
+        /// </summary>
+        NotARecipient,
+        /// <summary>
+        /// The key change holds keys for this chat's user, or for some user when no session
+        /// identity names one, but none at this chat's key version: it was made for another
+        /// registration of the user's keys. Check the key version given to
+        /// <see cref="Chat.SetIdentity"/> or <see cref="Chat.ImportKeys"/>.
+        /// </summary>
+        OtherKeyVersion,
+        /// <summary>
+        /// A key the key change holds for this chat's key version does not decrypt under the
+        /// loaded identity key: the loaded private key is not the one registered at that
+        /// version.
+        /// </summary>
+        DecryptionFailed,
+    }
+
+    /// <summary>
+    /// A key change in a <see cref="Chat.DecryptEvents"/> batch whose conversation key this
+    /// identity could not decrypt.
+    /// </summary>
+    public sealed class UndecryptableKeyChange
+    {
+        /// <summary>Why its key could not be decrypted.</summary>
+        public UndecryptableKeyChangeReason Reason { get; init; }
+
+        /// <summary>The conversation the key change belongs to.</summary>
+        public string? ConversationId { get; init; }
+
+        /// <summary>The conversation key version the key change carries.</summary>
+        public string ConversationKeyVersion { get; init; } = "";
+
+        /// <summary>The user who made the key change.</summary>
+        public string? SenderId { get; init; }
+    }
+
+    /// <summary>
+    /// A signing key a <see cref="Chat.DecryptEvents"/> call left out of verification because
+    /// its identity binding does not verify:
+    /// <see cref="SigningKeyEntry.IdentityPublicKeySignature"/> is not the signing key's
+    /// signature over <see cref="SigningKeyEntry.IdentityPublicKey"/>.
+    /// </summary>
+    public sealed class RejectedSigningKey
+    {
+        /// <summary>The entry's <see cref="SigningKeyEntry.UserId"/>.</summary>
+        public string UserId { get; init; } = "";
+
+        /// <summary>The entry's <see cref="SigningKeyEntry.PublicKeyVersion"/>.</summary>
+        public string PublicKeyVersion { get; init; } = "";
+    }
+
+    /// <summary>
+    /// A signing key a <see cref="Chat.DecryptEvents"/> call did not have: an event's
+    /// signature names it, and it was not among the signing keys the call verified with. Fetch
+    /// the user's public keys (<c>GET /2/users/{id}/public_keys</c>), add them with
+    /// <see cref="Chat.AddPublicKeys"/>, and decrypt again.
+    /// </summary>
+    public sealed class MissingSigningKey
+    {
+        /// <summary>The user who sent the event, whose signing key it is.</summary>
+        public string UserId { get; init; } = "";
+
+        /// <summary>The version of that user's key the signature names.</summary>
+        public string PublicKeyVersion { get; init; } = "";
+    }
+
+    /// <summary>
+    /// Result of <see cref="Chat.DecryptEvents"/>. <see cref="Errors"/>,
+    /// <see cref="UnverifiedKeyChanges"/>, <see cref="UndecryptableKeyChanges"/> and
+    /// <see cref="MissingSigningKeys"/> are keyed by an event's index in the batch, as a string,
+    /// and <see cref="RejectedSigningKeys"/> by a signing key's index, as a string. Each is
+    /// empty when it has nothing to report.
+    /// </summary>
     public sealed class DecryptEventsResult
     {
         /// <summary>The events that decrypted, in batch order, of every event type.</summary>
@@ -357,6 +589,39 @@ namespace ChatXdk
         /// removal's title or description re-encrypted under the new key.
         /// </summary>
         public Dictionary<string, string> Errors { get; init; } = new();
+
+        /// <summary>
+        /// String indices into the input batch, with their key changes, for the key changes
+        /// whose signature did not verify: why, and whether its key was dropped.
+        /// </summary>
+        public Dictionary<string, UnverifiedKeyChange> UnverifiedKeyChanges { get; init; } = new();
+
+        /// <summary>
+        /// String indices into the input batch, with their key changes, for the key changes
+        /// whose conversation key this identity could not decrypt: why. Such a key change gives
+        /// the batch no key, so the messages of its conversation under its key version did not
+        /// decrypt.
+        /// </summary>
+        public Dictionary<string, UndecryptableKeyChange> UndecryptableKeyChanges { get; init; } = new();
+
+        /// <summary>
+        /// String indices into the signing keys the call verified with
+        /// (<see cref="DecryptEventsParams.SigningKeys"/>, or the stored ones when it was given
+        /// none), with their signing keys, for the ones it left out because their identity
+        /// binding does not verify. An event signed with such a key does not verify.
+        /// </summary>
+        public Dictionary<string, RejectedSigningKey> RejectedSigningKeys { get; init; } = new();
+
+        /// <summary>
+        /// String indices into the input batch, with the signing key each event names, for the
+        /// events, of any signed type, whose sender's signing key at that version was not among
+        /// the signing keys the call verified with. Such an event is in <see cref="Errors"/>,
+        /// or in <see cref="Events"/> unverified after
+        /// <see cref="Chat.SetRejectUnverified"/>(false). A key change listed here is also in
+        /// <see cref="UnverifiedKeyChanges"/> when this identity decrypted its key.
+        /// <see cref="Chat.MissingPublicKeys"/> reads the users to fetch keys for from this map.
+        /// </summary>
+        public Dictionary<string, MissingSigningKey> MissingSigningKeys { get; init; } = new();
     }
 
     /// <summary>
@@ -989,23 +1254,55 @@ namespace ChatXdk
         public string? ConversationKeyVersion { get; init; }
     }
 
-    /// <summary>Parameters for <see cref="Chat.PrepareConversationKeyChange"/>.</summary>
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareConversationKeyChange"/>. The new key is encrypted
+    /// for the participants of <see cref="PublicKeys"/>. With none passed, the call reads the
+    /// stored public keys (<see cref="Chat.AddPublicKeys"/>) of <see cref="MemberIds"/>, or of
+    /// the two users of a one-to-one <see cref="ConversationId"/>, and fails when one of them
+    /// has none stored. <see cref="Chat.PrepareConversationKeyChangeAsync"/> fetches the ones
+    /// not stored through <see cref="Chat.ResolvePublicKeys"/> first.
+    /// </summary>
     public sealed class ConversationKeyChangeParams
     {
-        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
-        /// <param name="publicKeys">Public keys for every participant the new key is encrypted for.</param>
-        public ConversationKeyChangeParams(IReadOnlyList<PublicKeyInput> publicKeys)
+        /// <summary>
+        /// Create params that pass no public keys: name the participants with
+        /// <see cref="MemberIds"/>, or a one-to-one conversation with
+        /// <see cref="ConversationId"/>.
+        /// </summary>
+        public ConversationKeyChangeParams()
+            : this(null)
         {
-            PublicKeys = publicKeys;
         }
 
-        /// <summary>Public keys for every participant the new key is encrypted for.</summary>
+        /// <summary>Create params with the participants' public keys; all optional fields default to null.</summary>
+        /// <param name="publicKeys">
+        /// Public keys for every participant the new key is encrypted for; null or empty to
+        /// read the stored ones.
+        /// </param>
+        public ConversationKeyChangeParams(IReadOnlyList<PublicKeyInput>? publicKeys)
+        {
+            PublicKeys = publicKeys ?? Array.Empty<PublicKeyInput>();
+        }
+
+        /// <summary>
+        /// Public keys for every participant the new key is encrypted for; empty when none
+        /// were passed, and the stored ones are read.
+        /// </summary>
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
+        /// <summary>
+        /// User IDs of every participant the new key is encrypted for, yours included. Read
+        /// when <see cref="PublicKeys"/> is empty; a group key rotation names its members here.
+        /// </summary>
+        public IReadOnlyList<string>? MemberIds { get; init; }
         /// <summary>User ID of the sender signing the change; resolves from the session identity when null.</summary>
         public string? SenderId { get; init; }
         /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
         public string? SigningKeyVersion { get; init; }
-        /// <summary>Conversation the change applies to; null derives the one-to-one id.</summary>
+        /// <summary>
+        /// Conversation the change applies to; null derives the one-to-one id. With
+        /// <see cref="PublicKeys"/> empty and no <see cref="MemberIds"/>, a one-to-one id, or
+        /// the other user's id, names the two participants.
+        /// </summary>
         public string? ConversationId { get; init; }
     }
 
@@ -1013,26 +1310,51 @@ namespace ChatXdk
     /// Parameters for <see cref="Chat.PrepareGroupMembersChange"/>. <see cref="CurrentTitle"/>
     /// and <see cref="CurrentDescription"/> are plaintext: the call encrypts each under the new
     /// conversation key it generates. <see cref="CurrentAvatarUrl"/> is the avatar's media URL,
-    /// signed as is.
+    /// signed as is. With no <see cref="PublicKeys"/> passed, the call reads the stored public
+    /// keys (<see cref="Chat.AddPublicKeys"/>) of <see cref="CurrentMemberIds"/> and
+    /// <see cref="NewMemberIds"/>, and fails when one of them has none stored.
+    /// <see cref="Chat.PrepareGroupMembersChangeAsync"/> fetches the ones not stored through
+    /// <see cref="Chat.ResolvePublicKeys"/> first.
     /// </summary>
     public sealed class GroupMembersChangeParams
     {
-        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
-        /// <param name="publicKeys">Public keys for the updated roster.</param>
+        /// <summary>
+        /// Create params that pass no public keys: the call reads the stored ones of
+        /// <paramref name="currentMemberIds"/> and <paramref name="newMemberIds"/>.
+        /// </summary>
         /// <param name="conversationId">ID of the group conversation being modified.</param>
         /// <param name="newMemberIds">IDs of the members being added.</param>
         /// <param name="currentMemberIds">Current member IDs before the add.</param>
         /// <param name="currentAdminIds">Current admin IDs.</param>
         /// <param name="currentPendingMemberIds">Current pending (invited) member IDs.</param>
         public GroupMembersChangeParams(
-            IReadOnlyList<PublicKeyInput> publicKeys,
+            string conversationId,
+            IReadOnlyList<string> newMemberIds,
+            IReadOnlyList<string> currentMemberIds,
+            IReadOnlyList<string> currentAdminIds,
+            IReadOnlyList<string> currentPendingMemberIds)
+            : this(null, conversationId, newMemberIds, currentMemberIds, currentAdminIds, currentPendingMemberIds)
+        {
+        }
+
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="publicKeys">
+        /// Public keys for the updated roster; null or empty to read the stored ones.
+        /// </param>
+        /// <param name="conversationId">ID of the group conversation being modified.</param>
+        /// <param name="newMemberIds">IDs of the members being added.</param>
+        /// <param name="currentMemberIds">Current member IDs before the add.</param>
+        /// <param name="currentAdminIds">Current admin IDs.</param>
+        /// <param name="currentPendingMemberIds">Current pending (invited) member IDs.</param>
+        public GroupMembersChangeParams(
+            IReadOnlyList<PublicKeyInput>? publicKeys,
             string conversationId,
             IReadOnlyList<string> newMemberIds,
             IReadOnlyList<string> currentMemberIds,
             IReadOnlyList<string> currentAdminIds,
             IReadOnlyList<string> currentPendingMemberIds)
         {
-            PublicKeys = publicKeys;
+            PublicKeys = publicKeys ?? Array.Empty<PublicKeyInput>();
             ConversationId = conversationId;
             NewMemberIds = newMemberIds;
             CurrentMemberIds = currentMemberIds;
@@ -1040,7 +1362,10 @@ namespace ChatXdk
             CurrentPendingMemberIds = currentPendingMemberIds;
         }
 
-        /// <summary>Public keys for the updated roster.</summary>
+        /// <summary>
+        /// Public keys for the updated roster; empty when none were passed, and the stored
+        /// ones are read.
+        /// </summary>
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         /// <summary>ID of the group conversation being modified.</summary>
         public string ConversationId { get; }
@@ -1070,28 +1395,53 @@ namespace ChatXdk
 
     /// <summary>
     /// Parameters for <see cref="Chat.PrepareGroupCreate"/>. A create sets no avatar; set it
-    /// afterwards with <see cref="Chat.PrepareGroupAvatarChange"/>.
+    /// afterwards with <see cref="Chat.PrepareGroupAvatarChange"/>. With no
+    /// <see cref="PublicKeys"/> passed, the call reads the stored public keys
+    /// (<see cref="Chat.AddPublicKeys"/>) of <see cref="MemberIds"/> and
+    /// <see cref="AdminIds"/>, and fails when one of them has none stored.
+    /// <see cref="Chat.PrepareGroupCreateAsync"/> fetches the ones not stored through
+    /// <see cref="Chat.ResolvePublicKeys"/> first.
     /// </summary>
     public sealed class GroupCreateParams
     {
-        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
-        /// <param name="publicKeys">Public keys for the new roster.</param>
+        /// <summary>
+        /// Create params that pass no public keys: the call reads the stored ones of
+        /// <paramref name="memberIds"/> and <paramref name="adminIds"/>.
+        /// </summary>
         /// <param name="conversationId">ID of the group conversation being created.</param>
         /// <param name="memberIds">IDs of the initial members.</param>
         /// <param name="adminIds">IDs of the initial admins.</param>
         public GroupCreateParams(
-            IReadOnlyList<PublicKeyInput> publicKeys,
+            string conversationId,
+            IReadOnlyList<string> memberIds,
+            IReadOnlyList<string> adminIds)
+            : this(null, conversationId, memberIds, adminIds)
+        {
+        }
+
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="publicKeys">
+        /// Public keys for the new roster; null or empty to read the stored ones.
+        /// </param>
+        /// <param name="conversationId">ID of the group conversation being created.</param>
+        /// <param name="memberIds">IDs of the initial members.</param>
+        /// <param name="adminIds">IDs of the initial admins.</param>
+        public GroupCreateParams(
+            IReadOnlyList<PublicKeyInput>? publicKeys,
             string conversationId,
             IReadOnlyList<string> memberIds,
             IReadOnlyList<string> adminIds)
         {
-            PublicKeys = publicKeys;
+            PublicKeys = publicKeys ?? Array.Empty<PublicKeyInput>();
             ConversationId = conversationId;
             MemberIds = memberIds;
             AdminIds = adminIds;
         }
 
-        /// <summary>Public keys for the new roster.</summary>
+        /// <summary>
+        /// Public keys for the new roster; empty when none were passed, and the stored ones
+        /// are read.
+        /// </summary>
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
         /// <summary>ID of the group conversation being created.</summary>
         public string ConversationId { get; }
@@ -1170,7 +1520,8 @@ namespace ChatXdk
         public IReadOnlyDictionary<string, byte[]>? ConversationKeys { get; }
         /// <summary>
         /// Signing keys to verify the event with; null or empty uses the keys stored via
-        /// <see cref="Chat.SetSigningKeys"/>. The SDK picks the sender's key for the version the
+        /// <see cref="Chat.SetSigningKeys"/>, <see cref="Chat.AddSigningKeys"/> and
+        /// <see cref="Chat.AddPublicKeys"/>. The SDK picks the sender's key for the version the
         /// event carries.
         /// </summary>
         public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
@@ -1193,7 +1544,9 @@ namespace ChatXdk
         public IReadOnlyList<string> Events { get; }
         /// <summary>
         /// Signing keys of all participants; null or empty uses the keys stored via
-        /// <see cref="Chat.SetSigningKeys"/>.
+        /// <see cref="Chat.SetSigningKeys"/>, <see cref="Chat.AddSigningKeys"/> and
+        /// <see cref="Chat.AddPublicKeys"/>. <see cref="Chat.DecryptEventsAsync"/> fetches the
+        /// stored keys a batch is missing only when none are passed here.
         /// </summary>
         public IReadOnlyList<SigningKeyEntry>? SigningKeys { get; init; }
     }
@@ -1269,14 +1622,15 @@ namespace ChatXdk
     /// <summary>Parameters for <see cref="Chat.DecryptFile"/>.</summary>
     public sealed class DecryptFileParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>Create params with the conversation's key map.</summary>
         /// <param name="encrypted">The encrypted file, as downloaded.</param>
         /// <param name="eventB64">
         /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
         /// </param>
         /// <param name="conversationKeys">
         /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
-        /// for the message's version.
+        /// for the message's version. Null or empty takes the conversation's keys from the opt-in
+        /// key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
         /// <param name="mediaHashKey">
         /// The file's media hash key from the decrypted message: a media attachment, a link card's
@@ -1285,20 +1639,40 @@ namespace ChatXdk
         public DecryptFileParams(
             byte[] encrypted,
             string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            IReadOnlyDictionary<string, byte[]>? conversationKeys,
             string mediaHashKey)
         {
             Encrypted = encrypted;
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
+            ConversationKeys = conversationKeys ?? new Dictionary<string, byte[]>();
             MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>
+        /// Create params without a key map: the conversation's keys come from the opt-in key
+        /// cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="encrypted">The encrypted file, as downloaded.</param>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public DecryptFileParams(byte[] encrypted, string eventB64, string mediaHashKey)
+            : this(encrypted, eventB64, null, mediaHashKey)
+        {
         }
 
         /// <summary>The encrypted file, as downloaded.</summary>
         public byte[] Encrypted { get; }
         /// <summary>The base64 event of the message that carries the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
+        /// <summary>
+        /// Version → raw 32-byte conversation key; empty when none were passed, which takes the
+        /// conversation's keys from the opt-in key cache.
+        /// </summary>
         public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The file's media hash key from the decrypted message.</summary>
         public string MediaHashKey { get; }
@@ -1310,13 +1684,14 @@ namespace ChatXdk
     /// </summary>
     public sealed class FileDecryptorParams
     {
-        /// <summary>Create params with the required fields.</summary>
+        /// <summary>Create params with the conversation's key map.</summary>
         /// <param name="eventB64">
         /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
         /// </param>
         /// <param name="conversationKeys">
         /// The conversation's key map, as passed to <see cref="Chat.DecryptEvent"/>; it must hold the key
-        /// for the message's version.
+        /// for the message's version. Null or empty takes the conversation's keys from the opt-in
+        /// key cache (<see cref="Chat.SetCacheKeys"/>).
         /// </param>
         /// <param name="mediaHashKey">
         /// The file's media hash key from the decrypted message: a media attachment, a link card's
@@ -1324,17 +1699,36 @@ namespace ChatXdk
         /// </param>
         public FileDecryptorParams(
             string eventB64,
-            IReadOnlyDictionary<string, byte[]> conversationKeys,
+            IReadOnlyDictionary<string, byte[]>? conversationKeys,
             string mediaHashKey)
         {
             EventB64 = eventB64;
-            ConversationKeys = conversationKeys;
+            ConversationKeys = conversationKeys ?? new Dictionary<string, byte[]>();
             MediaHashKey = mediaHashKey;
+        }
+
+        /// <summary>
+        /// Create params without a key map: the conversation's keys come from the opt-in key
+        /// cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="eventB64">
+        /// The base64 event of the message that carries the file, as passed to <see cref="Chat.DecryptEvent"/>.
+        /// </param>
+        /// <param name="mediaHashKey">
+        /// The file's media hash key from the decrypted message: a media attachment, a link card's
+        /// banner or favicon, or media quoted in its reply preview.
+        /// </param>
+        public FileDecryptorParams(string eventB64, string mediaHashKey)
+            : this(eventB64, null, mediaHashKey)
+        {
         }
 
         /// <summary>The base64 event of the message that carries the file.</summary>
         public string EventB64 { get; }
-        /// <summary>Version → raw 32-byte conversation key.</summary>
+        /// <summary>
+        /// Version → raw 32-byte conversation key; empty when none were passed, which takes the
+        /// conversation's keys from the opt-in key cache.
+        /// </summary>
         public IReadOnlyDictionary<string, byte[]> ConversationKeys { get; }
         /// <summary>The file's media hash key from the decrypted message.</summary>
         public string MediaHashKey { get; }
@@ -1466,29 +1860,53 @@ namespace ChatXdk
 
     /// <summary>
     /// Parameters for <see cref="Chat.PrepareGroupMembersRemove"/>. The call rotates the
-    /// conversation key for the members who stay.
+    /// conversation key for the members who stay. With no <see cref="PublicKeys"/> passed, it
+    /// reads the stored public keys (<see cref="Chat.AddPublicKeys"/>) of
+    /// <see cref="RemainingMemberIds"/>, and fails when one of them has none stored.
+    /// <see cref="Chat.PrepareGroupMembersRemoveAsync"/> fetches the ones not stored through
+    /// <see cref="Chat.ResolvePublicKeys"/> first.
     /// </summary>
     public sealed class GroupMembersRemoveParams
     {
+        /// <summary>
+        /// Create params that pass no public keys: name the members who stay with
+        /// <see cref="RemainingMemberIds"/>.
+        /// </summary>
+        /// <param name="conversationId">ID of the group conversation.</param>
+        /// <param name="userIds">User IDs being removed.</param>
+        public GroupMembersRemoveParams(string conversationId, IReadOnlyList<string> userIds)
+            : this(null, conversationId, userIds)
+        {
+        }
+
         /// <summary>Create params with the required fields; all optional fields default to null.</summary>
-        /// <param name="publicKeys">Identity public keys of the members who stay, yours included.</param>
+        /// <param name="publicKeys">
+        /// Identity public keys of the members who stay, yours included; null or empty to read
+        /// the stored ones of <see cref="RemainingMemberIds"/>.
+        /// </param>
         /// <param name="conversationId">ID of the group conversation.</param>
         /// <param name="userIds">User IDs being removed.</param>
         public GroupMembersRemoveParams(
-            IReadOnlyList<PublicKeyInput> publicKeys,
+            IReadOnlyList<PublicKeyInput>? publicKeys,
             string conversationId,
             IReadOnlyList<string> userIds)
         {
-            PublicKeys = publicKeys;
+            PublicKeys = publicKeys ?? Array.Empty<PublicKeyInput>();
             ConversationId = conversationId;
             UserIds = userIds;
         }
 
         /// <summary>
         /// Identity public keys of the members who stay, yours included; the new key is encrypted
-        /// for them, and a member left out can't read what the group sends under it.
+        /// for them, and a member left out can't read what the group sends under it. Empty when
+        /// none were passed, and the stored ones of <see cref="RemainingMemberIds"/> are read.
         /// </summary>
         public IReadOnlyList<PublicKeyInput> PublicKeys { get; }
+        /// <summary>
+        /// User IDs of the members who stay, yours included. Read when <see cref="PublicKeys"/>
+        /// is empty: the new key is encrypted for their stored public keys.
+        /// </summary>
+        public IReadOnlyList<string>? RemainingMemberIds { get; init; }
         public string ConversationId { get; }
         public IReadOnlyList<string> UserIds { get; }
         /// <summary>
@@ -1548,17 +1966,39 @@ namespace ChatXdk
     /// </summary>
     public sealed class GroupAvatarChangeParams
     {
-        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string conversationKeyVersion)
+        /// <summary>Create params with the version of the key the avatar image is encrypted under.</summary>
+        /// <param name="conversationId">The group's conversation id.</param>
+        /// <param name="newAvatarUrl">The media URL of the group's new avatar image.</param>
+        /// <param name="conversationKeyVersion">
+        /// Version of the conversation key the avatar image is encrypted under. Null or empty
+        /// signs the version of the conversation's newest key in the opt-in key cache
+        /// (<see cref="Chat.SetCacheKeys"/>).
+        /// </param>
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl, string? conversationKeyVersion)
         {
             ConversationId = conversationId;
             NewAvatarUrl = newAvatarUrl;
-            ConversationKeyVersion = conversationKeyVersion;
+            ConversationKeyVersion = conversationKeyVersion ?? "";
+        }
+
+        /// <summary>
+        /// Create params without a key version: the call signs the version of the conversation's
+        /// newest key in the opt-in key cache (<see cref="Chat.SetCacheKeys"/>).
+        /// </summary>
+        /// <param name="conversationId">The group's conversation id.</param>
+        /// <param name="newAvatarUrl">The media URL of the group's new avatar image.</param>
+        public GroupAvatarChangeParams(string conversationId, string newAvatarUrl)
+            : this(conversationId, newAvatarUrl, null)
+        {
         }
 
         public string ConversationId { get; }
         /// <summary>The media URL of the group's new avatar image, signed and sent as is.</summary>
         public string NewAvatarUrl { get; }
-        /// <summary>Version of the conversation key the avatar image is encrypted under.</summary>
+        /// <summary>
+        /// Version of the conversation key the avatar image is encrypted under; empty when none
+        /// was passed, which signs the version of the conversation's newest cached key.
+        /// </summary>
         public string ConversationKeyVersion { get; }
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }

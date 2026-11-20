@@ -6,6 +6,205 @@
 
 - .NET: build and bundle the `linux-musl-x64` native library in the NuGet package, enabling deployment on Alpine Linux and other musl-based .NET runtimes (#21).
 
+## [0.7.6] - 2026-11-19
+
+### Added
+
+- `decrypt_events` says what it could not use. Its result has three new maps,
+  each keyed by an index as `errors` is (a string in the bindings where the
+  keys of `errors` are strings) and empty when it has nothing to report, so
+  callers that don't read them see no change:
+  - `unverified_key_changes` (`unverifiedKeyChanges` in JS and the JVM,
+    `UnverifiedKeyChanges` in Go and .NET), by event index: each key change
+    whose key the chat decrypted but whose signature did not verify, with a
+    `reason`, whether its key was dropped (`key_dropped`), its
+    `conversation_id` and `conversation_key_version`, and the `sender_id` and
+    `public_key_version` of the signing key it names. The reason is
+    `MissingSigningKey` when the signer's signing key was not among the keys
+    the call verified with, `RejectedSigningKey` when it was among them but
+    its identity binding does not verify, `InvalidSignature` when the
+    signature does not verify against it, and `Unverifiable` when the key
+    change carries no signature the SDK can check.
+  - `undecryptable_key_changes`, by event index: each key change whose
+    conversation key this identity could not decrypt, with a `reason`
+    (`Locked`, `NotARecipient`, `OtherKeyVersion` or `DecryptionFailed`), its
+    `conversation_id`, `conversation_key_version` and `sender_id`. Such a key
+    change was skipped without a trace; a wrong key version given to
+    `set_identity` skips every key change.
+  - `rejected_signing_keys`, by the signing key's index among the signing
+    keys the call verified with: each one left out because its identity
+    binding does not verify, with its `user_id` and `public_key_version`.
+    Such a key was dropped without a trace, and the events it signed then
+    failed as if no key had been passed.
+- A key change is signed by the member who made it, who need not have written
+  any message in the batch. The chat needs that member's public keys
+  (`GET /2/users/{id}/public_keys`): set a public-keys hook, below, or pass
+  them with the other signing keys. A key change sequenced since late June
+  2026 that does not verify has its key dropped, as before; until now nothing
+  in the result said so, and every message under that key failed with an
+  error that asked for the key change events the batch already held.
+- `decrypt_events` and `extract_conversation_keys` report keys and key
+  versions per conversation. `conversation_keys` has two new maps keyed by
+  conversation id, in the form events carry (a group's `g…` id; a
+  one-to-one's two user ids ordered numerically and colon-separated):
+  - `keys_by_conversation` (`keysByConversation`, `KeysByConversation`):
+    conversation id → key version → key.
+  - `latest_versions` (`latestVersions`, `LatestVersions`): conversation id →
+    the version to encrypt with. From `decrypt_events` it holds the newest
+    version whose key change verified.
+
+  `keys` and `latest_version` hold the same without the conversation id, for
+  a batch whose events all belong to one conversation.
+- `add_signing_keys` (`addSigningKeys`, `AddSigningKeys`,
+  `chat_xdk_add_signing_keys`) adds signing keys to the stored set: an entry
+  replaces the stored entry of the same user and key version, and any other
+  is added. `set_signing_keys` still replaces the whole set.
+- The key cache serves more calls. All of it applies only while the cache is
+  on (`set_cache_keys(true)`, off by default), and a key or key version that
+  a call is passed is used as before:
+  - `decrypt_file` and `file_decryptor` take `conversation_keys` as
+    optional. Left out or empty, the key map is the conversation's keys in
+    the cache.
+  - `prepare_group_avatar_change` takes `conversation_key_version` as
+    optional. Left out or empty, it signs the version of the conversation's
+    newest cached key, and fails with an invalid-state error when the cache
+    holds none.
+- A `resolve_public_keys` hook fetches other users' public keys when a call
+  lacks them. The hook takes user ids and returns each user's records from
+  `GET /2/users/{id}/public_keys`, as the API sent them, by user id. It
+  lives in each language's own code: the Rust core stays synchronous and
+  calls nothing back.
+  - JS: `createChat({ resolvePublicKeys })` or `setResolvePublicKeys`, and
+    new methods that call it: `decryptEventsAsync`,
+    `prepareConversationKeyChangeAsync`, `prepareGroupCreateAsync`,
+    `prepareGroupMembersChangeAsync` and `prepareGroupMembersRemoveAsync`.
+    .NET: the `ResolvePublicKeys` property and the same five methods in
+    PascalCase. The existing methods of both never call the hook.
+  - Python (`set_resolve_public_keys`), Go (`SetResolvePublicKeys`), the JVM
+    (`setResolvePublicKeys`) and Rust (`set_resolve_public_keys`): a
+    blocking hook, called from the existing `decrypt_events` and prepare
+    methods.
+  - With a hook set, a decrypt that is passed no signing keys asks it for
+    the users whose keys the batch lacked, adds what it returns, and
+    decrypts the batch once more. Setting a hook turns the key cache on.
+  - A lookup that did not bring the key it was made for is not repeated for
+    a minute, per user and key version.
+
+  With no hook set, nothing changes.
+- The pieces the hook is built from are public, for a caller that fetches
+  keys itself:
+  - `missing_signing_keys` on the `decrypt_events` result
+    (`missingSigningKeys`, `MissingSigningKeys`), by event index: each
+    event, of any signed type, whose sender's signing key was not among the
+    keys the call verified with, with the `user_id` and `public_key_version`
+    to fetch. Empty when nothing is missing.
+  - `missing_public_keys(result)`: the users to fetch, once each.
+  - `add_public_keys(records)`: adds the API's records, by user id, to the
+    stored signing keys. Go, .NET and the JVM have a `PublicKeyRecord` type
+    that unmarshals from the API's JSON.
+  - C ABI: `chat_xdk_add_public_keys`, `chat_xdk_missing_public_keys`,
+    `chat_xdk_missing_public_keys_for`. Rust: `missing_public_keys_for`
+    with a `KeyChangeCall`, for the members a prepare call has no key for.
+- `prepare_conversation_key_change`, `prepare_group_create`,
+  `prepare_group_members_change` and `prepare_group_members_remove` take
+  `public_keys` as optional. Left out or empty, the call encrypts its key to
+  the stored public keys of the members its params name, fetched through the
+  hook first when one is set: `member_ids` and `admin_ids` for a create, the
+  current and new members for an add, the new optional
+  `remaining_member_ids` for a removal, and the new optional `member_ids`,
+  or the two users of a one-to-one id, for a key change. Only a stored key
+  whose identity binding verifies is used. Public keys that are passed are
+  used as before.
+- The docs say how to run the SDK for many signed-in users in many
+  conversations ([API.md](docs/API.md#many-users-many-conversations)): one
+  chat per signed-in user, never one per conversation, and one public-keys
+  hook function for every chat, over one cache of public keys for the
+  process. Each example has both as code with an offline test:
+  `SharedPublicKeys`, a hook that shares a lookup under way, retries a failed
+  one and fetches an answer again after a TTL, and `UserChats`, one chat per
+  user. The six example bots fetch public keys through the hook, and the
+  JavaScript example runs one bot per signed-in user (`multi-bot.mjs`).
+
+### Changed
+
+- The key cache is filled on every path and keeps every key version. It was
+  filled by `decrypt_events` alone, with one key per conversation: the
+  newest whose key change verified. While the cache is on:
+  - `decrypt_event` records a key change that verifies as `decrypt_events`
+    does: its version becomes the conversation's newest verified one unless
+    a newer is known, and its key is cached. A chat that receives events one
+    at a time no longer needs a batch call to pick up a new key.
+  - `prepare_conversation_key_change`, `prepare_group_create`,
+    `prepare_group_members_change` and `prepare_group_members_remove` cache
+    the key they make as the conversation's newest. A send that omits its
+    key right after one of them uses the new key; it used the previous key,
+    or failed for a new conversation, until the key change came back in the
+    conversation's events. The key is cached before its request is sent: if
+    the X API rejects the request, prepare the change again or pass the key
+    to encrypt with explicitly.
+  - The cache keeps every key it is given per conversation, by version.
+    Sends use the newest. `decrypt_event` with no key map decrypts a message
+    under an older cached key, which failed before.
+
+  With the cache off, nothing changes.
+- A prepare call that makes a conversation key and is passed no public keys
+  no longer fails outright. Where its params name members, it reads their
+  stored keys, and a member with none fails it with `public_keys is empty
+  and no public keys are stored for user(s) <ids>: …`, an invalid-input
+  error as `public_keys must not be empty` was. Where they name none, the
+  errors are the ones it gave before. In JS and the C ABI, leaving
+  `publicKeys` out of the params was a missing-field error and now reaches
+  those errors.
+- `latest_version` is null for a batch whose events belong to more than one
+  conversation, from `decrypt_events` and from `extract_conversation_keys`.
+  It was the highest version across the batch: verified, from
+  `decrypt_events`; unverified, from `extract_conversation_keys`. That is
+  another conversation's key version for every conversation of the batch but
+  one, and encrypting with it sends a message its recipients cannot read.
+  Read `latest_versions[conversation_id]`. A batch of one conversation
+  reports `latest_version` as before.
+- Two conversations whose keys have the same version no longer collide in a
+  batch. `keys` kept one key per version, the last in the batch: the other
+  conversation's key change was then checked against the wrong key and failed
+  to verify, and its messages failed to decrypt. Each key change is now
+  checked against its own conversation's key and each message decrypted with
+  its own conversation's key, both kept in `keys_by_conversation`. `keys`
+  leaves out a version that key changes of more than one conversation of the
+  batch carry, because a lookup by version alone cannot say which
+  conversation's key it wants. A batch of one conversation, and a batch whose
+  conversations use different versions, get the same `keys` as before.
+- A one-to-one conversation is one conversation whichever way an event
+  writes its id. Events carry the two user ids ordered numerically and
+  colon-separated; an id in the other order or with a hyphen is read as that
+  one, so its keys and versions are cached and reported under one id.
+- Errors for an event whose signature could not be verified say why. `…
+  signature could not be verified: signature missing or no matching signing
+  key` is now one of `… the event carries no signature`, `… no signing key
+  for sender <id> at public_key_version <version> among the signing keys
+  given; pass that user's public keys as signing keys`, `… the signing key
+  given for sender <id> at public_key_version <version> was rejected: its
+  identity binding does not verify`, `… it signs the conversation key, which
+  this chat could not decrypt from the event` (a key change), or `… its
+  signed payload cannot be rebuilt from the event`. In a `decrypt_events`
+  batch, a message whose key change gave the batch no key fails with `Message
+  encrypted with key version '<version>' but no matching key found: the key
+  change for that version, event <index> of the batch, did not verify, so its
+  key was dropped: <why>` or `… holds no key this chat can decrypt: <why>`.
+  The errors' kinds are unchanged.
+
+### Fixed
+
+- JS: the first chats of a process are separate chats when they are created
+  at the same time. `createChat` loaded the WebAssembly module again on each
+  call until one load had finished. Calls made at the same time before that,
+  such as `Promise.all(users.map(openChat))` when a server starts, each
+  loaded the module, and their chats then shared the memory of one of them:
+  every such chat held the keys and identity of the same chat, so a chat
+  created for one user could sign and decrypt as another. A process whose
+  first `createChat` call returned before it made the next was not affected.
+  `createChat` now loads the module once, in `@xdevplatform/chat-xdk` and in
+  `@xdevplatform/chat-xdk-server`.
+
 ## [0.7.5] - 2026-11-16
 
 ### Changed
@@ -1064,7 +1263,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.2...v0.7.3
