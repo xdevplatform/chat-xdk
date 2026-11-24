@@ -10,10 +10,10 @@
 use super::test_support::{enable_v1_send, frame, Party, SIGNING_KEY_VERSION};
 use super::*;
 use crate::params::{
-    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupTitleChangeParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, ScreenCaptureParams,
+    ConversationArchiveParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupTitleChangeParams,
+    MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
 };
 use crate::signatures::ActionSignature;
 use crate::thrift::event::{
@@ -210,6 +210,20 @@ fn single_actions(party: &Party) -> Vec<(ActionSignature, String)> {
             ),
             "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{id},910004,g100"
                 .to_string(),
+        ),
+        (
+            first(
+                core.prepare_conversation_archive(&ConversationArchiveParams::new(GROUP, true))
+                    .unwrap(),
+            ),
+            "ConversationMetadataChangeEvent.ArchiveConversation,{id},910004,g100".to_string(),
+        ),
+        (
+            first(
+                core.prepare_conversation_archive(&ConversationArchiveParams::new(GROUP, false))
+                    .unwrap(),
+            ),
+            "ConversationMetadataChangeEvent.UnarchiveConversation,{id},910004,g100".to_string(),
         ),
         (
             first(
