@@ -679,6 +679,35 @@ class ChatTest {
     }
 
     @Test
+    void attachmentTargetsNeedTheRawEvent() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            EncryptReactionParams reaction = new EncryptReactionParams(null, "👍");
+            reaction.conversationId = "conv-1";
+            reaction.targetMessageSequenceId = "seq-99";
+            reaction.senderId = "1001";
+            reaction.signingKeyVersion = "66";
+            reaction.conversationKey = ckey;
+            reaction.conversationKeyVersion = "1";
+            reaction.targetAttachmentId = "att-1";
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptAddReaction(reaction));
+            assertTrue(e.getMessage().contains("target_attachment_id needs target_event"), e.getMessage());
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptRemoveReaction(reaction));
+            assertTrue(e.getMessage().contains("target_attachment_id needs target_event"), e.getMessage());
+
+            EncryptReplyParams reply = new EncryptReplyParams("conv-1", "reply", null);
+            reply.senderId = "1001";
+            reply.signingKeyVersion = "66";
+            reply.conversationKey = ckey;
+            reply.conversationKeyVersion = "1";
+            reply.replyToSequenceId = "seq-42";
+            reply.replyToAttachmentId = "att-1";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptReply(reply));
+            assertTrue(e.getMessage().contains("reply_to_attachment_id needs reply_to_event"), e.getMessage());
+        }
+    }
+
+    @Test
     void encryptEditReturnsValidPayload() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);

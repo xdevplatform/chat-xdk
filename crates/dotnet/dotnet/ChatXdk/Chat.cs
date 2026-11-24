@@ -1546,6 +1546,7 @@ namespace ChatXdk
                 ["attachments"] = p.Attachments,
                 ["reply_to_entities"] = p.ReplyToEntities != null ? SerialiseEntities(p.ReplyToEntities) : null,
                 ["reply_to_attachments"] = p.ReplyToAttachments,
+                ["reply_to_attachment_id"] = p.ReplyToAttachmentId,
                 ["quick_reply"] = p.QuickReply,
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
@@ -1565,6 +1566,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["target_attachment_id"] = p.TargetAttachmentId,
             };
             return ParamsJson(dict);
         }

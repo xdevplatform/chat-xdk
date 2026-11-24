@@ -667,6 +667,18 @@ async function main() {
     targetMessageSequenceId: "seq-99",
   });
   assert.equal(decryptOwn(removePayload).targetMessageSequenceId, "seq-99");
+  // targetAttachmentId and replyToAttachmentId reach the core, which needs
+  // the raw event to check the attachment against.
+  for (const encrypt of ["encryptAddReaction", "encryptRemoveReaction"]) {
+    assert.throws(
+      () => chat[encrypt]({ ...reactionParams, targetAttachmentId: "att-1" }),
+      /target_attachment_id needs target_event/,
+    );
+  }
+  assert.throws(
+    () => chat.encryptReply({ ...replyParamsBase, replyToAttachmentId: "att-1" }),
+    /reply_to_attachment_id needs reply_to_event/,
+  );
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]

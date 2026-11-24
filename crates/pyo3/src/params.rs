@@ -168,6 +168,10 @@ pub struct EncryptReplyParams {
     /// Attachment dicts of the quoted message (for the preview); derived
     /// from ``reply_to_event`` when ``None``.
     pub(crate) reply_to_attachments: Option<Py<PyAny>>,
+    /// ``attachment_id`` of the one attachment of the original being
+    /// replied to; ``None`` replies to the whole message. Needs
+    /// ``reply_to_event``, and ``reply_to_attachments`` must stay ``None``.
+    pub(crate) reply_to_attachment_id: Option<String>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.
     pub(crate) quick_reply: Option<Py<PyAny>>,
@@ -181,7 +185,7 @@ pub struct EncryptReplyParams {
 impl EncryptReplyParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_message_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_message_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, reply_to_attachment_id=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     pub(crate) fn new(
         conversation_id: String,
         text: String,
@@ -200,6 +204,7 @@ impl EncryptReplyParams {
         attachments: Option<Py<PyAny>>,
         reply_to_entities: Option<Py<PyAny>>,
         reply_to_attachments: Option<Py<PyAny>>,
+        reply_to_attachment_id: Option<String>,
         quick_reply: Option<Py<PyAny>>,
         should_notify: Option<bool>,
         ttl_msec: Option<i64>,
@@ -222,6 +227,7 @@ impl EncryptReplyParams {
             attachments,
             reply_to_entities,
             reply_to_attachments,
+            reply_to_attachment_id,
             quick_reply,
             should_notify,
             ttl_msec,
@@ -253,6 +259,7 @@ impl EncryptReplyParams {
             entities_field(py, &self.reply_to_entities, "reply_to_entities")?;
         params.reply_to_attachments =
             attachments_field(py, &self.reply_to_attachments, "reply_to_attachments")?;
+        params.reply_to_attachment_id = self.reply_to_attachment_id.clone();
         params.quick_reply = quick_reply_field(py, &self.quick_reply)?;
         params.should_notify = self.should_notify;
         params.ttl_msec = self.ttl_msec;
@@ -290,13 +297,16 @@ pub struct EncryptReactionParams {
     pub(crate) conversation_key: Option<Vec<u8>>,
     /// Version of the conversation key, as its key-change event carries it.
     pub(crate) conversation_key_version: Option<String>,
+    /// ``attachment_id`` of the attachment of the target the reaction is
+    /// for; ``None`` reacts to the whole message. Needs ``target_event``.
+    pub(crate) target_attachment_id: Option<String>,
 }
 
 #[pymethods]
 impl EncryptReactionParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, target_attachment_id=None))]
     pub(crate) fn new(
         target_event: Option<String>,
         emoji: Option<String>,
@@ -306,6 +316,7 @@ impl EncryptReactionParams {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        target_attachment_id: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             target_event,
@@ -316,6 +327,7 @@ impl EncryptReactionParams {
             signing_key_version,
             conversation_key,
             conversation_key_version,
+            target_attachment_id,
         })
     }
 }
@@ -332,6 +344,7 @@ impl EncryptReactionParams {
         params.signing_key_version = self.signing_key_version.clone();
         params.conversation_key = self.conversation_key.clone();
         params.conversation_key_version = self.conversation_key_version.clone();
+        params.target_attachment_id = self.target_attachment_id.clone();
         params
     }
 }

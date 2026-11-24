@@ -935,6 +935,8 @@ The SDK closes this on both sides:
   [message key](#message-keys), that key travels with it
   (`raw_event_message_key` / `raw_event_edit_message_key`), so recipients can
   open it without its conversation key; a conversation key is never carried.
+  A reply to one attachment (`reply_to_attachment_id`) quotes only that
+  attachment and names it in `replying_to_attachment_id`.
 - **Receive** (`decrypt_event` / `decrypt_events`): when a decrypted message
   carries a preview with an embedded raw event, the SDK always validates it:
   1. The raw event must belong to the **same conversation** as the reply.
@@ -950,7 +952,9 @@ The SDK closes this on both sides:
      code units as X clients count them, must be equal, so a preview may
      cut the text after those 140), entities (the claimed list must be the
      quoted one exactly, and an absent list matches only an absent one), and
-     attachments.
+     attachments. A preview that names one attachment of the original
+     (`replying_to_attachment_id`, set by `reply_to_attachment_id`) is
+     invalid unless the original carries an attachment with that id.
   4. When an **edit event is embedded**, it must verify the same way and come
      from the original's author, and the text and entity claims are checked
      against the edit's updated contents instead of the original's; the

@@ -1953,6 +1953,23 @@ the id comes from the event, and a `reply_to_message_id` other than it fails
 with an invalid-input error: recipients reject a preview whose id is not
 its embedded original's.
 
+**A reply or reaction can target one attachment.** `reply_to_attachment_id`
+on `EncryptReplyParams` and `target_attachment_id` on
+`EncryptReactionParams` (`replyToAttachmentId` / `targetAttachmentId` in JS
+and on the JVM, `ReplyToAttachmentID` / `TargetAttachmentID` in Go,
+`ReplyToAttachmentId` / `TargetAttachmentId` in .NET) name the
+`attachment_id` of one attachment of the original, such as one photo of an
+album; left unset, the reply or reaction is to the whole message. Each needs
+the raw event (`reply_to_event` or `target_event`): the SDK decrypts it and
+fails with an invalid-input error, listing the ids the original carries,
+when the attachment is not among them. A reply to one attachment quotes only
+that attachment in its preview, so `reply_to_attachments` must stay unset,
+and recipients mark the preview invalid when the attachment it names is not
+in the embedded original. A reaction to one attachment is removed with the
+same `target_attachment_id`. On decrypt, a reaction or reaction removal
+carries it as `target_attachment_id` (`targetAttachmentId` in JS) and a reply
+preview as `replying_to_attachment_id`, omitted when unset.
+
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
 requires `emoji` plus a target: pass `target_event`, the base64 raw event
@@ -3164,8 +3181,8 @@ type MessageContent =
       quickReply?: QuickReply;
       ctas?: unknown[];
     }
-  | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string }
-  | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string }
+  | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string; targetAttachmentId?: string }
+  | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string; targetAttachmentId?: string }
   | { contentType: 'edit'; targetMessageSequenceId: string; targetMessageId?: string; updatedText: string; entities?: RichTextEntity[] }
   | { contentType: 'markRead' }
   | { contentType: 'markUnread' }

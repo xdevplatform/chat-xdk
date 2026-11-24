@@ -1577,10 +1577,12 @@ pub(crate) fn parse_message_content(data: &[u8]) -> Result<ParsedMessageContent,
             MessageEntryContents::ReactionAdd(r) => MessageContent::Reaction {
                 emoji: r.emoji.unwrap_or_default(),
                 target_message_sequence_id: r.message_sequence_id.unwrap_or_default(),
+                target_attachment_id: r.message_attachment_id,
             },
             MessageEntryContents::ReactionRemove(r) => MessageContent::ReactionRemoved {
                 emoji: r.emoji.unwrap_or_default(),
                 target_message_sequence_id: r.message_sequence_id.unwrap_or_default(),
+                target_attachment_id: r.message_attachment_id,
             },
             MessageEntryContents::MessageEdit(e) => MessageContent::Edit {
                 target_message_sequence_id: e.message_sequence_id.unwrap_or_default(),
@@ -1805,6 +1807,7 @@ fn map_replying_to_preview(
         sender_display_name: preview.sender_display_name.clone(),
         replying_to_message_sequence_id: preview.replying_to_message_sequence_id.clone(),
         replying_to_message_id: preview.replying_to_message_id.clone(),
+        replying_to_attachment_id: preview.replying_to_attachment_id.clone(),
     }
 }
 

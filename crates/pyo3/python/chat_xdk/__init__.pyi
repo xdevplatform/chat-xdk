@@ -409,6 +409,7 @@ class EncryptReplyParams:
     attachments: Optional[list[dict]]
     reply_to_entities: Optional[list[tuple[int, int, str]]]
     reply_to_attachments: Optional[list[dict]]
+    reply_to_attachment_id: Optional[str]
     quick_reply: Optional[QuickReply]
     should_notify: Optional[bool]
     ttl_msec: Optional[int]
@@ -432,6 +433,7 @@ class EncryptReplyParams:
         attachments: Optional[list[dict]] = None,
         reply_to_entities: Optional[list[tuple[int, int, str]]] = None,
         reply_to_attachments: Optional[list[dict]] = None,
+        reply_to_attachment_id: Optional[str] = None,
         quick_reply: Optional[QuickReply] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
@@ -446,6 +448,7 @@ class EncryptReactionParams:
     signing_key_version: Optional[str]
     conversation_key: Optional[bytes]
     conversation_key_version: Optional[str]
+    target_attachment_id: Optional[str]
     def __init__(
         self,
         target_event: Optional[str] = None,
@@ -457,6 +460,7 @@ class EncryptReactionParams:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        target_attachment_id: Optional[str] = None,
     ) -> None: ...
 
 class EncryptEditParams:

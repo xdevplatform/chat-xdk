@@ -1145,6 +1145,12 @@ namespace ChatXdk
         public IReadOnlyList<EntityDescriptor>? ReplyToEntities { get; init; }
         /// <summary>Attachments of the quoted message (for the preview); derived from <see cref="ReplyToEvent"/> when null.</summary>
         public IReadOnlyList<AttachmentDescriptor>? ReplyToAttachments { get; init; }
+        /// <summary>
+        /// <c>attachment_id</c> of the one attachment of the original being replied to; null replies
+        /// to the whole message. Needs <see cref="ReplyToEvent"/>, and <see cref="ReplyToAttachments"/>
+        /// must stay null: the preview quotes only that attachment.
+        /// </summary>
+        public string? ReplyToAttachmentId { get; init; }
         /// <summary>Optional quick reply: a request offering options, or a response selecting one.</summary>
         public QuickReply? QuickReply { get; init; }
         /// <summary>Whether to send a push notification. Defaults to true.</summary>
@@ -1194,6 +1200,12 @@ namespace ChatXdk
         public byte[]? ConversationKey { get; init; }
         /// <summary>Version of the conversation key; resolves from the key cache when null.</summary>
         public string? ConversationKeyVersion { get; init; }
+        /// <summary>
+        /// <c>attachment_id</c> of the attachment of the target the reaction is for; null reacts to the
+        /// whole message. Needs <see cref="TargetEvent"/>, which the SDK decrypts to check the
+        /// attachment belongs to it.
+        /// </summary>
+        public string? TargetAttachmentId { get; init; }
     }
 
     /// <summary>
