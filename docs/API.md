@@ -219,6 +219,7 @@ document's `guesses_remaining`. The message reads
 | 60 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
 | 61 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
 | 62 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
+| 65 | **prepare_conversation_archive** | `prepare_conversation_archive(&ConversationArchiveParams) → PreparedAction` | `prepareConversationArchive(params) → PreparedAction` | `prepare_conversation_archive(ConversationArchiveParams) → dict` | `PrepareConversationArchive(ConversationArchiveParams) (*PreparedAction, error)` | `prepareConversationArchive(ConversationArchiveParams)` → `PreparedAction` | `PrepareConversationArchive(ConversationArchiveParams)` → `PreparedAction` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -951,6 +952,33 @@ ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{message_id},{sender
 Every new params type takes optional `sender_id` and `signing_key_version`,
 resolved from `set_identity` when omitted. A one-to-one id is signed in its
 canonical colon form. Any signed component that contains a comma is rejected.
+
+---
+
+#### prepare_conversation_archive
+
+Sign archiving or unarchiving a conversation. `ConversationArchiveParams`
+requires `conversation_id` (a group id, or a one-to-one id in `A:B` or `A-B`
+form) and `archived`: `true` signs an archive, `false` an unarchive. It works
+for groups and one-to-one conversations alike. Send the `PreparedAction`'s
+`action_signatures` as the `action_signatures` field of
+`POST /2/chat/conversations/{id}/archive` (archive) or
+`DELETE /2/chat/conversations/{id}/archive` (unarchive); until now an API
+archive went out unsigned.
+
+The event is a `ConversationMetadataChangeEvent` whose `ArchiveConversation`
+(or `UnarchiveConversation`) change has no conversation ids set, as X clients
+sign it, so the signature has no fields after the conversation id. Returns one
+`PreparedAction` signature, over:
+
+```text
+ConversationMetadataChangeEvent.ArchiveConversation,{message_id},{sender_id},{conversation_id}
+ConversationMetadataChangeEvent.UnarchiveConversation,{message_id},{sender_id},{conversation_id}
+```
+
+`decrypt_events` and `decrypt_event` verify an archive or unarchive event and
+return it as a `SettingsChange` of `archived` or `unarchived`. If the event's
+id list is set, the verifier signs those ids after the conversation id.
 
 ---
 
@@ -2355,7 +2383,8 @@ one-call prepare methods (`prepare_conversation_key_change`,
 signatures (a conversation-key change plus the group change). Message deletes
 and read receipts are signed by `prepare_message_delete` and
 `prepare_mark_conversation_read`, which each return a `PreparedAction` with
-one entry in its `actionSignatures`.
+one entry in its `actionSignatures`; archiving and unarchiving a conversation
+are signed by `prepare_conversation_archive`, which does the same.
 
 ### Utilities
 
@@ -3604,6 +3633,8 @@ type SettingsChange =
   | { setting: 'messageDurationRemoved' }
   | { setting: 'muted' }
   | { setting: 'unmuted' }
+  | { setting: 'archived' }
+  | { setting: 'unarchived' }
   | { setting: 'screenCaptureDetectionEnabled' }
   | { setting: 'screenCaptureDetectionDisabled' }
   | { setting: 'screenCaptureBlockingEnabled' }
