@@ -1085,6 +1085,17 @@ namespace ChatXdk
         public PreparedAction PrepareMessageTtlRemove(MessageTtlRemoveParams parameters)
             => CallAction(BuildPrepareMessageTtlRemoveJson(parameters), NativeMethods.chat_xdk_prepare_message_ttl_remove);
 
+        /// <summary>
+        /// Sign muting or unmuting a conversation, group or one-to-one, for the
+        /// signer alone: the <c>action_signatures</c> of the mute or unmute request,
+        /// one entry. The event is signed for the signer's own
+        /// <c>{sender}:{sender}</c> conversation and names the muted conversation
+        /// in canonical colon form, the form the request must name it in. The SDK
+        /// generates the action's message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationMute(ConversationMuteParams parameters)
+            => CallAction(BuildPrepareConversationMuteJson(parameters), NativeMethods.chat_xdk_prepare_conversation_mute);
+
         /// <summary>Sign one screen-capture setting change.</summary>
         public PreparedAction PrepareScreenCapture(ScreenCaptureParams parameters)
             => CallAction(BuildPrepareScreenCaptureJson(parameters), NativeMethods.chat_xdk_prepare_screen_capture);
@@ -1733,6 +1744,15 @@ namespace ChatXdk
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareConversationMuteJson(ConversationMuteParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["muted"] = p.Muted,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

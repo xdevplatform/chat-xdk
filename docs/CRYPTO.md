@@ -637,6 +637,15 @@ event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
 `EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
 further fields.
 
+`prepare_conversation_mute` signs a `MuteConversation` or
+`UnmuteConversation` change as X clients do: in the signer's own
+`{sender_id}:{sender_id}` conversation, with the muted conversation's
+canonical id as the one field after it:
+
+```
+"ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+```
+
 #### Verifying newer versions
 
 The action layouts above are the ones the SDK signs at v7, while the chat

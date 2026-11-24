@@ -1042,6 +1042,22 @@ public final class Chat implements AutoCloseable {
                 ChatNative.INSTANCE::chat_xdk_prepare_message_ttl_remove);
     }
 
+    /**
+     * Sign muting or unmuting a conversation, group or one-to-one, for the signer
+     * alone: the {@code action_signatures} of the mute or unmute request, one entry.
+     * The event is signed for the signer's own {@code {sender}:{sender}} conversation
+     * and names the muted conversation in canonical colon form, the form the request
+     * must name it in. The SDK generates the action's message id; read it back from
+     * the entry.
+     */
+    public PreparedAction prepareConversationMute(ConversationMuteParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareConversationMuteJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_conversation_mute);
+    }
+
     /** Sign one screen-capture setting change. */
     public PreparedAction prepareScreenCapture(ScreenCaptureParams parameters) throws Exception {
         throwIfDisposed();
@@ -1789,6 +1805,15 @@ public final class Chat implements AutoCloseable {
     private static String buildPrepareMessageTtlRemoveJson(MessageTtlRemoveParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareConversationMuteJson(ConversationMuteParams p)
+            throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("muted", p.muted);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

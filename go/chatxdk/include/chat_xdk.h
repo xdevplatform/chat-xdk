@@ -978,6 +978,18 @@ struct FfiResult chat_xdk_prepare_message_ttl_remove(const struct ChatHandle *ha
                                                      const char *params_json);
 
 /**
+ * Sign muting or unmuting a conversation, group or one-to-one, for the
+ * signer alone.
+ *
+ * `params_json` — `conversation_id`, `muted` (`true` signs a mute, `false`
+ * an unmute), plus optional `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`: the mute request's `action_signatures`.
+ */
+struct FfiResult chat_xdk_prepare_conversation_mute(const struct ChatHandle *handle,
+                                                    const char *params_json);
+
+/**
  * Sign one screen-capture setting change.
  *
  * `params_json` — `conversation_id`, `change` (`BlockingEnabled`,

@@ -2225,6 +2225,66 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 
 // TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
 // under the send request's field names and unmarshals unchanged.
+func TestPrepareConversationMute(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// The event belongs to the signer's own 111:111 conversation and names
+	// the muted one: a 1:1 id in canonical colon form, a group id as it is.
+	for _, c := range []struct {
+		conversation, mutedID string
+		muted                 bool
+		event                 string
+	}{
+		{"222-111", "111:222", true, "MuteConversation"},
+		{"222-111", "111:222", false, "UnmuteConversation"},
+		{"g999", "g999", true, "MuteConversation"},
+		{"g999", "g999", false, "UnmuteConversation"},
+	} {
+		prepared, err := chat.PrepareConversationMute(ConversationMuteParams{
+			SenderID:          "111",
+			SigningKeyVersion: "1",
+			ConversationID:    c.conversation,
+			Muted:             c.muted,
+		})
+		sig := onlyAction(t, prepared, err)
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" {
+			t.Errorf("%s: expected a message_id and an encoded detail", c.event)
+		}
+		if sig.MessageEventSignature.PublicKeyVersion != "1" {
+			t.Errorf("expected public_key_version 1, got %q", sig.MessageEventSignature.PublicKeyVersion)
+		}
+		want := fmt.Sprintf("ConversationMetadataChangeEvent.%s,%s,111,111:111,%s", c.event, sig.MessageID, c.mutedID)
+		if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 || !signedOver(t, chat, sig, want) {
+			t.Errorf("expected the action to sign %q", want)
+		}
+	}
+
+	// With no identity in the params the session identity signs.
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "111", SigningKeyVersion: "7"}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	prepared, err := chat.PrepareConversationMute(ConversationMuteParams{ConversationID: "g999"})
+	sig := onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", sig.MessageEventSignature.PublicKeyVersion)
+	}
+	want := fmt.Sprintf("ConversationMetadataChangeEvent.UnmuteConversation,%s,111,111:111,g999", sig.MessageID)
+	if !signedOver(t, chat, sig, want) {
+		t.Errorf("expected an unset Muted to sign an unmute: %q", want)
+	}
+
+	_, err = chat.PrepareConversationMute(ConversationMuteParams{Muted: true})
+	if err == nil || !strings.Contains(err.Error(), "conversation_id is empty") {
+		t.Errorf("expected an empty conversation_id error, got %v", err)
+	}
+}
+
 func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)

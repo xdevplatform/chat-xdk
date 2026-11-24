@@ -218,6 +218,7 @@ document's `guesses_remaining`. The message reads
 | 59 | **prepare_group_join_reject** | `prepare_group_join_reject(&GroupJoinRejectParams) → PreparedAction` | `prepareGroupJoinReject(params) → PreparedAction` | `prepare_group_join_reject(GroupJoinRejectParams) → dict` | `PrepareGroupJoinReject(GroupJoinRejectParams) (*PreparedAction, error)` | `prepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` | `PrepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` |
 | 60 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
 | 61 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
+| 66 | **prepare_conversation_mute** | `prepare_conversation_mute(&ConversationMuteParams) → PreparedAction` | `prepareConversationMute(params) → PreparedAction` | `prepare_conversation_mute(ConversationMuteParams) → dict` | `PrepareConversationMute(ConversationMuteParams) (*PreparedAction, error)` | `prepareConversationMute(ConversationMuteParams)` → `PreparedAction` | `PrepareConversationMute(ConversationMuteParams)` → `PreparedAction` |
 | 62 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
@@ -926,6 +927,33 @@ after the conversation id. Returns one `PreparedAction` signature, over:
 ```text
 ConversationMetadataChangeEvent.MessageDurationRemove,{message_id},{sender_id},{conversation_id}
 ```
+
+---
+
+#### prepare_conversation_mute
+
+Sign muting or unmuting a conversation for the signer alone.
+`ConversationMuteParams` requires `conversation_id` (a group id, or a
+one-to-one id in `A:B` or `A-B` form, or the other member's bare user id) and
+`muted`: `true` signs a mute, `false` an unmute.
+
+Mute state is personal, so the event is not sent in the muted conversation:
+X sends it in the signer's own self conversation, `{sender_id}:{sender_id}`,
+with the muted conversation as the one id of its `MuteConversation` (or
+`UnmuteConversation`) change. The id is signed in canonical form, a
+one-to-one as `min:max`. Send the `PreparedAction`'s `action_signatures` with
+a mute or unmute request that names the conversation in that same form: the
+backend builds the event from the request's ids and accepts the signature
+only if its encoded event matches. Returns one `PreparedAction` signature,
+over:
+
+```text
+ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{conversation_id}
+ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{conversation_id}
+```
+
+`decrypt_events` and `decrypt_event` verify the event, delivered in the self
+conversation, and return it as a `SettingsChange` of `muted` or `unmuted`.
 
 ---
 
@@ -2356,6 +2384,8 @@ signatures (a conversation-key change plus the group change). Message deletes
 and read receipts are signed by `prepare_message_delete` and
 `prepare_mark_conversation_read`, which each return a `PreparedAction` with
 one entry in its `actionSignatures`.
+Muting and unmuting are signed by `prepare_conversation_mute`, which does the
+same, for the signer's own self conversation.
 
 ### Utilities
 

@@ -82,15 +82,15 @@ use crate::error::{JuiceboxError, KeyError, SdkError};
 use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, RegisterResult};
 #[cfg(feature = "juicebox")]
 use crate::params::{
-    ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
-    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
-    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
-    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
-    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
+    ConversationKeyChangeParams, ConversationMuteParams, DecryptEventParams, DecryptEventsParams,
+    DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
+    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
+    GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
+    GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams, GroupMembersRemoveParams,
+    GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -640,6 +640,13 @@ impl Chat {
         params: &MessageTtlRemoveParams,
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_message_ttl_remove(params)
+    }
+    /// Sign muting or unmuting a conversation for the signer alone.
+    pub fn prepare_conversation_mute(
+        &self,
+        params: &ConversationMuteParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_conversation_mute(params)
     }
     /// Sign one screen-capture setting change.
     pub fn prepare_screen_capture(

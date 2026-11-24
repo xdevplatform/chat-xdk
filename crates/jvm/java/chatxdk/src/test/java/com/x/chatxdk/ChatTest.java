@@ -1057,6 +1057,54 @@ class ChatTest {
     }
 
     @Test
+    void prepareConversationMuteSignsForTheSelfConversation() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // The event belongs to the signer's own 111:111 conversation and names the muted
+            // one: a 1:1 id in canonical colon form, a group id as it is.
+            String[][] conversations = {{"222-111", "111:222"}, {"g999", "g999"}};
+            for (String[] conversation : conversations) {
+                for (boolean muted : new boolean[] {true, false}) {
+                    ConversationMuteParams p = new ConversationMuteParams(conversation[0], muted);
+                    p.senderId = "111";
+                    p.signingKeyVersion = "1";
+                    ActionSignature sig = onlyAction(chat.prepareConversationMute(p));
+                    assertFalse(sig.messageId.isEmpty());
+                    assertFalse(sig.encodedMessageEventDetail.isEmpty());
+                    assertEquals("1", sig.messageEventSignature.publicKeyVersion);
+                    assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
+                    String event = muted ? "MuteConversation" : "UnmuteConversation";
+                    assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent." + event + ","
+                            + sig.messageId + ",111,111:111," + conversation[1]));
+                }
+            }
+        }
+    }
+
+    @Test
+    void prepareConversationMuteDefaultsToSessionIdentity() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "7"));
+            ActionSignature sig =
+                    onlyAction(chat.prepareConversationMute(new ConversationMuteParams("g999", true)));
+            assertEquals("7", sig.messageEventSignature.publicKeyVersion);
+            assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent.MuteConversation,"
+                    + sig.messageId + ",111,111:111,g999"));
+        }
+    }
+
+    @Test
+    void prepareConversationMuteRejectsEmptyConversationId() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationMuteParams p = new ConversationMuteParams("", true);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareConversationMute(p));
+            assertTrue(e.getMessage().contains("conversation_id is empty"), e.getMessage());
+        }
+    }
+
+    @Test
     void prepareConversationKeyChangeReturnsExpectedShape() throws Exception {
         try (Chat chat = createUnlocked()) {
             PublicKeys keys = chat.getPublicKeys();

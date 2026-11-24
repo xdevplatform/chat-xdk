@@ -400,6 +400,12 @@ func ffiPrepareMessageTtlRemove(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_prepare_message_ttl_remove(h, c))
 }
 
+func ffiPrepareConversationMute(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_conversation_mute(h, c))
+}
+
 func ffiPrepareScreenCapture(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
