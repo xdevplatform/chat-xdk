@@ -592,6 +592,46 @@ export interface EncryptMessageParams {
 }
 
 /**
+ * Parameters for encryptForward.
+ *
+ * A forward is a new message carrying another message: its full text and
+ * entities as `forwardedText` and `forwardedEntities`, and its attachments,
+ * each file uploaded again to this conversation, as `attachments`. `text`
+ * is an optional comment. A forward with no `forwardedText` needs
+ * `attachments`.
+ */
+export interface EncryptForwardParams {
+  /** ID of the conversation the message is forwarded to. */
+  conversationId: string;
+  /** The full text of the message being forwarded; `""` when it has none. */
+  forwardedText: string;
+  /** Optional rich-text entities of the forwarded message, as offsets into forwardedText. */
+  forwardedEntities?: EntityTuple[] | null;
+  /** Optional comment sent with the forward. */
+  text?: string | null;
+  /** Optional rich-text entities of the comment, as offsets into text. */
+  entities?: EntityTuple[] | null;
+  /**
+   * Optional attachments of the forwarded message, each file uploaded again
+   * to this conversation and named by the media hash key that upload
+   * started with.
+   */
+  attachments?: AttachmentDescriptor[] | null;
+  /** User ID of the sender; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the message; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. Set together with conversationKeyVersion. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
+  /** Whether to send a push notification. Omitted defaults to true. */
+  shouldNotify?: boolean | null;
+  /** Optional TTL in milliseconds for disappearing messages. */
+  ttlMsec?: number | null;
+}
+
+/**
  * Parameters for encryptReply.
  *
  * The preferred form passes `replyToEvent` — the base64 raw signed event
@@ -1756,6 +1796,9 @@ interface ChatCrypto {
   /** Encrypt a text message. */
   encryptMessage(params: EncryptMessageParams): SendPayload;
 
+  /** Encrypt a forward of an existing message. */
+  encryptForward(params: EncryptForwardParams): SendPayload;
+
   /** Encrypt a reply. */
   encryptReply(params: EncryptReplyParams): SendPayload;
 
@@ -2019,6 +2062,7 @@ declare class Chat implements ChatCrypto {
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
   matchesRegisteredKey(publicKeyB64: string): boolean;
   encryptMessage(params: EncryptMessageParams): SendPayload;
+  encryptForward(params: EncryptForwardParams): SendPayload;
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
@@ -2176,6 +2220,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
   matchesRegisteredKey(publicKeyB64: string): boolean;
   encryptMessage(params: EncryptMessageParams): SendPayload;
+  encryptForward(params: EncryptForwardParams): SendPayload;
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;

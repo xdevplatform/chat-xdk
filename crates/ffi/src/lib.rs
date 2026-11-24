@@ -25,9 +25,9 @@ use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{
     AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
     DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
-    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    EntityDescriptor, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
-    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    EncryptFileWithKeyParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, EntityDescriptor, FileDecryptorParams, FileEncryptorParams,
+    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
     GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
     GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
     GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, KeyChangeCall,

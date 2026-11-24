@@ -203,13 +203,13 @@ pub use features::{
 pub use params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
-    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
-    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
-    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
+    GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
+    GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams, GroupMembersRemoveParams,
+    GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
+    MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 pub use types::*;
 
@@ -287,7 +287,7 @@ pub mod prelude {
     pub use crate::chat::Chat;
 
     pub use crate::params::{
-        ConversationKeyChangeParams, EncryptEditParams, EncryptMessageParams,
+        ConversationKeyChangeParams, EncryptEditParams, EncryptForwardParams, EncryptMessageParams,
         EncryptReactionParams, EncryptReplyParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
         GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
         GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,

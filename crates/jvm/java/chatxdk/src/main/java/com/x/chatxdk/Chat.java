@@ -1108,6 +1108,16 @@ public final class Chat implements AutoCloseable {
     }
 
     /**
+     * Encrypt a forward of an existing message for the X API: a new message carrying the
+     * original's full text and entities, an optional comment, and the original's attachments
+     * uploaded again to this conversation. Its id and files work as for {@link #encryptMessage}.
+     */
+    public SendPayload encryptForward(EncryptForwardParams parameters) throws Exception {
+        throwIfDisposed();
+        return callEncrypt(buildEncryptForwardJson(parameters), ChatNative.INSTANCE::chat_xdk_encrypt_forward);
+    }
+
+    /**
      * Encrypt a reply message for the X API.
      * Like {@link #encryptMessage} but includes a reply-to preview; the reply's id and files work
      * the same way.
@@ -1505,6 +1515,32 @@ public final class Chat implements AutoCloseable {
         if (conversationKeyVersion != null) {
             n.put("conversation_key_version", conversationKeyVersion);
         }
+    }
+
+    private static String buildEncryptForwardJson(EncryptForwardParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("forwarded_text", p.forwardedText);
+        if (p.forwardedEntities != null) {
+            n.set("forwarded_entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.forwardedEntities)));
+        }
+        if (p.text != null) {
+            n.put("text", p.text);
+        }
+        if (p.entities != null) {
+            n.set("entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.entities)));
+        }
+        if (p.attachments != null) {
+            n.set("attachments", ChatJson.MAPPER.valueToTree(p.attachments));
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        if (p.shouldNotify != null) {
+            n.put("should_notify", p.shouldNotify);
+        }
+        if (p.ttlMsec != null) {
+            n.put("ttl_msec", p.ttlMsec);
+        }
+        return ChatJson.MAPPER.writeValueAsString(n);
     }
 
     private static String buildEncryptMessageJson(EncryptMessageParams p) throws Exception {

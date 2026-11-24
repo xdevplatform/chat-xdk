@@ -425,6 +425,27 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_encrypt_message(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Encrypt a forward of an existing message for the X API.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id`, `forwarded_text`
+        ///  (the full text of the message being forwarded; empty when it has none),
+        ///  plus optional `forwarded_entities` (`[[start,end,"type"],...]` into
+        ///  `forwarded_text`), `text` (a comment sent with the forward) and `entities`
+        ///  (into `text`), `attachments` (the original's attachments, each file
+        ///  uploaded again to this conversation), `sender_id` /
+        ///  `signing_key_version` (unset resolves from the session identity),
+        ///  `conversation_key` (base64) / `conversation_key_version` (unset resolves
+        ///  from the opt-in key cache), `should_notify`, and `ttl_msec`. A forward
+        ///  with an empty `forwarded_text` and no attachments fails with an
+        ///  invalid-input error.
+        ///
+        ///  Returns JSON `SendPayload`; its id and files work as for
+        ///  `chat_xdk_encrypt_message`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_forward", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_encrypt_forward(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Encrypt a reply message for the X API.
         ///
         ///  `params_json` — same document as `chat_xdk_encrypt_message` plus the

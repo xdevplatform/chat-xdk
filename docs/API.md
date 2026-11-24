@@ -1809,6 +1809,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 26 | **encrypt_message** | `encrypt_message(&EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 67 | **encrypt_forward** | `encrypt_forward(&EncryptForwardParams) → SendPayload` | `encryptForward(params: EncryptForwardParams) → SendPayload` | `encrypt_forward(EncryptForwardParams) → SendPayload` | `EncryptForward(params EncryptForwardParams) (*SendPayload, error)` | `encryptForward(EncryptForwardParams)` | `EncryptForward(EncryptForwardParams)` |
 | 27 | **encrypt_reply** | `encrypt_reply(&EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(EncryptReactionParams) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(EncryptReactionParams) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
@@ -1926,6 +1927,21 @@ error in every binding rather than producing a message that
 breaks receivers. This mirrors the first-party encrypted-send rules and will
 be relaxed when clients support heterogeneous attachment lists; the wire
 format already carries them.
+
+**Forwards.** `encrypt_forward` sends an existing message on as a new
+message, the way the X apps' forward sheet does. Its `EncryptForwardParams`
+takes `conversation_id` (where the forward goes) and `forwarded_text`, the
+full text of the message being forwarded (empty when it has none), plus
+optional `forwarded_entities` (offsets into `forwarded_text`), `text` (a
+comment) with `entities` (offsets into `text`), `attachments` (the
+original's attachments, each file uploaded again to this conversation and
+encrypted afterwards as for `encrypt_message`), and the identity, key,
+`should_notify` and `ttl_msec` fields of `EncryptMessageParams`. The
+original travels in the message's `forwarded_message`, the comment as its
+`text`, and `sent_from` is `MESSAGE_FORWARD_SHEET`, so the decrypted
+message reads back with those fields. A forward with an empty
+`forwarded_text` and no attachments, or with `entities` but no `text`, fails
+with `InvalidInput`.
 
 **Replies are event-based.** The preferred form of `EncryptReplyParams` adds
 `reply_to_event` — the base64 raw signed event being replied to. The SDK

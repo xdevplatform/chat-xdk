@@ -681,6 +681,49 @@ class TestApiShapes(unittest.TestCase):
                 )
             )
 
+    def test_encrypt_forward_carries_the_original_and_the_comment(self):
+        from chat_xdk import DecryptEventParams, EncryptForwardParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+
+        def forward(forwarded_text, **kwargs):
+            return chat.encrypt_forward(
+                EncryptForwardParams(
+                    "1002-1001", forwarded_text,
+                    sender_id="1001",
+                    signing_key_version="1",
+                    conversation_key=conv_key,
+                    conversation_key_version="7",
+                    **kwargs,
+                )
+            )
+
+        payload = forward(
+            "see https://x.com",
+            forwarded_entities=[(4, 17, "url")],
+            text="look",
+        )
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                payload.event_b64,
+                {"7": conv_key},
+                signing_keys=[self._signing_key("1001", "1")],
+            )
+        )
+        self.assertTrue(event["verified"])
+        content = event["content"]
+        self.assertEqual(content["text"], "look")
+        self.assertEqual(content["forwarded_message"]["message_text"], "see https://x.com")
+        self.assertEqual(len(content["forwarded_message"]["entities"]), 1)
+        self.assertEqual(content["sent_from"], "MESSAGE_FORWARD_SHEET")
+
+        with self.assertRaises(InvalidInputError) as ctx:
+            forward("")
+        self.assertIn("nothing to forward", str(ctx.exception))
+        with self.assertRaises(InvalidInputError):
+            forward("hi", forwarded_entities=[(0, 9, "url")])
+
     def test_event_b64_decrypts_as_the_sent_message(self):
         from chat_xdk import DecryptEventParams, EncryptMessageParams
 

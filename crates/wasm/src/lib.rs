@@ -810,6 +810,39 @@ impl Chat {
         to_js_value(&js_payload)
     }
 
+    /// Encrypt a forward of an existing message for the X API.
+    ///
+    /// Takes a single params object with camelCase keys: required
+    /// `conversationId` and `forwardedText` (the full text of the message
+    /// being forwarded; `""` when it has none), plus optional
+    /// `forwardedEntities` (into `forwardedText`), `text` (a comment) and
+    /// `entities` (into `text`), `attachments` (the original's attachments,
+    /// each file uploaded again to this conversation), the identity and key
+    /// fields of `encryptMessage`, `shouldNotify`, and `ttlMsec`. Its id and
+    /// files work as for `encryptMessage`.
+    #[wasm_bindgen(js_name = encryptForward)]
+    pub fn encrypt_forward(&self, params: JsValue) -> Result<JsValue, JsValue> {
+        let p: JsEncryptForwardParams = from_js_params("encryptForward", params)?;
+        let mut core_params =
+            chat_xdk_core::EncryptForwardParams::new(p.conversation_id, p.forwarded_text);
+        core_params.forwarded_entities = p.forwarded_entities.map(entity_tuples_to_descs);
+        core_params.text = p.text.filter(|t| !t.is_empty());
+        core_params.entities = p.entities.map(entity_tuples_to_descs);
+        core_params.attachments = p.attachments;
+        core_params.sender_id = p.sender_id;
+        core_params.signing_key_version = p.signing_key_version;
+        core_params.conversation_key = p.conversation_key;
+        core_params.conversation_key_version = p.conversation_key_version;
+        core_params.should_notify = p.should_notify;
+        core_params.ttl_msec = p.ttl_msec;
+        let payload = self
+            .inner
+            .encrypt_forward(&core_params)
+            .map_err(sdk_error)?;
+        let js_payload: JsSendPayload = payload.into();
+        to_js_value(&js_payload)
+    }
+
     /// Encrypt a reply message for the X API.
     ///
     /// Takes a single params object: the same fields as `encryptMessage` plus
@@ -1762,6 +1795,24 @@ struct JsEncryptMessageParams {
     entities: Option<Vec<(i32, i32, String)>>,
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
+    should_notify: Option<bool>,
+    #[serde(default, deserialize_with = "optional_msec")]
+    ttl_msec: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsEncryptForwardParams {
+    conversation_id: String,
+    forwarded_text: String,
+    forwarded_entities: Option<Vec<(i32, i32, String)>>,
+    text: Option<String>,
+    entities: Option<Vec<(i32, i32, String)>>,
+    attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+    conversation_key: Option<Vec<u8>>,
+    conversation_key_version: Option<String>,
     should_notify: Option<bool>,
     #[serde(default, deserialize_with = "optional_msec")]
     ttl_msec: Option<i64>,

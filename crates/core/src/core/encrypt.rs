@@ -1,4 +1,5 @@
-//! Message encryption: messages, replies, reactions, edits and their signatures.
+//! Message encryption: messages, forwards, replies, reactions, edits and their
+//! signatures.
 
 use super::*;
 
@@ -57,6 +58,100 @@ impl ChatCore {
             thrift_entities,
             thrift_attachments,
             thrift_quick_reply,
+        )?;
+
+        let mut api_params = crate::pipeline::EncryptAndSignParams::new(
+            &ckey,
+            &signing_kp.private,
+            &message_id,
+            &sender_id,
+            &params.conversation_id,
+            &content_bytes,
+            &conversation_key_version,
+            &signing_key_version,
+        )
+        .send_version(send_version);
+        api_params.should_notify = params.should_notify;
+        api_params.ttl_msec = params.ttl_msec;
+        crate::pipeline::encrypt_and_sign(api_params)
+    }
+
+    /// Encrypt a forward of an existing message.
+    ///
+    /// The forward is a new message in `conversation_id`, built the way the
+    /// X apps send one from their forward sheet: the original's full text
+    /// and entities travel as the message's `forwarded_message`, the
+    /// optional comment is the message's own text, `attachments` are the
+    /// original's attachments uploaded again for this conversation, and the
+    /// message is marked as sent from the forward sheet. Its id and files
+    /// work as for [`Self::encrypt_message`].
+    pub fn encrypt_forward(&self, params: &EncryptForwardParams) -> Result<SendPayload, SdkError> {
+        let has_attachments = params.attachments.as_ref().is_some_and(|a| !a.is_empty());
+        if params.forwarded_text.is_empty() && !has_attachments {
+            return Err(SdkError::InvalidInput(
+                "nothing to forward: pass the original message's text in forwarded_text, or its \
+                 attachments, uploaded again to this conversation, in attachments"
+                    .into(),
+            ));
+        }
+        let comment = params.text.as_deref().filter(|t| !t.is_empty());
+        if comment.is_none() && params.entities.as_ref().is_some_and(|e| !e.is_empty()) {
+            return Err(SdkError::InvalidInput(
+                "entities is set but text is empty: entities describe the comment, so pass the \
+                 comment in text or leave entities unset"
+                    .into(),
+            ));
+        }
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let signing_key_version =
+            self.resolve_signing_key_version(params.signing_key_version.as_deref())?;
+        let (ckey, conversation_key_version) = self.resolve_conversation_key(
+            params.conversation_key.as_deref(),
+            params.conversation_key_version.as_deref(),
+            &params.conversation_id,
+            &sender_id,
+        )?;
+        let signing_kp = self.get_signing_keypair_arc()?;
+        let thrift_entities = params
+            .entities
+            .as_deref()
+            .map(|entities| crate::pipeline::build_thrift_entities(entities, comment))
+            .transpose()?;
+        // The forwarded message carries its entities unboxed.
+        let forwarded_entities = params
+            .forwarded_entities
+            .as_deref()
+            .map(|entities| {
+                crate::pipeline::build_thrift_entities(entities, Some(&params.forwarded_text))
+            })
+            .transpose()?
+            .map(|entities| entities.into_iter().map(|e| *e).collect::<Vec<_>>());
+        if let Some(a) = params.attachments.as_deref() {
+            crate::pipeline::validate_attachment_descriptors(a)?;
+            crate::pipeline::validate_attachment_fields(a)?;
+        }
+        let send_version = self.send_version();
+        let message_id = Self::outgoing_message_id(
+            send_version,
+            &ckey,
+            &conversation_key_version,
+            &sender_id,
+            &params.conversation_id,
+            params.attachments.as_deref(),
+        )?;
+        let thrift_attachments = params
+            .attachments
+            .as_deref()
+            .map(|a| crate::pipeline::build_outgoing_attachments(a, &message_id, send_version));
+        let forwarded = crate::thrift::product::ForwardedMessage::new(
+            Some(params.forwarded_text.clone()),
+            forwarded_entities,
+        );
+        let content_bytes = crate::pipeline::build_forward_content(
+            comment,
+            thrift_entities,
+            thrift_attachments,
+            forwarded,
         )?;
 
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(

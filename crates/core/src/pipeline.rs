@@ -469,6 +469,35 @@ pub fn build_message_content(
     serialize_thrift(&holder)
 }
 
+/// Build forward content: the forwarded message's text and entities in
+/// `forwarded_message`, the sender's optional comment as the message text,
+/// sent from the forward sheet as the X apps mark a forward.
+#[allow(clippy::vec_box)]
+pub fn build_forward_content(
+    comment: Option<&str>,
+    entities: Option<Vec<Box<ThriftRichTextEntity>>>,
+    attachments: Option<Vec<Box<ThriftMessageAttachment>>>,
+    forwarded: crate::thrift::product::ForwardedMessage,
+) -> Result<Vec<u8>, SdkError> {
+    let content = MessageContents::new(
+        comment.map(str::to_string),
+        entities,
+        attachments,
+        None,
+        Some(Box::new(forwarded)),
+        Some(Box::new(
+            crate::thrift::product::SentFromSurface::MESSAGE_FORWARD_SHEET,
+        )),
+        None,
+        None,
+        None,
+    );
+    let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::Message(Box::new(
+        content,
+    )))));
+    serialize_thrift(&holder)
+}
+
 /// Build text message content carrying a pre-built reply preview.
 #[allow(clippy::vec_box)]
 pub fn build_message_content_with_preview(

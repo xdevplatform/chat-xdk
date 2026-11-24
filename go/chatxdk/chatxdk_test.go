@@ -5079,3 +5079,69 @@ func TestUserIDsAreDigitStrings(t *testing.T) {
 		t.Fatalf("EncryptReply with a non-numeric reply sender: got %v", err)
 	}
 }
+
+// TestEncryptForwardCarriesTheOriginalAndTheComment sends a forward and
+// decrypts it: the original's text and entities travel as the forwarded
+// message, the comment as the message text, sent from the forward sheet.
+func TestEncryptForwardCarriesTheOriginalAndTheComment(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	params := EncryptForwardParams{
+		ConversationID:         "conv-1",
+		ForwardedText:          "see https://x.com",
+		ForwardedEntities:      []EntityTuple{NewEntity(4, 17, "url")},
+		Text:                   "look",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	}
+	payload, err := chat.EncryptForward(params)
+	if err != nil {
+		t.Fatalf("EncryptForward: %v", err)
+	}
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         payload.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvent: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || !msg.Verified {
+		t.Fatalf("expected a verified message, got %s", event.Raw())
+	}
+	text := msg.Content.TextContent
+	if text == nil || text.Text != "look" {
+		t.Fatalf("expected the comment as the text, got %s", event.Raw())
+	}
+	var forwarded struct {
+		MessageText string            `json:"message_text"`
+		Entities    []json.RawMessage `json:"entities"`
+	}
+	if err := json.Unmarshal(text.ForwardedMessage, &forwarded); err != nil {
+		t.Fatalf("forwarded_message: %v", err)
+	}
+	if forwarded.MessageText != "see https://x.com" || len(forwarded.Entities) != 1 {
+		t.Fatalf("unexpected forwarded_message %s", text.ForwardedMessage)
+	}
+	if string(text.SentFrom) != `"MESSAGE_FORWARD_SHEET"` {
+		t.Fatalf("expected sent_from MESSAGE_FORWARD_SHEET, got %s", text.SentFrom)
+	}
+
+	params.ForwardedText = ""
+	params.ForwardedEntities = nil
+	_, err = chat.EncryptForward(params)
+	var chatErr *Error
+	if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput ||
+		!strings.Contains(chatErr.Message, "nothing to forward") {
+		t.Fatalf("expected an invalid-input error for an empty forward, got %v", err)
+	}
+}

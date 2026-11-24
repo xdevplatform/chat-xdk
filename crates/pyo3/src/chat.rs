@@ -621,6 +621,31 @@ impl Chat {
         Ok(to_py_send_payload(payload))
     }
 
+    /// Encrypt a forward of an existing message for the X API.
+    ///
+    /// The forward is a new message carrying the original's full text and
+    /// entities, an optional comment, and the original's attachments
+    /// uploaded again to this conversation. Its id and files work as for
+    /// ``encrypt_message``.
+    ///
+    /// Args:
+    ///     params: An ``EncryptForwardParams``.
+    ///
+    /// Returns:
+    ///     The ``SendPayload`` to send to the X API.
+    pub(crate) fn encrypt_forward(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, EncryptForwardParams>,
+    ) -> PyResult<SendPayload> {
+        let payload = self
+            .inner
+            .encrypt_forward(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        Ok(to_py_send_payload(payload))
+    }
+
+    /// Encrypt a reply message for the X API.
     /// Encrypt a reply message for the X API.
     ///
     /// Like ``encrypt_message`` but populates the replying_to_preview so the

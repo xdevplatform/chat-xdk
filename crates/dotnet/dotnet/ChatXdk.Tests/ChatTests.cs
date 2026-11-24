@@ -1911,6 +1911,45 @@ namespace ChatXdk.Tests
         // Failure events are unsigned by protocol: the fixture failure decodes
         // with no conversation or signing keys, and the JSON carries the
         // PascalCase discriminator values.
+        // A forward carries the original's text and entities, the comment as its
+        // own text, and is marked as sent from the forward sheet.
+        [Fact]
+        public void EncryptForward_CarriesTheOriginalAndTheComment()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+
+            var payload = chat.EncryptForward(new EncryptForwardParams("conv-1", "see https://x.com")
+            {
+                ForwardedEntities = new[] { new EntityDescriptor(4, 17, "url") },
+                Text = "look",
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
+            var e = chat.DecryptEvent(new DecryptEventParams(payload.EventB64, ConversationKeys(v))
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            var content = e.GetProperty("content");
+            Assert.Equal("look", content.GetProperty("text").GetString());
+            var forwarded = content.GetProperty("forwarded_message");
+            Assert.Equal("see https://x.com", forwarded.GetProperty("message_text").GetString());
+            Assert.Equal(1, forwarded.GetProperty("entities").GetArrayLength());
+            Assert.Equal("MESSAGE_FORWARD_SHEET", content.GetProperty("sent_from").GetString());
+
+            var error = Assert.Throws<ChatXdkException>(() => chat.EncryptForward(new EncryptForwardParams("conv-1", "")
+            {
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, error.Kind);
+            Assert.Contains("nothing to forward", error.Message);
+        }
+
         // Reactions and edits name their target by its sequence id; a v0 edit
         // carries no target message id.
         [Fact]

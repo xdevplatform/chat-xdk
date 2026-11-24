@@ -1107,6 +1107,69 @@ public final class Types {
     }
 
     /**
+     * Parameters for {@link Chat#encryptForward}.
+     *
+     * <p>A forward is a new message carrying another message: its full text and entities as
+     * {@link #forwardedText} and {@link #forwardedEntities}, and its attachments, each file
+     * uploaded again to this conversation, as {@link #attachments}. {@link #text} is an optional
+     * comment. Identity and key overrides resolve as for {@link EncryptMessageParams}.
+     */
+    public static final class EncryptForwardParams {
+        /** ID of the conversation the message is forwarded to. */
+        public final String conversationId;
+
+        /** The full text of the message being forwarded; empty when it has none. */
+        public final String forwardedText;
+
+        /** Optional rich-text entities of the forwarded message, as offsets into {@link #forwardedText}. */
+        public List<EntityDescriptor> forwardedEntities;
+
+        /** Optional comment sent with the forward. */
+        public String text;
+
+        /** Optional rich-text entities of the comment, as offsets into {@link #text}. */
+        public List<EntityDescriptor> entities;
+
+        /**
+         * Optional attachments of the forwarded message, each file uploaded again to this
+         * conversation and named by the media hash key that upload started with.
+         */
+        public List<AttachmentDescriptor> attachments;
+
+        /** User ID of the sender; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Raw 32-byte conversation key; resolves from the key cache when null
+         * (set together with {@link #conversationKeyVersion}).
+         */
+        public byte[] conversationKey;
+
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
+
+        /** Whether to send a push notification. Defaults to true. */
+        public Boolean shouldNotify;
+
+        /** Time-to-live for disappearing messages in milliseconds. */
+        public Long ttlMsec;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the conversation the message is forwarded to.
+         * @param forwardedText The full text of the message being forwarded; empty when it has none.
+         */
+        public EncryptForwardParams(String conversationId, String forwardedText) {
+            this.conversationId = conversationId;
+            this.forwardedText = forwardedText;
+        }
+    }
+
+    /**
      * Parameters for {@link Chat#encryptReply}.
      *
      * <p>The preferred form passes the raw signed event being replied to
