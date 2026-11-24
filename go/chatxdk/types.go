@@ -850,6 +850,18 @@ type ScreenCaptureParams struct {
 	SigningKeyVersion string              `json:"signing_key_version,omitempty"`
 }
 
+// ConversationArchiveParams are the parameters for
+// PrepareConversationArchive. ConversationID is a group id or a one-to-one id,
+// in either "A:B" or "A-B" form. Archived true signs an archive, false an
+// unarchive. SenderID and SigningKeyVersion are optional overrides: empty
+// resolves from the session identity set via SetIdentity.
+type ConversationArchiveParams struct {
+	ConversationID    string `json:"conversation_id"`
+	Archived          bool   `json:"archived"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // MessageDeleteParams are the parameters for PrepareMessageDelete.
 //
 // A delete is a signed plaintext event, not an encrypted message, so no

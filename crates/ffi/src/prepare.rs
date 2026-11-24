@@ -783,6 +783,33 @@ pub extern "C" fn chat_xdk_prepare_screen_capture(
     })
 }
 
+/// Sign archiving or unarchiving a conversation, group or one-to-one.
+///
+/// `params_json` — `conversation_id`, `archived` (`true` signs an archive,
+/// `false` an unarchive), plus optional `sender_id` / `signing_key_version`.
+///
+/// Returns JSON `PreparedAction`: the archive request's `action_signatures`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_prepare_conversation_archive(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let p: FfiConversationArchiveParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut params = ConversationArchiveParams::new(p.conversation_id, p.archived);
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        ffi_prepared_action(h.inner.prepare_conversation_archive(&params))
+    })
+}
+
 /// Build the signed action for marking a conversation read.
 ///
 /// `params_json` — single JSON document: `conversation_id`,
