@@ -483,6 +483,7 @@ export class ChatWithJuicebox {
   prepareMessageTtlChange(params) { return this.#inner.prepareMessageTtlChange(params); }
   prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
   prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
+  prepareConversationArchive(params) { return this.#inner.prepareConversationArchive(params); }
 
   // The public-key hook (handled in this JS layer)
 
