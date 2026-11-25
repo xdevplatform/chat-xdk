@@ -2,18 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- `encrypt_forward` (`encryptForward` in JS and the JVM, `EncryptForward` in
-  Go and .NET) sends an existing message on as a new message, as the X apps'
-  forward sheet does. `EncryptForwardParams` takes the conversation to
-  forward to and the original's full text, plus its entities, an optional
-  comment with its own entities, and the original's attachments uploaded
-  again to this conversation. The original travels as the message's
-  `forwarded_message` and the message is marked as sent from the forward
-  sheet. A forward with no text and no attachments fails with
-  `InvalidInput`.
-
 ## [0.7.6] - 2026-11-19
 
 ### Added
