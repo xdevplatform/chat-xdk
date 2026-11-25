@@ -14,6 +14,8 @@
   `ConversationMetadataChangeEvent` with an `ArchiveConversation` or
   `UnarchiveConversation` change and no ids. The C ABI gains
   `chat_xdk_prepare_conversation_archive`.
+  [API.md](docs/API.md#prepare_conversation_archive) shows the call in every
+  binding, and each example's crypto core wraps it with an offline test.
 - `decrypt_events` and `decrypt_event` verify archive and unarchive events and
   return them as a `SettingsChange` of `archived` or `unarchived`, where they
   came back as `unknown` and, on the default policy, failed verification.

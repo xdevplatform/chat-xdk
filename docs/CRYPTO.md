@@ -635,8 +635,9 @@ reject, message TTL (`MessageDurationChange` with the millisecond count, or
 `MessageDurationRemove` with no further fields), one screen-capture
 event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
 `EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
-further fields, and archive or unarchive (`ConversationMetadataChangeEvent.ArchiveConversation`
-or `ConversationMetadataChangeEvent.UnarchiveConversation`, from
+further fields, and archive or unarchive
+(`ConversationMetadataChangeEvent.ArchiveConversation` or
+`ConversationMetadataChangeEvent.UnarchiveConversation`, from
 `prepare_conversation_archive`) with no further fields: the id list the event
 can carry is left unset, as X clients sign it, and a verifier signs the ids
 after the conversation id when it is set.

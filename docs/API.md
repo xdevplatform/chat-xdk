@@ -976,6 +976,48 @@ ConversationMetadataChangeEvent.ArchiveConversation,{message_id},{sender_id},{co
 ConversationMetadataChangeEvent.UnarchiveConversation,{message_id},{sender_id},{conversation_id}
 ```
 
+```rust
+let archive = chat.prepare_conversation_archive(&ConversationArchiveParams::new(conversation_id, true))?;
+let unarchive = chat.prepare_conversation_archive(&ConversationArchiveParams::new(conversation_id, false))?;
+// archive.action_signatures, unarchive.action_signatures
+```
+
+```typescript
+const archive = chat.prepareConversationArchive({ conversationId, archived: true });
+const unarchive = chat.prepareConversationArchive({ conversationId, archived: false });
+// archive.actionSignatures, unarchive.actionSignatures
+```
+
+```python
+archive = chat.prepare_conversation_archive(ConversationArchiveParams(conversation_id, True))
+unarchive = chat.prepare_conversation_archive(ConversationArchiveParams(conversation_id, False))
+# archive["action_signatures"], unarchive["action_signatures"]
+```
+
+```go
+archive, err := chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+    ConversationID: conversationID,
+    Archived:       true,
+})
+unarchive, err := chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+    ConversationID: conversationID,
+    Archived:       false,
+})
+// archive.ActionSignatures, unarchive.ActionSignatures
+```
+
+```java
+PreparedAction archive = chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, true));
+PreparedAction unarchive = chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, false));
+// archive.actionSignatures, unarchive.actionSignatures
+```
+
+```csharp
+var archive = chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, true));
+var unarchive = chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, false));
+// archive.ActionSignatures, unarchive.ActionSignatures
+```
+
 `decrypt_events` and `decrypt_event` verify an archive or unarchive event and
 return it as a `SettingsChange` of `archived` or `unarchived`. If the event's
 id list is set, the verifier signs those ids after the conversation id.
