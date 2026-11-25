@@ -1085,9 +1085,30 @@ namespace ChatXdk
         public PreparedAction PrepareMessageTtlRemove(MessageTtlRemoveParams parameters)
             => CallAction(BuildPrepareMessageTtlRemoveJson(parameters), NativeMethods.chat_xdk_prepare_message_ttl_remove);
 
+        /// <summary>
+        /// Sign muting or unmuting a conversation, group or one-to-one, for the
+        /// signer alone: the <c>action_signatures</c> of the mute or unmute request,
+        /// one entry. The event is signed for the signer's own
+        /// <c>{sender}:{sender}</c> conversation and names the muted conversation
+        /// in canonical colon form, the form the request must name it in. The SDK
+        /// generates the action's message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationMute(ConversationMuteParams parameters)
+            => CallAction(BuildPrepareConversationMuteJson(parameters), NativeMethods.chat_xdk_prepare_conversation_mute);
+
         /// <summary>Sign one screen-capture setting change.</summary>
         public PreparedAction PrepareScreenCapture(ScreenCaptureParams parameters)
             => CallAction(BuildPrepareScreenCaptureJson(parameters), NativeMethods.chat_xdk_prepare_screen_capture);
+
+        /// <summary>
+        /// Sign archiving or unarchiving a conversation, group or one-to-one: the
+        /// <c>action_signatures</c> of the archive request
+        /// (<c>POST /2/chat/conversations/{id}/archive</c>) or the unarchive request
+        /// (<c>DELETE</c> on the same path), one entry. The SDK generates the action's
+        /// message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationArchive(ConversationArchiveParams parameters)
+            => CallAction(BuildPrepareConversationArchiveJson(parameters), NativeMethods.chat_xdk_prepare_conversation_archive);
 
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
@@ -1738,12 +1759,30 @@ namespace ChatXdk
             }, p.SenderId, p.SigningKeyVersion);
         }
 
+        private static string BuildPrepareConversationMuteJson(ConversationMuteParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["muted"] = p.Muted,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
         private static string BuildPrepareScreenCaptureJson(ScreenCaptureParams p)
         {
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
                 ["change"] = p.Change.ToString(),
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareConversationArchiveJson(ConversationArchiveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["archived"] = p.Archived,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

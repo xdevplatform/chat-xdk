@@ -11,6 +11,7 @@ import com.x.chatxdk.Types.DecryptEventsResult;
 import com.x.chatxdk.Types.DecryptedEvent;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.MessageEventSignature;
+import com.x.chatxdk.Types.PreparedAction;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
@@ -432,6 +433,55 @@ class ChatCoreTest {
             // The title goes out encrypted under the new key: the group_name the
             // create request sends.
             assertEquals(title, core.decrypt(prep.encryptedTitle, prep.conversationKey));
+        }
+    }
+
+    @Test
+    void prepareConversationArchiveSignsArchiveAndUnarchive() throws Exception {
+        // Each signed action is sendable as it is, and a recipient verifies it as
+        // the setting it signs.
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            List<SigningKeyEntry> signingKeys = List.of(new SigningKeyEntry(
+                    "1000",
+                    "1",
+                    v.get("signing_public_b64").asText(),
+                    v.get("identity_public_b64").asText(),
+                    v.get("identity_public_key_signature_b64").asText()));
+            for (boolean archived : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationArchive("g123", archived);
+                assertEquals(1, prepared.actionSignatures.size());
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty());
+                assertFalse(sig.encodedMessageEventDetail.isEmpty());
+                assertFalse(sig.messageEventSignature.signature.isEmpty());
+
+                JsonNode event = core.decryptOne(
+                        deliveredAction(sig, "1000", "g123", "2100000000000000000"), Map.of(), signingKeys);
+                assertEquals("SettingsChange", event.path("type").asText());
+                assertTrue(event.path("verified").asBoolean());
+                assertEquals(
+                        archived ? "Archived" : "Unarchived",
+                        event.path("change").path("setting").asText());
+            }
+        }
+    }
+
+    @Test
+    void prepareConversationMuteSignsMuteAndUnmute() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            for (boolean muted : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationMute("g123", muted);
+                assertEquals(1, prepared.actionSignatures.size(), "muted=" + muted);
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty(), "muted=" + muted);
+                assertFalse(sig.encodedMessageEventDetail.isEmpty(), "muted=" + muted);
+                assertFalse(sig.messageEventSignature.signature.isEmpty(), "muted=" + muted);
+                assertEquals(core.publicKeys().signing, sig.messageEventSignature.signingPublicKey);
+            }
         }
     }
 

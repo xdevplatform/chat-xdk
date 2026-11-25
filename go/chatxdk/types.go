@@ -852,12 +852,36 @@ type MessageTtlRemoveParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"`
 }
 
+// ConversationMuteParams are the parameters for PrepareConversationMute.
+// ConversationID is a group id or a one-to-one id, in either "A:B" or "A-B"
+// form. Muted true signs a mute, false an unmute. SenderID and
+// SigningKeyVersion are optional overrides: empty resolves from the session
+// identity set via SetIdentity.
+type ConversationMuteParams struct {
+	ConversationID    string `json:"conversation_id"`
+	Muted             bool   `json:"muted"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // ScreenCaptureParams are the parameters for PrepareScreenCapture.
 type ScreenCaptureParams struct {
 	ConversationID    string              `json:"conversation_id"`
 	Change            ScreenCaptureChange `json:"change"`
 	SenderID          string              `json:"sender_id,omitempty"`
 	SigningKeyVersion string              `json:"signing_key_version,omitempty"`
+}
+
+// ConversationArchiveParams are the parameters for
+// PrepareConversationArchive. ConversationID is a group id or a one-to-one id,
+// in either "A:B" or "A-B" form. Archived true signs an archive, false an
+// unarchive. SenderID and SigningKeyVersion are optional overrides: empty
+// resolves from the session identity set via SetIdentity.
+type ConversationArchiveParams struct {
+	ConversationID    string `json:"conversation_id"`
+	Archived          bool   `json:"archived"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
 // MessageDeleteParams are the parameters for PrepareMessageDelete.

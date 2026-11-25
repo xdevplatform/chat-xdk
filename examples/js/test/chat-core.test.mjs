@@ -262,6 +262,29 @@ test("decryptOne falls back to the session stores", async () => {
   assert.equal(event.verified, true);
 });
 
+test("prepareConversationArchive signs an archive and an unarchive", async () => {
+  // Each signed action is sendable as it is, and a recipient verifies it as
+  // the setting it signs.
+  const core = await loadedCore();
+  for (const [archived, setting] of [[true, "archived"], [false, "unarchived"]]) {
+    const prepared = core.prepareConversationArchive({ conversationId: "g123", archived });
+    assert.equal(prepared.actionSignatures.length, 1);
+    const [sig] = prepared.actionSignatures;
+    assert.ok(sig.messageId);
+    assert.ok(sig.encodedMessageEventDetail);
+    assert.ok(sig.messageEventSignature.signature);
+
+    const event = core.decryptOne(
+      deliveredAction(sig, vectors.event_sender_id, "g123", "2100000000000000000"),
+      {},
+      fixtureSigningKeys(),
+    );
+    assert.equal(event.type, "settingsChange");
+    assert.equal(event.verified, true);
+    assert.equal(event.change.setting, setting);
+  }
+});
+
 test("prepToRequest maps the X API request shape", async () => {
   const { prepToRequest } = await import("../src/chat-core.mjs");
   const core = await loadedCore();
@@ -348,6 +371,19 @@ test("prepareGroupCreateAsync yields the two required signatures", async () => {
   // The title goes out encrypted under the new key: the group_name the
   // create request sends.
   assert.equal(core.decrypt(prep.encryptedTitle, prep.conversationKey), "hello from the js example");
+});
+
+test("prepareConversationMute signs a mute and an unmute", async () => {
+  const core = await loadedCore();
+  for (const muted of [true, false]) {
+    const prepared = core.prepareConversationMute({ conversationId: "g123", muted });
+    assert.equal(prepared.actionSignatures.length, 1, `muted=${muted}`);
+    const [sig] = prepared.actionSignatures;
+    assert.ok(sig.messageId, `muted=${muted}`);
+    assert.ok(sig.encodedMessageEventDetail, `muted=${muted}`);
+    assert.ok(sig.messageEventSignature.signature, `muted=${muted}`);
+    assert.equal(sig.messageEventSignature.signingPublicKey, core.publicKeys().signing);
+  }
 });
 
 test("encryptReaction targeting a raw event produces a sendable payload", async () => {

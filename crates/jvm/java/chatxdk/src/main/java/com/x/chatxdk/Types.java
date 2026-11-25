@@ -2246,6 +2246,24 @@ public final class Types {
         }
     }
 
+    /**
+     * Parameters for {@link Chat#prepareConversationMute}. {@code muted} true signs a
+     * mute, false an unmute. {@code senderId} and {@code signingKeyVersion} are optional
+     * overrides: null resolves from the session identity.
+     */
+    public static final class ConversationMuteParams {
+        /** A group id or a one-to-one id, in either {@code A:B} or {@code A-B} form. */
+        public final String conversationId;
+        public final boolean muted;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public ConversationMuteParams(String conversationId, boolean muted) {
+            this.conversationId = conversationId;
+            this.muted = muted;
+        }
+    }
+
     /** Parameters for {@link Chat#prepareScreenCapture}. */
     public static final class ScreenCaptureParams {
         public final String conversationId;
@@ -2256,6 +2274,24 @@ public final class Types {
         public ScreenCaptureParams(String conversationId, ScreenCaptureChange change) {
             this.conversationId = conversationId;
             this.change = change;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareConversationArchive}. {@code archived} true signs an
+     * archive, false an unarchive. {@code senderId} and {@code signingKeyVersion} are optional
+     * overrides: null resolves from the session identity.
+     */
+    public static final class ConversationArchiveParams {
+        /** A group id or a one-to-one id, in either {@code A:B} or {@code A-B} form. */
+        public final String conversationId;
+        public final boolean archived;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public ConversationArchiveParams(String conversationId, boolean archived) {
+            this.conversationId = conversationId;
+            this.archived = archived;
         }
     }
 }

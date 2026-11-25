@@ -521,6 +521,32 @@ public final class ChatCore implements AutoCloseable {
         return chat.decrypt(ciphertextB64, conversationKey);
     }
 
+    // -- Conversation archive -------------------------------------------------
+
+    /**
+     * Sign archiving ({@code archived} true) or unarchiving (false) a conversation, group
+     * or one-to-one. Send {@code actionSignatures} on
+     * {@code POST /2/chat/conversations/{id}/archive} to archive, or on {@code DELETE} of
+     * the same path to unarchive. Signed with the session identity.
+     */
+    public PreparedAction prepareConversationArchive(String conversationId, boolean archived)
+            throws Exception {
+        return chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, archived));
+    }
+
+    // -- Conversation mute ----------------------------------------------------
+
+    /**
+     * Sign muting ({@code muted} true) or unmuting (false) a conversation, group or
+     * one-to-one, for this bot alone. The event is signed in the bot's own
+     * {@code {userId}:{userId}} conversation and names {@code conversationId} in
+     * canonical colon form; send {@code actionSignatures} with a mute or unmute request
+     * that names the conversation in that same form. Signed with the session identity.
+     */
+    public PreparedAction prepareConversationMute(String conversationId, boolean muted) throws Exception {
+        return chat.prepareConversationMute(new ConversationMuteParams(conversationId, muted));
+    }
+
     /** Pull the plain text out of a decrypted Message event, or null. */
     public static String messageText(JsonNode event) {
         if (event == null || !"Message".equals(event.path("type").asText())) {

@@ -475,6 +475,34 @@ func (c *ChatCore) Decrypt(ciphertextB64 string, conversationKey []byte) (string
 	return c.chat.Decrypt(ciphertextB64, conversationKey)
 }
 
+// -- Conversation archive ---------------------------------------------------------
+
+// PrepareConversationArchive signs archiving (archived true) or unarchiving
+// (false) a conversation, group or one-to-one. Send ActionSignatures on
+// POST /2/chat/conversations/{id}/archive to archive, or on DELETE of the
+// same path to unarchive. Signed with the SetIdentity session identity.
+func (c *ChatCore) PrepareConversationArchive(conversationID string, archived bool) (*chatxdk.PreparedAction, error) {
+	return c.chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+		ConversationID: conversationID,
+		Archived:       archived,
+	})
+}
+
+// -- Conversation mute ------------------------------------------------------------
+
+// PrepareConversationMute signs muting (muted true) or unmuting (false) a
+// conversation, group or one-to-one, for this bot alone. The event is signed
+// in the bot's own "{userID}:{userID}" conversation and names conversationID
+// in canonical colon form; send ActionSignatures with a mute or unmute
+// request that names the conversation in that same form. Signed with the
+// SetIdentity session identity.
+func (c *ChatCore) PrepareConversationMute(conversationID string, muted bool) (*chatxdk.PreparedAction, error) {
+	return c.chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+		ConversationID: conversationID,
+		Muted:          muted,
+	})
+}
+
 // MessageText returns the plain text of a decrypted Message event, or "".
 func MessageText(event *chatxdk.Event) string {
 	msg := event.AsMessage()

@@ -50,6 +50,7 @@ from chat_xdk import _native
 from chat_xdk._native import __version__
 from chat_xdk._native import (
     ChatXdkError,
+    ConversationArchiveParams,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -87,6 +88,7 @@ from chat_xdk._native import (
     MessageTtlChangeParams,
     MessageTtlRemoveParams,
     ScreenCaptureParams,
+    ConversationMuteParams,
     SetIdentityParams,
     ImportKeysParams,
     MessageDeleteParams,
@@ -831,6 +833,7 @@ __all__ = [
     "ActionSignature",
     "Chat",
     "ChatXdkError",
+    "ConversationArchiveParams",
     "ConversationKeyChangeParams",
     "ConversationKeyResult",
     "ConversationParticipantKey",
@@ -876,6 +879,7 @@ __all__ = [
     "MissingSigningKey",
     "MessageTtlChangeParams",
     "MessageTtlRemoveParams",
+    "ConversationMuteParams",
     "ParseError",
     "PreparedAction",
     "PreparedConversationChange",

@@ -1359,6 +1359,51 @@ impl MessageTtlRemoveParams {
     }
 }
 
+/// Parameters for ``Chat.prepare_conversation_mute``.
+///
+/// ``muted`` ``True`` signs a mute, ``False`` an unmute.
+#[pyclass(get_all, set_all)]
+pub struct ConversationMuteParams {
+    /// ID of the conversation: a group id or a one-to-one id, in either
+    /// ``A:B`` or ``A-B`` form.
+    pub(crate) conversation_id: String,
+    pub(crate) muted: bool,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ConversationMuteParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, muted, *, sender_id=None, signing_key_version=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        muted: bool,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            muted,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl ConversationMuteParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::ConversationMuteParams {
+        let mut params =
+            chat_xdk_core::ConversationMuteParams::new(self.conversation_id.as_str(), self.muted);
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
 /// Parameters for ``Chat.prepare_screen_capture``.
 ///
 /// ``change`` is a :class:`ScreenCaptureChange` value.
@@ -1405,6 +1450,53 @@ impl ScreenCaptureParams {
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
         Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_conversation_archive``.
+///
+/// ``archived`` ``True`` signs an archive, ``False`` an unarchive.
+#[pyclass(get_all, set_all)]
+pub struct ConversationArchiveParams {
+    /// ID of the conversation: a group id or a one-to-one id, in either
+    /// ``A:B`` or ``A-B`` form.
+    pub(crate) conversation_id: String,
+    pub(crate) archived: bool,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ConversationArchiveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, archived, *, sender_id=None, signing_key_version=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        archived: bool,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            archived,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl ConversationArchiveParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::ConversationArchiveParams {
+        let mut params = chat_xdk_core::ConversationArchiveParams::new(
+            self.conversation_id.as_str(),
+            self.archived,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
     }
 }
 

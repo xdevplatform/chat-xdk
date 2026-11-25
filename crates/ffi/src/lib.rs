@@ -23,17 +23,18 @@ use chat_xdk_core::error::{ErrorKind, SdkError};
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
-    DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
-    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    EntityDescriptor, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
-    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, KeyChangeCall,
-    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, MissingSigningKey, PublicKeyInput, PublicKeyRecord, QuickReply,
-    ScreenCaptureChange, ScreenCaptureParams, SetIdentityParams, SigningKeyEntry,
+    AttachmentDescriptor, ConversationArchiveParams, ConversationKeyChangeParams,
+    ConversationMuteParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
+    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, EntityDescriptor,
+    FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
+    GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
+    GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams, GroupMembersRemoveParams,
+    GroupTitleChangeParams, ImportKeysParams, KeyChangeCall, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, MissingSigningKey,
+    PublicKeyInput, PublicKeyRecord, QuickReply, ScreenCaptureChange, ScreenCaptureParams,
+    SetIdentityParams, SigningKeyEntry,
 };
 
 /// The version of this C ABI: the functions and the shapes of their

@@ -226,8 +226,10 @@ class TestParams(unittest.TestCase):
             "MessageDeleteParams",
             "MessageTtlChangeParams",
             "MessageTtlRemoveParams",
+            "ConversationMuteParams",
             "ScreenCaptureChange",
             "ScreenCaptureParams",
+            "ConversationArchiveParams",
             "MarkConversationReadParams",
             "SetIdentityParams",
             "ImportKeysParams",
@@ -287,6 +289,7 @@ class TestParams(unittest.TestCase):
             EncryptFileWithKeyParams,
             EncryptMessageParams,
             EncryptReactionParams,
+            ConversationArchiveParams,
             EncryptReplyParams,
             FileDecryptorParams,
             FileEncryptorParams,
@@ -299,6 +302,7 @@ class TestParams(unittest.TestCase):
             MessageDeleteParams,
             ScreenCaptureParams,
             SetIdentityParams,
+            ConversationMuteParams,
         )
 
         missing_required = [
@@ -309,9 +313,11 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
+            lambda: ConversationMuteParams("g1"),
             lambda: GroupMembersRemoveParams([], "g1"),
             lambda: GroupTitleChangeParams("g1"),
             lambda: ScreenCaptureParams("g1"),
+            lambda: ConversationArchiveParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
             lambda: SetIdentityParams("1001"),
             lambda: ImportKeysParams(),
@@ -337,9 +343,11 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
+            lambda: ConversationMuteParams("g1", True, "1001"),
             lambda: GroupMembersRemoveParams([], "g1", ["1"], "1001"),
             lambda: GroupTitleChangeParams("g1", "Board", "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
+            lambda: ConversationArchiveParams("conv-1", True, "1001"),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
             lambda: DecryptEventsParams([], []),
@@ -1522,6 +1530,63 @@ class TestApiShapes(unittest.TestCase):
 
         self.assertTrue(_signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1"))
 
+    def test_prepare_conversation_mute_signs_for_the_self_conversation(self):
+        from chat_xdk import ConversationMuteParams
+
+        chat, v = self._unlocked_chat()
+
+        # The event belongs to the signer's own 111:111 conversation and names
+        # the muted one: a 1:1 id in canonical colon form, a group id as it is.
+        for conversation, muted_id in (("222-111", "111:222"), ("g999", "g999")):
+            for muted, event in ((True, "MuteConversation"), (False, "UnmuteConversation")):
+                sig = _only_action(
+                    chat.prepare_conversation_mute(
+                        ConversationMuteParams(
+                            conversation, muted, sender_id="111", signing_key_version="1"
+                        )
+                    )
+                )
+                self.assertTrue(sig["message_id"])
+                self.assertTrue(sig["encoded_message_event_detail"])
+                self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+                self.assertEqual(
+                    sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"]
+                )
+                self.assertTrue(
+                    _signs(
+                        chat,
+                        sig,
+                        f"ConversationMetadataChangeEvent.{event},{sig['message_id']},111,111:111,{muted_id}",
+                    )
+                )
+
+    def test_prepare_conversation_mute_defaults_to_the_session_identity(self):
+        from chat_xdk import ConversationMuteParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        chat.set_identity(SetIdentityParams("111", "7"))
+
+        sig = _only_action(chat.prepare_conversation_mute(ConversationMuteParams("g999", True)))
+
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
+        self.assertTrue(
+            _signs(
+                chat,
+                sig,
+                f"ConversationMetadataChangeEvent.MuteConversation,{sig['message_id']},111,111:111,g999",
+            )
+        )
+
+    def test_prepare_conversation_mute_rejects_an_empty_conversation_id(self):
+        from chat_xdk import ConversationMuteParams
+
+        chat, v = self._unlocked_chat()
+
+        with self.assertRaisesRegex(ValueError, "conversation_id is empty"):
+            chat.prepare_conversation_mute(
+                ConversationMuteParams("", True, sender_id="111", signing_key_version="1")
+            )
+
     def test_prepare_mark_conversation_read_shape(self):
         from chat_xdk import MarkConversationReadParams
 
@@ -1590,6 +1655,63 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "seen_until_sequence_id is empty"):
             chat.prepare_mark_conversation_read(
                 MarkConversationReadParams("g999", "", sender_id="111", signing_key_version="1")
+            )
+
+    def test_prepare_conversation_archive_signs_archive_and_unarchive(self):
+        from chat_xdk import ConversationArchiveParams
+
+        chat, v = self._unlocked_chat()
+
+        # A 1:1 id is signed in its canonical colon form, a group id as it is;
+        # the payload ends at the conversation id.
+        for conversation, signed in (("222-111", "111:222"), ("g999", "g999")):
+            for archived, event in ((True, "ArchiveConversation"), (False, "UnarchiveConversation")):
+                sig = _only_action(
+                    chat.prepare_conversation_archive(
+                        ConversationArchiveParams(
+                            conversation, archived, sender_id="111", signing_key_version="1"
+                        )
+                    )
+                )
+                self.assertTrue(sig["message_id"])
+                self.assertTrue(sig["encoded_message_event_detail"])
+                self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+                self.assertEqual(
+                    sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"]
+                )
+                self.assertTrue(
+                    _signs(
+                        chat,
+                        sig,
+                        f"ConversationMetadataChangeEvent.{event},{sig['message_id']},111,{signed}",
+                    )
+                )
+
+    def test_prepare_conversation_archive_defaults_to_the_session_identity(self):
+        from chat_xdk import ConversationArchiveParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        chat.set_identity(SetIdentityParams("111", "7"))
+
+        sig = _only_action(chat.prepare_conversation_archive(ConversationArchiveParams("g999", True)))
+
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
+        self.assertTrue(
+            _signs(
+                chat,
+                sig,
+                f"ConversationMetadataChangeEvent.ArchiveConversation,{sig['message_id']},111,g999",
+            )
+        )
+
+    def test_prepare_conversation_archive_rejects_an_empty_conversation_id(self):
+        from chat_xdk import ConversationArchiveParams
+
+        chat, v = self._unlocked_chat()
+
+        with self.assertRaisesRegex(ValueError, "conversation_id is empty"):
+            chat.prepare_conversation_archive(
+                ConversationArchiveParams("", True, sender_id="111", signing_key_version="1")
             )
 
     def test_prepare_conversation_key_change_derives_one_to_one_id(self):

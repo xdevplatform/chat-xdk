@@ -374,6 +374,27 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 	}
 }
 
+func TestPrepareConversationMuteSignsMuteAndUnmute(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	for _, muted := range []bool{true, false} {
+		prepared, err := core.PrepareConversationMute("g123", muted)
+		if err != nil {
+			t.Fatalf("PrepareConversationMute(muted=%v): %v", muted, err)
+		}
+		if len(prepared.ActionSignatures) != 1 {
+			t.Fatalf("muted=%v: expected 1 action signature, got %d", muted, len(prepared.ActionSignatures))
+		}
+		sig := prepared.ActionSignatures[0]
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" || sig.MessageEventSignature.Signature == "" {
+			t.Errorf("muted=%v: incomplete action signature: %+v", muted, sig)
+		}
+		if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 {
+			t.Errorf("muted=%v: signed with %q, want %q", muted, sig.MessageEventSignature.SigningPublicKey, v.SigningPublicB64)
+		}
+	}
+}
+
 func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	// The message-first media flow: the message names the file by the media
 	// hash key its upload started with, the file is encrypted from the
@@ -666,6 +687,62 @@ func TestCachedKeyReplyFlow(t *testing.T) {
 	}
 	if body.MessageID == "" || body.EncodedMessageCreateEvent == "" {
 		t.Errorf("incomplete send body: %+v", body)
+	}
+}
+
+// Each signed action is sendable as it is, and a recipient verifies it as the
+// setting it signs.
+func TestPrepareConversationArchiveSignsArchiveAndUnarchive(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	core.FetchPublicKeysWith(func(userID string) ([]chatxdk.PublicKeyRecord, error) {
+		return []chatxdk.PublicKeyRecord{{
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.IdentityPublicB64,
+			SigningPublicKey:           v.SigningPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		}}, nil
+	})
+
+	for _, c := range []struct {
+		archived bool
+		setting  string
+	}{
+		{true, "Archived"},
+		{false, "Unarchived"},
+	} {
+		prepared, err := core.PrepareConversationArchive("g123", c.archived)
+		if err != nil {
+			t.Fatalf("PrepareConversationArchive(%v): %v", c.archived, err)
+		}
+		if len(prepared.ActionSignatures) != 1 {
+			t.Fatalf("expected 1 action signature, got %d", len(prepared.ActionSignatures))
+		}
+		sig := prepared.ActionSignatures[0]
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" || sig.MessageEventSignature.Signature == "" {
+			t.Errorf("incomplete action signature: %+v", sig)
+		}
+
+		result, err := core.DecryptBatch([]string{deliveredAction(t, sig, v.EventSenderID, "g123", "2100000000000000000")})
+		if err != nil {
+			t.Fatalf("DecryptBatch: %v", err)
+		}
+		if len(result.Errors) != 0 || len(result.Events) != 1 {
+			t.Fatalf("expected one decrypted event, got %d (errors %v)", len(result.Events), result.Errors)
+		}
+		var event struct {
+			Type     string `json:"type"`
+			Verified bool   `json:"verified"`
+			Change   struct {
+				Setting string `json:"setting"`
+			} `json:"change"`
+		}
+		if err := json.Unmarshal(result.Events[0].Event.Raw(), &event); err != nil {
+			t.Fatalf("decode event: %v", err)
+		}
+		if event.Type != "SettingsChange" || !event.Verified || event.Change.Setting != c.setting {
+			t.Errorf("expected a verified %s settings change, got %+v", c.setting, event)
+		}
 	}
 }
 

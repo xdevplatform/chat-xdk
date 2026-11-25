@@ -972,6 +972,18 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_ttl_remove(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Sign muting or unmuting a conversation, group or one-to-one, for the
+        ///  signer alone.
+        ///
+        ///  `params_json` — `conversation_id`, `muted` (`true` signs a mute, `false`
+        ///  an unmute), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the mute request's `action_signatures`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_mute", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_mute(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Sign one screen-capture setting change.
         ///
         ///  `params_json` — `conversation_id`, `change` (`BlockingEnabled`,
@@ -982,6 +994,17 @@ namespace ChatXdk
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_screen_capture", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_screen_capture(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign archiving or unarchiving a conversation, group or one-to-one.
+        ///
+        ///  `params_json` — `conversation_id`, `archived` (`true` signs an archive,
+        ///  `false` an unarchive), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the archive request's `action_signatures`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_archive", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_archive(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Build the signed action for marking a conversation read.

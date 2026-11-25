@@ -1962,6 +1962,46 @@ impl MessageTtlRemoveParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::prepare_conversation_mute`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ConversationMuteParams {
+    /// ID of the conversation being muted or unmuted: a group id or a
+    /// one-to-one id, in either `A:B` or `A-B` form.
+    pub conversation_id: String,
+    /// `true` signs a mute, `false` an unmute.
+    pub muted: bool,
+    /// User ID of the sender signing the action; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the action; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ConversationMuteParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, muted: bool) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            muted,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_screen_capture`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -1984,6 +2024,46 @@ impl ScreenCaptureParams {
         Self {
             conversation_id: conversation_id.into(),
             change,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_conversation_archive`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ConversationArchiveParams {
+    /// ID of the conversation being archived or unarchived: a group id or a
+    /// one-to-one id, in either `A:B` or `A-B` form.
+    pub conversation_id: String,
+    /// `true` signs an archive, `false` an unarchive.
+    pub archived: bool,
+    /// User ID of the sender signing the action; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the action; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ConversationArchiveParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, archived: bool) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            archived,
             sender_id: None,
             signing_key_version: None,
         }

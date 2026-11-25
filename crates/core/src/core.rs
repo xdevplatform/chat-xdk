@@ -1331,11 +1331,30 @@ pub fn build_event_signature_payload(
                     conv_id,
                     &[],
                 ),
+                CMC::ArchiveConversation(c) => {
+                    let ids = c.archived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.ArchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                    )
+                }
+                CMC::UnarchiveConversation(c) => {
+                    let ids = c.unarchived_conversation_ids.as_deref().unwrap_or(&[]);
+                    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+                    build_component_payload(
+                        "ConversationMetadataChangeEvent.UnarchiveConversation",
+                        msg_id,
+                        sender_id,
+                        conv_id,
+                        &refs,
+                    )
+                }
                 // Not surfaced by the SDK, so left unverifiable.
-                CMC::EnableGrok(_)
-                | CMC::DisableGrok(_)
-                | CMC::ArchiveConversation(_)
-                | CMC::UnarchiveConversation(_) => None,
+                CMC::EnableGrok(_) | CMC::DisableGrok(_) => None,
             }
         }
         // These event types are not signed
@@ -1980,12 +1999,9 @@ pub(crate) fn convert_settings_change(
         Some(GenCMC::DisableScreenCaptureBlocking(_)) => {
             SettingsChange::ScreenCaptureBlockingDisabled
         }
-        Some(
-            GenCMC::EnableGrok(_)
-            | GenCMC::DisableGrok(_)
-            | GenCMC::ArchiveConversation(_)
-            | GenCMC::UnarchiveConversation(_),
-        ) => SettingsChange::Unknown,
+        Some(GenCMC::ArchiveConversation(_)) => SettingsChange::Archived,
+        Some(GenCMC::UnarchiveConversation(_)) => SettingsChange::Unarchived,
+        Some(GenCMC::EnableGrok(_) | GenCMC::DisableGrok(_)) => SettingsChange::Unknown,
         None => SettingsChange::Unknown,
     }
 }

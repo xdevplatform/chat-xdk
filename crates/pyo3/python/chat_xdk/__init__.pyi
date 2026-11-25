@@ -489,6 +489,20 @@ class EncryptEditParams:
         conversation_key_version: Optional[str] = None,
     ) -> None: ...
 
+class ConversationArchiveParams:
+    conversation_id: str
+    archived: bool
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        archived: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
 class ConversationKeyChangeParams:
     """With ``public_keys`` ``None`` or empty, the new key is encrypted to
     the stored public keys (``Chat.add_public_keys``) of ``member_ids``, every
@@ -793,6 +807,20 @@ class MessageTtlRemoveParams:
         signing_key_version: Optional[str] = None,
     ) -> None: ...
 
+class ConversationMuteParams:
+    conversation_id: str
+    muted: bool
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        muted: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
 class ScreenCaptureParams:
     conversation_id: str
     change: ScreenCaptureChange
@@ -1040,7 +1068,9 @@ class Chat:
     def prepare_group_join_reject(self, params: GroupJoinRejectParams) -> PreparedAction: ...
     def prepare_message_ttl_change(self, params: MessageTtlChangeParams) -> PreparedAction: ...
     def prepare_message_ttl_remove(self, params: MessageTtlRemoveParams) -> PreparedAction: ...
+    def prepare_conversation_mute(self, params: ConversationMuteParams) -> PreparedAction: ...
     def prepare_screen_capture(self, params: ScreenCaptureParams) -> PreparedAction: ...
+    def prepare_conversation_archive(self, params: ConversationArchiveParams) -> PreparedAction: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> ConversationKeyResult: ...

@@ -454,6 +454,18 @@ class TestPreparedChanges(unittest.TestCase):
         encrypted_title = prep["encrypted_title"]
         self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
+    def test_prepare_conversation_mute_signs_mute_and_unmute(self):
+        core, _ = self._core_and_keys()
+        for muted in (True, False):
+            prepared = core.prepare_conversation_mute("g123", muted)
+            (sig,) = prepared["action_signatures"]
+            self.assertTrue(sig["message_id"], muted)
+            self.assertTrue(sig["encoded_message_event_detail"], muted)
+            self.assertTrue(sig["message_event_signature"]["signature"], muted)
+            self.assertEqual(
+                sig["message_event_signature"]["signing_public_key"], core.public_keys()["signing"]
+            )
+
     def test_encrypt_reaction_produces_sendable_payload(self):
         core, _ = self._core_and_keys()
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
@@ -597,6 +609,33 @@ class TestPreparedChanges(unittest.TestCase):
         preview = sent["content"]["replying_to_preview"]
         self.assertEqual(preview["replying_to_message_sequence_id"], "42")
         self.assertEqual(preview["replying_to_message_id"], "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+
+    def test_prepare_conversation_archive_signs_archive_and_unarchive(self):
+        # Each signed action is sendable as it is, and a recipient verifies it
+        # as the setting it signs.
+        core, _ = self._core_and_keys()
+        signing_keys = [
+            {
+                "user_id": "1000",
+                "public_key_version": "1",
+                "public_key": self.vectors["signing_public_b64"],
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "identity_public_key_signature": self.vectors["identity_public_key_signature_b64"],
+            }
+        ]
+        for archived, setting in ((True, "Archived"), (False, "Unarchived")):
+            prep = core.prepare_conversation_archive("g123", archived)
+            (sig,) = prep["action_signatures"]
+            self.assertTrue(sig["message_id"])
+            self.assertTrue(sig["encoded_message_event_detail"])
+            self.assertTrue(sig["message_event_signature"]["signature"])
+
+            event = core.decrypt_one(
+                _delivered_action(sig, "1000", "g123", "2100000000000000000"), {}, signing_keys
+            )
+            self.assertEqual(event["type"], "SettingsChange")
+            self.assertTrue(event["verified"])
+            self.assertEqual(event["change"]["setting"], setting)
 
     def test_media_encrypt_decrypt_roundtrip(self):
         # The message-first media flow: the message names the file by the

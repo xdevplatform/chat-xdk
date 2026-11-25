@@ -632,10 +632,25 @@ then the media URL), description (`GroupDescriptionChange`, key version then
 the encrypted description), admin add and remove, invite enable (`url`,
 expiry or `null`, affiliate or `null`), invite disable, join request, join
 reject, message TTL (`MessageDurationChange` with the millisecond count, or
-`MessageDurationRemove` with no further fields), and one screen-capture
+`MessageDurationRemove` with no further fields), one screen-capture
 event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
 `EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
-further fields.
+further fields, and archive or unarchive
+(`ConversationMetadataChangeEvent.ArchiveConversation` or
+`ConversationMetadataChangeEvent.UnarchiveConversation`, from
+`prepare_conversation_archive`) with no further fields: the id list the event
+can carry is left unset, as X clients sign it, and a verifier signs the ids
+after the conversation id when it is set.
+
+`prepare_conversation_mute` signs a `MuteConversation` or
+`UnmuteConversation` change as X clients do: in the signer's own
+`{sender_id}:{sender_id}` conversation, with the muted conversation's
+canonical id as the one field after it:
+
+```
+"ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+"ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+```
 
 #### Verifying newer versions
 

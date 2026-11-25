@@ -969,6 +969,12 @@ async function main() {
       ["GroupChangeEvent.GroupJoinRequest", () => ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
       ["GroupChangeEvent.GroupJoinReject", () => ",g100,910010",
         () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
+      // A mute is the signer's own: it is signed in the 111:111 self
+      // conversation and names the muted one, a 1:1 in canonical form.
+      ["ConversationMetadataChangeEvent.MuteConversation", () => ",111:111,g100",
+        () => chat.prepareConversationMute({ ...ident, muted: true })],
+      ["ConversationMetadataChangeEvent.UnmuteConversation", () => ",111:111,111:222",
+        () => chat.prepareConversationMute({ ...ident, conversationId: "222-111", muted: false })],
       ["ConversationMetadataChangeEvent.MessageDurationChange", () => ",g100,86400000",
         () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
       ["ConversationMetadataChangeEvent.MessageDurationRemove", () => ",g100",
@@ -984,7 +990,43 @@ async function main() {
       const payload = `${event},${action.messageId},111${signedFields(result)}`;
       assert.ok(signs(chat, action, payload), payload);
     }
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident }),
+      /prepareConversationMute params.*muted/,
+    );
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident, conversationId: "", muted: true }),
+      /conversation_id is empty/,
+    );
   }
+
+  // 4c3c. prepareConversationArchive signs an archive or an unarchive with
+  // the signing key; a 1:1 id is signed in canonical colon form, a group id
+  // as it is, and the payload ends at the conversation id.
+  for (const [conversationId, signed] of [["222-111", "111:222"], ["g999", "g999"]]) {
+    for (const [archived, event] of [[true, "ArchiveConversation"], [false, "UnarchiveConversation"]]) {
+      const archiveSig = onlyAction(chat.prepareConversationArchive({
+        senderId: "111",
+        signingKeyVersion: "1",
+        conversationId,
+        archived,
+      }));
+      assert.ok(archiveSig.messageId.length > 0);
+      assert.ok(archiveSig.encodedMessageEventDetail.length > 0);
+      assert.equal(archiveSig.messageEventSignature.publicKeyVersion, "1");
+      assert.equal(archiveSig.messageEventSignature.signingPublicKey, v.signing_public_b64);
+      assert.ok(signs(chat, archiveSig,
+        `ConversationMetadataChangeEvent.${event},${archiveSig.messageId},111,${signed}`));
+    }
+  }
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "g999" }),
+    /prepareConversationArchive params.*archived/,
+  );
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "", archived: true }),
+    /conversation_id is empty/,
+  );
 
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.

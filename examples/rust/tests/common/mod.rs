@@ -31,7 +31,7 @@ pub fn delivered(event_b64: &str, sequence_id: &str) -> String {
 /// A signed action as delivered: the event the server relays for `action`,
 /// an entry of a prepared change's `action_signatures`, from `sender_id` in
 /// `conversation_id`, with the sequence id the server assigns.
-fn delivered_action(
+pub fn delivered_action(
     action: &ActionSignature,
     sender_id: &str,
     conversation_id: &str,

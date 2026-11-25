@@ -325,6 +325,28 @@ export class ChatCore {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
   }
 
+  /**
+   * Sign archiving (`archived: true`) or unarchiving (`false`) a
+   * conversation, group or one-to-one. Returns a `PreparedAction` whose
+   * `actionSignatures` (one entry) go on POST
+   * /2/chat/conversations/{id}/archive to archive, or on DELETE of the same
+   * path to unarchive.
+   */
+  prepareConversationArchive({ conversationId, archived }) {
+    return this.#chat.prepareConversationArchive({ conversationId, archived });
+  }
+
+  /**
+   * Sign muting (`muted` true) or unmuting (false) a conversation, group or
+   * one-to-one, for this bot alone. The event is signed in the bot's own
+   * `{userId}:{userId}` conversation and names `conversationId` in canonical
+   * colon form; send the returned `PreparedAction`'s `actionSignatures` with
+   * a mute or unmute request that names the conversation in that same form.
+   */
+  prepareConversationMute({ conversationId, muted }) {
+    return this.#chat.prepareConversationMute({ conversationId, muted });
+  }
+
   // -- Group management ------------------------------------------------------
 
   /**

@@ -5,7 +5,7 @@ use super::*;
 use crate::pipeline::serialize_thrift;
 use crate::protocol::serialization::base64_encode;
 use crate::thrift::event::{
-    ClearConversationOptions, ConversationDeleteEvent as ThriftConvDel,
+    ArchiveConversation, ClearConversationOptions, ConversationDeleteEvent as ThriftConvDel,
     ConversationKeyChangeEvent as ThriftCKCE, ConversationMetadataChange,
     ConversationMetadataChangeEvent as ThriftCMCE, ConversationParticipantKey, DeleteMessageAction,
     DisableScreenCaptureBlocking, DisableScreenCaptureDetection, EnableScreenCaptureBlocking,
@@ -18,7 +18,7 @@ use crate::thrift::event::{
     MessageCreateEvent as ThriftMCE, MessageDeleteEvent as ThriftMDE, MessageDurationChange,
     MessageDurationRemove, MessageEvent as ThriftMessageEvent, MessageEventDetail as ThriftDetail,
     MessageFailureEvent as ThriftMFE, MessageTypingEvent as ThriftMTE, MuteConversation,
-    RateLimitTier as ThriftRateLimitTier, UnmuteConversation,
+    RateLimitTier as ThriftRateLimitTier, UnarchiveConversation, UnmuteConversation,
 };
 
 /// Build a base64-encoded MessageEvent wrapping a MessageCreateEvent.
