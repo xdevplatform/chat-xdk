@@ -2,21 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Replies and reactions can target one attachment of a message, such as one
-  photo of an album: `reply_to_attachment_id` on `EncryptReplyParams` and
-  `target_attachment_id` on `EncryptReactionParams`, in every binding
-  (`replyToAttachmentId` / `targetAttachmentId` in JS and the JVM,
-  `ReplyToAttachmentID` / `TargetAttachmentID` in Go, `ReplyToAttachmentId` /
-  `TargetAttachmentId` in .NET). Each needs the raw event, which the SDK
-  decrypts to check the attachment is in it; an id it does not carry fails
-  with an invalid-input error that lists the ids it does. A reply to one
-  attachment quotes only that attachment, and recipients mark its preview
-  invalid when the original doesn't carry it. Decrypted reactions and
-  reaction removals carry `target_attachment_id`, and reply previews
-  `replying_to_attachment_id`, when set.
-
 ## [0.7.6] - 2026-11-19
 
 ### Added
