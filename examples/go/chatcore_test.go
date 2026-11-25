@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xdevplatform/chat-xdk/go/chatxdk"
 )
@@ -480,6 +481,150 @@ func TestThreadedReplyWithEntitiesAndTTL(t *testing.T) {
 	}
 	if body.EncodedMessageCreateEvent == "" {
 		t.Error("empty encoded_message_create_event")
+	}
+}
+
+// attachmentIDs returns the attachment_id of each attachment of a decrypted
+// message, empty for one that carries none.
+func attachmentIDs(t *testing.T, event *chatxdk.Event) []string {
+	t.Helper()
+	msg := event.AsMessage()
+	if msg == nil {
+		t.Fatalf("expected a message, got %+v", event)
+	}
+	ids := make([]string, len(msg.Attachments))
+	for i, raw := range msg.Attachments {
+		var attachment struct {
+			AttachmentID string `json:"attachment_id"`
+		}
+		if err := json.Unmarshal(raw, &attachment); err != nil {
+			t.Fatalf("attachment %d: %v", i, err)
+		}
+		ids[i] = attachment.AttachmentID
+	}
+	return ids
+}
+
+// TestReplyAndReactionTargetOneAttachment replies and reacts to one photo of
+// an album. Attachments carry ids in v1 sends: the chat reads its feature
+// switches from CHAT_XDK_API_BASE_URL, here a local server that turns v1 on
+// as the X API would.
+func TestReplyAndReactionTargetOneAttachment(t *testing.T) {
+	features := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"features":{"v1_send":true}}`))
+	}))
+	defer features.Close()
+	t.Setenv("CHAT_XDK_API_BASE_URL", features.URL+"/")
+
+	core, v := loadedCore(t)
+	defer core.Close()
+	core.FetchPublicKeysWith(func(userID string) ([]chatxdk.PublicKeyRecord, error) {
+		if userID != v.EventSenderID {
+			return nil, errors.New("no public keys for user " + userID)
+		}
+		return []chatxdk.PublicKeyRecord{{
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.IdentityPublicB64,
+			SigningPublicKey:           v.SigningPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		}}, nil
+	})
+	// The key change brings the sender's public keys and the conversation key.
+	if result, err := core.DecryptBatch([]string{v.EventKeyChangeB64}); err != nil || len(result.Errors) != 0 {
+		t.Fatalf("DecryptBatch: %v %v", err, result)
+	}
+	key := v.conversationKey(t)
+	keys := map[string][]byte{v.EventConversationKeyVersion: key}
+	mediaType := int32(1)
+	photo := func(mediaHashKey string) chatxdk.AttachmentDescriptor {
+		return chatxdk.AttachmentDescriptor{
+			AttachmentType: "media",
+			MediaHashKey:   mediaHashKey,
+			Width:          4,
+			Height:         3,
+			FilesizeBytes:  1024,
+			Filename:       mediaHashKey + ".jpg",
+			MediaType:      &mediaType,
+		}
+	}
+
+	// The switches arrive in the background: send until the album is v1.
+	var album string
+	var ids []string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		body, err := core.EncryptReply(v.EventConversationID, "two photos", &ReplyOptions{
+			ConversationKey:        key,
+			ConversationKeyVersion: v.EventConversationKeyVersion,
+			Attachments:            []chatxdk.AttachmentDescriptor{photo("photo-1"), photo("photo-2")},
+		})
+		if err != nil {
+			t.Fatalf("EncryptReply (album): %v", err)
+		}
+		album = deliveredEvent(t, body.EventB64, "2100000000000000001")
+		event, err := core.DecryptOne(album, keys)
+		if err != nil {
+			t.Fatalf("DecryptOne (album): %v", err)
+		}
+		ids = attachmentIDs(t, event)
+		if len(ids) == 2 && ids[0] != "" && ids[1] != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the chat never turned v1 on: attachment ids %q", ids)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	second := ids[1]
+
+	reply, err := core.EncryptReply(v.EventConversationID, "the second one", &ReplyOptions{
+		ReplyToEvent:        album,
+		ReplyToAttachmentID: second,
+	})
+	if err != nil {
+		t.Fatalf("EncryptReply (to one attachment): %v", err)
+	}
+	event, err := core.DecryptOne(deliveredEvent(t, reply.EventB64, "2100000000000000002"), keys)
+	if err != nil {
+		t.Fatalf("DecryptOne (reply): %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || msg.Content.TextContent == nil {
+		t.Fatalf("expected a reply, got %+v", event)
+	}
+	var preview struct {
+		ReplyingToAttachmentID string `json:"replying_to_attachment_id"`
+	}
+	if err := json.Unmarshal(msg.Content.TextContent.ReplyingToPreview, &preview); err != nil {
+		t.Fatalf("replying_to_preview: %v", err)
+	}
+	if preview.ReplyingToAttachmentID != second {
+		t.Errorf("reply preview names attachment %q, want %q", preview.ReplyingToAttachmentID, second)
+	}
+
+	for _, c := range []struct {
+		encrypt     func(string, string, string, []byte, string) (*SendBody, error)
+		contentType string
+		sequenceID  string
+	}{
+		{core.EncryptAddReactionToAttachment, "Reaction", "2100000000000000003"},
+		{core.EncryptRemoveReactionToAttachment, "ReactionRemoved", "2100000000000000004"},
+	} {
+		body, err := c.encrypt(album, second, "\U0001f44d", key, v.EventConversationKeyVersion)
+		if err != nil {
+			t.Fatalf("%s: %v", c.contentType, err)
+		}
+		event, err := core.DecryptOne(deliveredEvent(t, body.EventB64, c.sequenceID), keys)
+		if err != nil {
+			t.Fatalf("DecryptOne (%s): %v", c.contentType, err)
+		}
+		msg := event.AsMessage()
+		if msg == nil || msg.Content.ContentType != c.contentType || msg.Content.ReactionContent == nil {
+			t.Fatalf("expected a %s, got %+v", c.contentType, event)
+		}
+		if got := msg.Content.ReactionContent.TargetAttachmentID; got != second {
+			t.Errorf("%s names attachment %q, want %q", c.contentType, got, second)
+		}
 	}
 }
 

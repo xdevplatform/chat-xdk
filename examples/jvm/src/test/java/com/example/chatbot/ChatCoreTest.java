@@ -457,6 +457,38 @@ class ChatCoreTest {
     }
 
     @Test
+    void attachmentTargetsReachTheCore() throws Exception {
+        // A reply or reaction to one attachment names an attachment_id the raw event
+        // carries; the SDK decrypts the event to check it. The fixture message
+        // carries no attachment, so the SDK rejects the id, naming it.
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            String version = v.get("event_conversation_key_version").asText();
+            String original = v.get("event_message_b64").asText();
+            for (boolean add : new boolean[] {true, false}) {
+                ChatXdkException e = assertThrows(
+                        ChatXdkException.class,
+                        () -> core.encryptReactionToAttachment(add, original, "att-1", "\uD83D\uDC4D", key, version));
+                assertTrue(e.getMessage().contains("target_attachment_id 'att-1' not found"), e.getMessage());
+            }
+            ChatXdkException e = assertThrows(
+                    ChatXdkException.class,
+                    () -> core.encryptReplyToAttachment(
+                            v.get("event_conversation_id").asText(), "the first one", key, version, original, "att-1"));
+            assertTrue(e.getMessage().contains("reply_to_attachment_id 'att-1' not found"), e.getMessage());
+
+            // Without an attachment id the same calls target the whole message.
+            assertFalse(core.encryptReactionToAttachment(true, original, null, "\uD83D\uDC4D", key, version)
+                    .messageId().isEmpty());
+            assertFalse(core.encryptReplyToAttachment(
+                            v.get("event_conversation_id").asText(), "the message", key, version, original, null)
+                    .messageId().isEmpty());
+        }
+    }
+
+    @Test
     void threadedReplyWithEntitiesAndTtl() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

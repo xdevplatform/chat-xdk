@@ -42,6 +42,10 @@ pub struct ReplyOptions {
     /// Base64 raw key-change events, needed when the original message was
     /// encrypted under a different key version than the reply.
     pub reply_to_ckces: Option<Vec<String>>,
+    /// `attachment_id` of the one attachment of `reply_to_event` to reply
+    /// to, such as one photo of an album; the preview quotes only that
+    /// attachment. `None` replies to the whole message.
+    pub reply_to_attachment_id: Option<String>,
     /// Rich-text entities (mentions, URLs, etc.) as byte ranges in the text.
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Attachment descriptors to embed. Each file names the media hash key
@@ -306,8 +310,8 @@ impl ChatCore {
             Some((key, version)) => (Some(key.to_bytes()), Some(version)),
             None => (None, None),
         };
-        let payload = match &options.reply_to_event {
-            None => {
+        let payload =
+            if options.reply_to_event.is_none() && options.reply_to_attachment_id.is_none() {
                 let mut params = EncryptMessageParams::new(conversation_id, text);
                 params.conversation_key = conversation_key;
                 params.conversation_key_version = conversation_key_version;
@@ -316,20 +320,22 @@ impl ChatCore {
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_message(&params)?
-            }
-            Some(reply_to_event) => {
-                let mut params =
-                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone());
+            } else {
+                let mut params = EncryptReplyParams::new(
+                    conversation_id,
+                    text,
+                    options.reply_to_event.unwrap_or_default(),
+                );
                 params.conversation_key = conversation_key;
                 params.conversation_key_version = conversation_key_version;
-                params.reply_to_ckces = options.reply_to_ckces.clone();
+                params.reply_to_ckces = options.reply_to_ckces;
+                params.reply_to_attachment_id = options.reply_to_attachment_id;
                 params.entities = options.entities;
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(&params)?
-            }
-        };
+            };
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
@@ -353,10 +359,38 @@ impl ChatCore {
     ) -> Result<SendBody, SdkError> {
         let params = EncryptReactionParams::new(target_event, emoji)
             .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+        self.send_reaction(add, &params)
+    }
+
+    /// Like [`ChatCore::encrypt_reaction`], for one attachment of the target:
+    /// `target_attachment_id` is the `attachment_id` of an attachment
+    /// `target_event` carries, such as one photo of an album. The SDK
+    /// decrypts `target_event` to check the attachment is in it. Remove the
+    /// reaction with the same `target_attachment_id`.
+    pub fn encrypt_reaction_to_attachment(
+        &self,
+        add: bool,
+        target_event: &str,
+        target_attachment_id: &str,
+        emoji: &str,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<SendBody, SdkError> {
+        let params = EncryptReactionParams::new(target_event, emoji)
+            .with_conversation_key(conversation_key.to_bytes(), conversation_key_version)
+            .with_target_attachment_id(target_attachment_id);
+        self.send_reaction(add, &params)
+    }
+
+    fn send_reaction(
+        &self,
+        add: bool,
+        params: &EncryptReactionParams,
+    ) -> Result<SendBody, SdkError> {
         let payload = if add {
-            self.inner.encrypt_add_reaction(&params)?
+            self.inner.encrypt_add_reaction(params)?
         } else {
-            self.inner.encrypt_remove_reaction(&params)?
+            self.inner.encrypt_remove_reaction(params)?
         };
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
