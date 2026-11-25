@@ -507,6 +507,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: chat-xdk
+          persist-credentials: false
       - name: Checkout juicebox-sdk (sibling path dependency)
         uses: actions/checkout@v4
         with:
@@ -514,14 +515,33 @@ jobs:
           ref: "0.3.4"
           path: juicebox-sdk
           submodules: false
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        if: matrix.rid != 'linux-musl-x64'
         with:
           targets: ${{ matrix.rust_target }}
       - name: Install Linux build tools
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.rid != 'linux-musl-x64'
         run: sudo apt-get update && sudo apt-get install -y build-essential musl-tools
       - name: Build cdylib (chat-xdk-ffi)
+        if: matrix.rid != 'linux-musl-x64'
         run: cargo build -p chat-xdk-ffi --release --target ${{ matrix.rust_target }}
+      - name: Build musl cdylib on Alpine
+        if: matrix.rid == 'linux-musl-x64'
+        run: |
+          # Rust defaults to a static CRT on musl, which drops the cdylib.
+          # Link with a native musl GCC so its dynamic libgcc is also available.
+          docker run --rm --platform linux/amd64 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work" \
+            --workdir /work/chat-xdk \
+            --env CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc \
+            --env CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS='-C target-feature=-crt-static' \
+            rust:1.91.1-alpine3.23@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636 \
+            sh -ec '
+              apk add --no-cache build-base linux-headers git
+              cargo +1.91.1 build --locked -p chat-xdk-ffi --release --target x86_64-unknown-linux-musl
+              test -s target/x86_64-unknown-linux-musl/release/libchat_xdk_ffi.so
+            '
       - name: Upload native library
         uses: actions/upload-artifact@v4
         with:
