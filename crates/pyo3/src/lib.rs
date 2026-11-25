@@ -542,6 +542,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<EncryptReplyParams>()?;
     m.add_class::<EncryptReactionParams>()?;
     m.add_class::<EncryptEditParams>()?;
+    m.add_class::<ConversationArchiveParams>()?;
     m.add_class::<ConversationKeyChangeParams>()?;
     m.add_class::<GroupMembersChangeParams>()?;
     m.add_class::<GroupCreateParams>()?;

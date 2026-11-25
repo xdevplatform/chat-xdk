@@ -82,15 +82,16 @@ use crate::error::{JuiceboxError, KeyError, SdkError};
 use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, RegisterResult};
 #[cfg(feature = "juicebox")]
 use crate::params::{
-    ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
-    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
-    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
-    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
-    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
+    ConversationArchiveParams, ConversationKeyChangeParams, DecryptEventParams,
+    DecryptEventsParams, DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams,
+    EncryptFileParams, EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
+    GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
+    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
+    SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -647,6 +648,13 @@ impl Chat {
         params: &ScreenCaptureParams,
     ) -> Result<crate::PreparedAction, SdkError> {
         self.inner.prepare_screen_capture(params)
+    }
+    /// Sign archiving or unarchiving a conversation.
+    pub fn prepare_conversation_archive(
+        &self,
+        params: &ConversationArchiveParams,
+    ) -> Result<crate::PreparedAction, SdkError> {
+        self.inner.prepare_conversation_archive(params)
     }
     /// Sign application data; see [`crate::ChatCore::sign`] for the data it
     /// refuses.

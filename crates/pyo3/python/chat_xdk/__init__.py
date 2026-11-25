@@ -50,6 +50,7 @@ from chat_xdk import _native
 from chat_xdk._native import __version__
 from chat_xdk._native import (
     ChatXdkError,
+    ConversationArchiveParams,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -831,6 +832,7 @@ __all__ = [
     "ActionSignature",
     "Chat",
     "ChatXdkError",
+    "ConversationArchiveParams",
     "ConversationKeyChangeParams",
     "ConversationKeyResult",
     "ConversationParticipantKey",

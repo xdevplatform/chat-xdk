@@ -1089,6 +1089,16 @@ namespace ChatXdk
         public PreparedAction PrepareScreenCapture(ScreenCaptureParams parameters)
             => CallAction(BuildPrepareScreenCaptureJson(parameters), NativeMethods.chat_xdk_prepare_screen_capture);
 
+        /// <summary>
+        /// Sign archiving or unarchiving a conversation, group or one-to-one: the
+        /// <c>action_signatures</c> of the archive request
+        /// (<c>POST /2/chat/conversations/{id}/archive</c>) or the unarchive request
+        /// (<c>DELETE</c> on the same path), one entry. The SDK generates the action's
+        /// message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationArchive(ConversationArchiveParams parameters)
+            => CallAction(BuildPrepareConversationArchiveJson(parameters), NativeMethods.chat_xdk_prepare_conversation_archive);
+
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
         private PreparedConversationChange CallPrepareEndpoint(string paramsJson, ParamsJsonDelegate fn)
@@ -1742,6 +1752,15 @@ namespace ChatXdk
             {
                 ["conversation_id"] = p.ConversationId,
                 ["change"] = p.Change.ToString(),
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareConversationArchiveJson(ConversationArchiveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["archived"] = p.Archived,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

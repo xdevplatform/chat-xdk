@@ -403,6 +403,17 @@ public sealed class ChatCore : IDisposable
     /// <summary>Decrypt a group title or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
 
+    // -- Conversation archive -------------------------------------------------
+
+    /// <summary>
+    /// Sign archiving (<paramref name="archived"/> true) or unarchiving (false) a
+    /// conversation, group or one-to-one. Send <c>ActionSignatures</c> on
+    /// <c>POST /2/chat/conversations/{id}/archive</c> to archive, or on <c>DELETE</c> of
+    /// the same path to unarchive. Signed with the session identity.
+    /// </summary>
+    public PreparedAction PrepareConversationArchive(string conversationId, bool archived)
+        => _chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, archived));
+
     public void Dispose() => _chat.Dispose();
 }
 

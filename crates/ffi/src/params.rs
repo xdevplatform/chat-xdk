@@ -295,6 +295,16 @@ pub(crate) struct FfiScreenCaptureParams {
 }
 
 #[derive(serde::Deserialize)]
+pub(crate) struct FfiConversationArchiveParams {
+    pub(crate) conversation_id: String,
+    pub(crate) archived: bool,
+    #[serde(default)]
+    pub(crate) sender_id: Option<String>,
+    #[serde(default)]
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 pub(crate) struct FfiMarkConversationReadParams {
     pub(crate) conversation_id: String,
     pub(crate) seen_until_sequence_id: String,

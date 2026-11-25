@@ -990,6 +990,17 @@ struct FfiResult chat_xdk_prepare_screen_capture(const struct ChatHandle *handle
                                                  const char *params_json);
 
 /**
+ * Sign archiving or unarchiving a conversation, group or one-to-one.
+ *
+ * `params_json` — `conversation_id`, `archived` (`true` signs an archive,
+ * `false` an unarchive), plus optional `sender_id` / `signing_key_version`.
+ *
+ * Returns JSON `PreparedAction`: the archive request's `action_signatures`.
+ */
+struct FfiResult chat_xdk_prepare_conversation_archive(const struct ChatHandle *handle,
+                                                       const char *params_json);
+
+/**
  * Build the signed action for marking a conversation read.
  *
  * `params_json` — single JSON document: `conversation_id`,

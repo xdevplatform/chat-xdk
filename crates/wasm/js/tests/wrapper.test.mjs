@@ -567,6 +567,10 @@ async function delegationTests() {
       () => chat.prepareMessageTtlRemove({ ...group })],
     ["ConversationMetadataChangeEvent.EnableScreenCaptureBlocking", ",111,g100",
       () => chat.prepareScreenCapture({ ...group, change: "blockingEnabled" })],
+    ["ConversationMetadataChangeEvent.ArchiveConversation", ",111,g100",
+      () => chat.prepareConversationArchive({ ...group, archived: true })],
+    ["ConversationMetadataChangeEvent.UnarchiveConversation", ",111,g100",
+      () => chat.prepareConversationArchive({ ...group, archived: false })],
   ];
   for (const [event, fields, prepare] of actions) {
     const result = prepare();

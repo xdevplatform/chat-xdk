@@ -1191,6 +1191,10 @@ pub enum SettingsChange {
     ScreenCaptureBlockingEnabled,
     /// Screenshot blocking disabled.
     ScreenCaptureBlockingDisabled,
+    /// Conversation archived.
+    Archived,
+    /// Conversation unarchived.
+    Unarchived,
     /// Unknown or unsupported setting change.
     Unknown,
 }

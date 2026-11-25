@@ -1,12 +1,16 @@
-//! Conversation settings: the message TTL and screen-capture protection.
+//! Conversation settings: the message TTL, screen-capture protection, and
+//! archiving.
 
 use crate::core::ChatCore;
 use crate::error::SdkError;
-use crate::params::{MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams};
+use crate::params::{
+    ConversationArchiveParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
+};
 use crate::thrift::event::{
-    ConversationMetadataChange, ConversationMetadataChangeEvent, DisableScreenCaptureBlocking,
-    DisableScreenCaptureDetection, EnableScreenCaptureBlocking, EnableScreenCaptureDetection,
-    MessageDurationChange, MessageDurationRemove, MessageEventDetail,
+    ArchiveConversation, ConversationMetadataChange, ConversationMetadataChangeEvent,
+    DisableScreenCaptureBlocking, DisableScreenCaptureDetection, EnableScreenCaptureBlocking,
+    EnableScreenCaptureDetection, MessageDurationChange, MessageDurationRemove, MessageEventDetail,
+    UnarchiveConversation,
 };
 use crate::types::PreparedAction;
 
@@ -76,6 +80,32 @@ impl ChatCore {
             params.signing_key_version.as_deref(),
         )?;
         let signature = sign_change(&ctx, metadata_detail(screen_capture_detail(params.change)))?;
+        Ok(one_action(signature))
+    }
+
+    /// Sign archiving or unarchiving a conversation, group or one-to-one.
+    ///
+    /// The event's id list stays unset, as X clients sign it, so the signed
+    /// payload has no fields after the conversation id.
+    pub fn prepare_conversation_archive(
+        &self,
+        params: &ConversationArchiveParams,
+    ) -> Result<PreparedAction, SdkError> {
+        let ctx = self.action_ctx(
+            &params.conversation_id,
+            params.sender_id.as_deref(),
+            params.signing_key_version.as_deref(),
+        )?;
+        let change = if params.archived {
+            ConversationMetadataChange::ArchiveConversation(ArchiveConversation {
+                archived_conversation_ids: None,
+            })
+        } else {
+            ConversationMetadataChange::UnarchiveConversation(UnarchiveConversation {
+                unarchived_conversation_ids: None,
+            })
+        };
+        let signature = sign_change(&ctx, metadata_detail(change))?;
         Ok(one_action(signature))
     }
 }
