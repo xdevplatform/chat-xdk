@@ -22,13 +22,13 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, ConversationMuteParams,
-    DecryptEventParams, DecryptEventsParams, DecryptEventsResult, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams,
-    GroupTitleChangeParams, PreparedAction, PreparedConversationChange,
-    PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord, PublicKeyRegistrationPayload,
-    PublicKeys, QuickReply, ResolvePublicKeys,
+    AttachmentDescriptor, ChatCore as SdkCore, ConversationArchiveParams,
+    ConversationKeyChangeParams, ConversationMuteParams, DecryptEventParams, DecryptEventsParams,
+    DecryptEventsResult, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, PreparedAction,
+    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord,
+    PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -537,6 +537,21 @@ impl ChatCore {
         conversation_key: &XChatConversationKey,
     ) -> Result<String, SdkError> {
         self.inner.decrypt(ciphertext_b64, conversation_key)
+    }
+
+    // -- Conversation archive -----------------------------------------------
+
+    /// Sign archiving (`archived` true) or unarchiving (false) a
+    /// conversation, group or one-to-one. Send `action_signatures` on
+    /// `POST /2/chat/conversations/{id}/archive` to archive, or on `DELETE`
+    /// of the same path to unarchive. Signed with the session identity.
+    pub fn prepare_conversation_archive(
+        &self,
+        conversation_id: &str,
+        archived: bool,
+    ) -> Result<PreparedAction, SdkError> {
+        let params = ConversationArchiveParams::new(conversation_id, archived);
+        self.inner.prepare_conversation_archive(&params)
     }
 
     // -- Conversation mute --------------------------------------------------

@@ -1096,6 +1096,19 @@ impl Chat {
         self.prepare_action(self.inner.prepare_screen_capture(&core))
     }
 
+    /// Sign archiving or unarchiving a conversation, group or one-to-one.
+    ///
+    /// Takes a single params object with camelCase keys: `conversationId`,
+    /// `archived` (`true` signs an archive, `false` an unarchive), plus
+    /// optional `senderId` / `signingKeyVersion` (resolved from the session
+    /// identity when omitted). Returns the request's `actionSignatures`,
+    /// shaped as `prepareMessageDelete` returns them.
+    #[wasm_bindgen(js_name = prepareConversationArchive)]
+    pub fn prepare_conversation_archive(&self, params: JsValue) -> Result<JsValue, JsValue> {
+        let p: JsConversationArchiveParams = from_js_params("prepareConversationArchive", params)?;
+        self.prepare_action(self.inner.prepare_conversation_archive(&p.into_core()))
+    }
+
     fn prepare_action(
         &self,
         prepared: Result<chat_xdk_core::PreparedAction, chat_xdk_core::error::SdkError>,
@@ -2241,6 +2254,25 @@ impl JsScreenCaptureParams {
         params.sender_id = self.sender_id;
         params.signing_key_version = self.signing_key_version;
         Ok(params)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsConversationArchiveParams {
+    conversation_id: String,
+    archived: bool,
+    sender_id: Option<String>,
+    signing_key_version: Option<String>,
+}
+
+impl JsConversationArchiveParams {
+    fn into_core(self) -> chat_xdk_core::ConversationArchiveParams {
+        let mut params =
+            chat_xdk_core::ConversationArchiveParams::new(self.conversation_id, self.archived);
+        params.sender_id = self.sender_id;
+        params.signing_key_version = self.signing_key_version;
+        params
     }
 }
 

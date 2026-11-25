@@ -2173,4 +2173,29 @@ namespace ChatXdk
         public string? SenderId { get; init; }
         public string? SigningKeyVersion { get; init; }
     }
+
+    /// <summary>
+    /// Parameters for <see cref="Chat.PrepareConversationArchive"/>.
+    /// <see cref="Archived"/> true signs an archive, false an unarchive.
+    /// </summary>
+    public sealed class ConversationArchiveParams
+    {
+        /// <summary>Create params with the required fields; all optional fields default to null.</summary>
+        /// <param name="conversationId">ID of the conversation: a group id or a one-to-one id, in either <c>A:B</c> or <c>A-B</c> form.</param>
+        /// <param name="archived">True signs an archive, false an unarchive.</param>
+        public ConversationArchiveParams(string conversationId, bool archived)
+        {
+            ConversationId = conversationId;
+            Archived = archived;
+        }
+
+        /// <summary>ID of the conversation.</summary>
+        public string ConversationId { get; }
+        /// <summary>True signs an archive, false an unarchive.</summary>
+        public bool Archived { get; }
+        /// <summary>User ID of the sender signing the action; resolves from the session identity when null.</summary>
+        public string? SenderId { get; init; }
+        /// <summary>Version of the sender's signing key; resolves from the session identity when null.</summary>
+        public string? SigningKeyVersion { get; init; }
+    }
 }

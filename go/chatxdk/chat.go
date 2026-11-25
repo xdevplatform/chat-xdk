@@ -835,6 +835,15 @@ func (c *Chat) prepareAction(params any, call func(handle, string) (string, erro
 	return &out, nil
 }
 
+// PrepareConversationArchive signs archiving or unarchiving a conversation,
+// group or one-to-one: the action_signatures of the archive request
+// (POST /2/chat/conversations/{id}/archive) or the unarchive request (DELETE
+// on the same path), one entry. The SDK generates the action's message id;
+// read it back from the entry.
+func (c *Chat) PrepareConversationArchive(params ConversationArchiveParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareConversationArchive)
+}
+
 // PrepareMessageDelete builds the signed action for deleting messages from a
 // conversation: the request's action_signatures, one entry.
 //

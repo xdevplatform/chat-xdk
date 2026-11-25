@@ -521,6 +521,43 @@ fn decrypt_event_settings_change_unmuted() {
 }
 
 #[test]
+fn decrypt_event_settings_change_archived_and_unarchived() {
+    let core = ChatCore::new();
+    core.set_reject_unverified(false);
+
+    // With the id list unset, as X clients send it, and with it set.
+    for ids in [None, Some(vec!["conv-1".to_string()])] {
+        for archived in [true, false] {
+            let change = if archived {
+                ConversationMetadataChange::ArchiveConversation(ArchiveConversation::new(
+                    ids.clone(),
+                ))
+            } else {
+                ConversationMetadataChange::UnarchiveConversation(UnarchiveConversation::new(
+                    ids.clone(),
+                ))
+            };
+            let event_b64 = build_test_event(ThriftDetail::ConversationMetadataChangeEvent(
+                ThriftCMCE::new(Some(change)),
+            ));
+
+            let event = core
+                .decrypt_event_with(&event_b64, &Default::default(), &[])
+                .unwrap();
+            match event {
+                Event::SettingsChange(sc) if archived => {
+                    assert!(matches!(sc.change, SettingsChange::Archived));
+                }
+                Event::SettingsChange(sc) => {
+                    assert!(matches!(sc.change, SettingsChange::Unarchived));
+                }
+                other => panic!("Expected Event::SettingsChange, got {:?}", other),
+            }
+        }
+    }
+}
+
+#[test]
 fn decrypt_event_settings_change_screen_capture_detection_enabled() {
     let core = ChatCore::new();
     core.set_reject_unverified(false);

@@ -648,6 +648,226 @@ fn prepare_mark_conversation_read_rejects_empty_ids() {
     );
 }
 
+/// Decrypt `sig` as a recipient does: wrapped in the event the backend
+/// delivers, with the signer's signing key, rejecting what does not verify.
+fn decrypt_delivered_action(
+    sig: &crate::signatures::ActionSignature,
+    sender_id: &str,
+    conversation_id: &str,
+    signing_key: SigningKeyEntry,
+) -> Event {
+    let signed = &sig.message_event_signature;
+    let event = MessageEvent::new(
+        Some("2011626338877079560".to_string()),
+        Some(sig.message_id.clone()),
+        Some(sender_id.to_string()),
+        Some(conversation_id.to_string()),
+        None::<String>,
+        Some("1700000000123".to_string()),
+        Some(decode_detail(&sig.encoded_message_event_detail)),
+        None::<crate::thrift::event::MessageEventRelaySource>,
+        Some(crate::thrift::event::MessageEventSignature::new(
+            Some(signed.signature.clone()),
+            Some(signed.public_key_version.clone()),
+            Some(signed.signature_version.clone()),
+            None::<String>,
+            None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+        )),
+        None::<String>,
+        None::<bool>,
+        None::<String>,
+    );
+    let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
+    ChatCore::new()
+        .decrypt_event(
+            &DecryptEventParams::new(event_b64, Default::default())
+                .with_signing_keys(vec![signing_key]),
+        )
+        .unwrap()
+}
+
+#[test]
+fn conversation_archive_decrypts_as_a_verified_settings_change() {
+    // A 1:1 id signs in canonical colon form; a group id as it is.
+    for (given, signed_conversation) in [("222-111", "111:222"), ("g999", "g999")] {
+        for archived in [true, false] {
+            let core = ChatCore::new();
+            let reg = core.generate_keypairs().unwrap();
+            core.set_identity(&SetIdentityParams::new("111", "61"))
+                .unwrap();
+
+            let sig = only_action(
+                core.prepare_conversation_archive(&crate::ConversationArchiveParams::new(
+                    given, archived,
+                ))
+                .unwrap(),
+            );
+
+            let event_name = if archived {
+                "ArchiveConversation"
+            } else {
+                "UnarchiveConversation"
+            };
+            assert_eq!(sig.message_event_signature.public_key_version, "61");
+            assert_eq!(
+                sig.signature_payload,
+                format!(
+                    "ConversationMetadataChangeEvent.{event_name},{},111,{signed_conversation}",
+                    sig.message_id
+                )
+            );
+            assert_action_signature_round_trips(&core, &sig, "111", signed_conversation, None);
+
+            // The id list stays unset, as X clients sign it.
+            let MessageEventDetail::ConversationMetadataChangeEvent(detail) =
+                decode_detail(&sig.encoded_message_event_detail)
+            else {
+                panic!("expected a ConversationMetadataChangeEvent");
+            };
+            match detail.conversation_metadata_change {
+                Some(crate::thrift::event::ConversationMetadataChange::ArchiveConversation(c))
+                    if archived =>
+                {
+                    assert_eq!(c.archived_conversation_ids, None);
+                }
+                Some(crate::thrift::event::ConversationMetadataChange::UnarchiveConversation(
+                    c,
+                )) if !archived => assert_eq!(c.unarchived_conversation_ids, None),
+                other => panic!("unexpected change {other:?}"),
+            }
+
+            match decrypt_delivered_action(
+                &sig,
+                "111",
+                signed_conversation,
+                signing_key_entry_for(&reg, "111"),
+            ) {
+                Event::SettingsChange(settings) => {
+                    assert!(settings.verified);
+                    assert!(match settings.change {
+                        SettingsChange::Archived => archived,
+                        SettingsChange::Unarchived => !archived,
+                        _ => false,
+                    });
+                }
+                other => panic!("expected Event::SettingsChange, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn conversation_archive_signature_does_not_verify_for_the_other_action() {
+    let core = ChatCore::new();
+    let reg = core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("111", "61"))
+        .unwrap();
+    let archive = only_action(
+        core.prepare_conversation_archive(&crate::ConversationArchiveParams::new("g999", true))
+            .unwrap(),
+    );
+    let unarchive = only_action(
+        core.prepare_conversation_archive(&crate::ConversationArchiveParams::new("g999", false))
+            .unwrap(),
+    );
+
+    // The archive's signature on the unarchive's detail must be refused.
+    let mut forged = unarchive.clone();
+    forged.message_event_signature = archive.message_event_signature.clone();
+    forged.message_id = archive.message_id.clone();
+    let event = MessageEvent::new(
+        Some("1".to_string()),
+        Some(forged.message_id.clone()),
+        Some("111".to_string()),
+        Some("g999".to_string()),
+        None::<String>,
+        Some("1700000000123".to_string()),
+        Some(decode_detail(&forged.encoded_message_event_detail)),
+        None::<crate::thrift::event::MessageEventRelaySource>,
+        Some(crate::thrift::event::MessageEventSignature::new(
+            Some(forged.message_event_signature.signature.clone()),
+            Some(forged.message_event_signature.public_key_version.clone()),
+            Some(forged.message_event_signature.signature_version.clone()),
+            None::<String>,
+            None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+        )),
+        None::<String>,
+        None::<bool>,
+        None::<String>,
+    );
+    let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
+    let result = ChatCore::new().decrypt_event(
+        &DecryptEventParams::new(event_b64, Default::default())
+            .with_signing_keys(vec![signing_key_entry_for(&reg, "111")]),
+    );
+    assert!(result.is_err(), "a mismatched signature must not verify");
+}
+
+#[test]
+fn conversation_archive_signs_the_id_lists_it_is_given() {
+    use crate::thrift::event::{ArchiveConversation, ConversationMetadataChange as Change};
+    use crate::thrift::event::{ConversationMetadataChangeEvent as Cmce, UnarchiveConversation};
+    let event = |detail: &MessageEventDetail| MessageEvent {
+        message_id: Some("m1".to_string()),
+        sender_id: Some("111".to_string()),
+        conversation_id: Some("g1".to_string()),
+        detail: Some(detail.clone()),
+        message_event_signature: Some(crate::thrift::event::MessageEventSignature {
+            signature_version: Some("7".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let archive = MessageEventDetail::ConversationMetadataChangeEvent(Cmce {
+        conversation_metadata_change: Some(Change::ArchiveConversation(ArchiveConversation {
+            archived_conversation_ids: Some(vec!["g1".to_string(), "g2".to_string()]),
+        })),
+    });
+    let unarchive = MessageEventDetail::ConversationMetadataChangeEvent(Cmce {
+        conversation_metadata_change: Some(Change::UnarchiveConversation(UnarchiveConversation {
+            unarchived_conversation_ids: Some(vec!["g3".to_string()]),
+        })),
+    });
+    assert_eq!(
+        build_event_signature_payload(&event(&archive), &archive, None)
+            .as_deref()
+            .map(|p| p.as_slice()),
+        Some(&b"ConversationMetadataChangeEvent.ArchiveConversation,m1,111,g1,g1,g2"[..])
+    );
+    assert_eq!(
+        build_event_signature_payload(&event(&unarchive), &unarchive, None)
+            .as_deref()
+            .map(|p| p.as_slice()),
+        Some(&b"ConversationMetadataChangeEvent.UnarchiveConversation,m1,111,g1,g3"[..])
+    );
+}
+
+#[test]
+fn prepare_conversation_archive_rejects_bad_input() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+
+    let empty = crate::ConversationArchiveParams::new("", true).with_identity("111", "1");
+    let err = core.prepare_conversation_archive(&empty).unwrap_err();
+    assert!(
+        err.to_string().contains("conversation_id is empty"),
+        "unexpected error: {err}"
+    );
+
+    // A comma would split the signed payload's fields.
+    let comma = crate::ConversationArchiveParams::new("g1,g2", true).with_identity("111", "1");
+    assert!(core.prepare_conversation_archive(&comma).is_err());
+
+    // Without keys there is nothing to sign with.
+    let unkeyed = ChatCore::new();
+    let err = unkeyed
+        .prepare_conversation_archive(
+            &crate::ConversationArchiveParams::new("g1", true).with_identity("111", "1"),
+        )
+        .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
+
 #[test]
 fn deletes_and_read_receipts_return_the_requests_action_signatures() {
     let core = ChatCore::new();

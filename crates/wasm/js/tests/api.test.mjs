@@ -988,6 +988,34 @@ async function main() {
     );
   }
 
+  // 4c3c. prepareConversationArchive signs an archive or an unarchive with
+  // the signing key; a 1:1 id is signed in canonical colon form, a group id
+  // as it is, and the payload ends at the conversation id.
+  for (const [conversationId, signed] of [["222-111", "111:222"], ["g999", "g999"]]) {
+    for (const [archived, event] of [[true, "ArchiveConversation"], [false, "UnarchiveConversation"]]) {
+      const archiveSig = onlyAction(chat.prepareConversationArchive({
+        senderId: "111",
+        signingKeyVersion: "1",
+        conversationId,
+        archived,
+      }));
+      assert.ok(archiveSig.messageId.length > 0);
+      assert.ok(archiveSig.encodedMessageEventDetail.length > 0);
+      assert.equal(archiveSig.messageEventSignature.publicKeyVersion, "1");
+      assert.equal(archiveSig.messageEventSignature.signingPublicKey, v.signing_public_b64);
+      assert.ok(signs(chat, archiveSig,
+        `ConversationMetadataChangeEvent.${event},${archiveSig.messageId},111,${signed}`));
+    }
+  }
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "g999" }),
+    /prepareConversationArchive params.*archived/,
+  );
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "", archived: true }),
+    /conversation_id is empty/,
+  );
+
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.
   const readSig = onlyAction(chat.prepareMarkConversationRead({

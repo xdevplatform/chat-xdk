@@ -992,6 +992,17 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_screen_capture(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Sign archiving or unarchiving a conversation, group or one-to-one.
+        ///
+        ///  `params_json` — `conversation_id`, `archived` (`true` signs an archive,
+        ///  `false` an unarchive), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the archive request's `action_signatures`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_archive", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_archive(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Build the signed action for marking a conversation read.
         ///
         ///  `params_json` — single JSON document: `conversation_id`,

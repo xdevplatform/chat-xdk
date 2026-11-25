@@ -16,7 +16,8 @@ reply (a simple echo), encrypts the reply, and sends it back.
 
 The bots deliberately stop at that messaging core. The rest of the SDK surface
 — group management (`prepareGroupCreate` / `prepareGroupMembersChange` /
-`prepareGroupMembersRemove`),
+`prepareGroupMembersRemove`), archiving and unarchiving a conversation
+(`prepareConversationArchive`),
 reactions (`encryptAddReaction` / `encryptRemoveReaction`), muting and
 unmuting a conversation (`prepareConversationMute`), media files
 (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`), and files
@@ -24,7 +25,10 @@ under a key such as group avatars (`encryptFileWithKey` / `decryptFileWithKey`)
 — is documented in
 [`../docs/API.md`](../docs/API.md), with tested reference call shapes in each
 binding's test suite (`crates/*/tests`, `crates/wasm/js/tests`,
-`go/chatxdk/chatxdk_test.go`).
+`go/chatxdk/chatxdk_test.go`). Each example's crypto core also wraps
+`prepareConversationArchive` (`prepare_conversation_archive`,
+`PrepareConversationArchive`), and its offline test checks that a signed
+archive and a signed unarchive each verify as the setting they sign.
 
 ## Juicebox (optional)
 

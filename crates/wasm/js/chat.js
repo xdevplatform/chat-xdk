@@ -484,6 +484,7 @@ export class ChatWithJuicebox {
   prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
   prepareConversationMute(params) { return this.#inner.prepareConversationMute(params); }
   prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
+  prepareConversationArchive(params) { return this.#inner.prepareConversationArchive(params); }
 
   // The public-key hook (handled in this JS layer)
 

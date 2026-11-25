@@ -201,15 +201,16 @@ pub use features::{
     FEATURES_ENDPOINT, FEATURES_MAX_BODY, FEATURES_REFRESH_MS, FEATURES_TIMEOUT_MS,
 };
 pub use params::{
-    ConversationKeyChangeParams, ConversationMuteParams, DecryptEventParams, DecryptEventsParams,
-    DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
-    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
-    GroupAvatarChangeParams, GroupCreateParams, GroupDescriptionChangeParams,
-    GroupInviteDisableParams, GroupInviteEnableParams, GroupJoinRejectParams,
-    GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams, GroupMembersRemoveParams,
-    GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams, MessageDeleteParams,
-    MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
+    ConversationArchiveParams, ConversationKeyChangeParams, ConversationMuteParams,
+    DecryptEventParams, DecryptEventsParams, DecryptFileParams, DecryptFileWithKeyParams,
+    EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, FileDecryptorParams, FileEncryptorParams,
+    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
+    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
+    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
+    SetIdentityParams,
 };
 pub use types::*;
 
@@ -287,9 +288,9 @@ pub mod prelude {
     pub use crate::chat::Chat;
 
     pub use crate::params::{
-        ConversationKeyChangeParams, ConversationMuteParams, EncryptEditParams,
-        EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, GroupAdminsAddParams,
-        GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
+        ConversationArchiveParams, ConversationKeyChangeParams, ConversationMuteParams,
+        EncryptEditParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+        GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
         GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
         GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
         GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,

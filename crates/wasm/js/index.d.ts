@@ -95,7 +95,7 @@ export interface MessageEventSignature {
  * encrypted group text: the `actionSignatures` it carries. Returned by
  * prepareMessageDelete, prepareMarkConversationRead, prepareGroupLeave (one
  * entry per signed event), prepareGroupAvatarChange, and the admin, invite,
- * join-request, message-TTL and screen-capture prepares.
+ * join-request, message-TTL, screen-capture and conversation-archive prepares.
  */
 export interface PreparedAction {
   actionSignatures: ActionSignature[];
@@ -991,6 +991,20 @@ export interface ScreenCaptureParams {
   conversationId: string;
   change: ScreenCaptureChange;
   senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/**
+ * Parameters for prepareConversationArchive.
+ */
+export interface ConversationArchiveParams {
+  /** ID of the conversation: a group id or a one-to-one id, in either `A:B` or `A-B` form. */
+  conversationId: string;
+  /** `true` signs an archive, `false` an unarchive. */
+  archived: boolean;
+  /** User ID of the sender signing the action; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the action; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
 }
 
@@ -2011,6 +2025,9 @@ interface ChatCrypto {
 
   /** Sign one screen-capture setting change. */
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+
+  /** Sign archiving or unarchiving a conversation, group or one-to-one. */
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 }
 
 /** Internal crypto engine wrapped by ChatWithJuicebox. Not part of the public API. */
@@ -2071,6 +2088,7 @@ declare class Chat implements ChatCrypto {
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
   prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 }
 
 /**
@@ -2229,6 +2247,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
   prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`) and

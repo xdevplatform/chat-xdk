@@ -14,15 +14,15 @@ use std::sync::{Arc, Mutex};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{
-    AttachmentDescriptor, EntityDescriptor, MissingSigningKey, PreparedConversationChange,
-    PublicKeyInput, PublicKeyRecord,
+    AttachmentDescriptor, EntityDescriptor, Event, MissingSigningKey, PreparedConversationChange,
+    PublicKeyInput, PublicKeyRecord, SettingsChange,
 };
 use chatbot_rs::bot::Bot;
 use chatbot_rs::chat_core::{
     prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
 };
 use chatbot_rs::x_api::{ChatApi, EventItem};
-use common::{delivered, key_change_and_message, party, public_keys_of, texts};
+use common::{delivered, delivered_action, key_change_and_message, party, public_keys_of, texts};
 use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
@@ -277,6 +277,49 @@ fn prepare_group_create_yields_two_signatures() {
     // create request sends.
     let encrypted_title = prep.encrypted_title.as_deref().expect("encrypted title");
     assert_eq!(core.decrypt(encrypted_title, key).expect("decrypt"), title);
+}
+
+#[test]
+fn prepare_conversation_archive_signs_archive_and_unarchive() {
+    // Each signed action is sendable as it is, and a recipient verifies it
+    // as the setting it signs.
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let record = PublicKeyRecord::new(
+        v["event_signing_key_version"].as_str().unwrap(),
+        v["identity_public_b64"].as_str().unwrap(),
+        v["signing_public_b64"].as_str().unwrap(),
+        v["identity_public_key_signature_b64"].as_str().unwrap(),
+    );
+    core.fetch_public_keys_with(move |_| Ok(vec![record.clone()]));
+    let sender = v["event_sender_id"].as_str().unwrap();
+
+    for archived in [true, false] {
+        let prepared = core
+            .prepare_conversation_archive("g123", archived)
+            .expect("prepare_conversation_archive");
+        assert_eq!(prepared.action_signatures.len(), 1);
+        let sig = &prepared.action_signatures[0];
+        assert!(!sig.message_id.is_empty());
+        assert!(!sig.encoded_message_event_detail.is_empty());
+        assert!(!sig.message_event_signature.signature.is_empty());
+
+        let event = delivered_action(sig, sender, "g123", "2100000000000000000");
+        let result = core.decrypt_batch(&[event.as_str()]);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.events.len(), 1);
+        match &result.events[0].event {
+            Event::SettingsChange(change) => {
+                assert!(change.verified);
+                if archived {
+                    assert!(matches!(change.change, SettingsChange::Archived));
+                } else {
+                    assert!(matches!(change.change, SettingsChange::Unarchived));
+                }
+            }
+            other => panic!("expected a settings change, got {other:?}"),
+        }
+    }
 }
 
 #[test]

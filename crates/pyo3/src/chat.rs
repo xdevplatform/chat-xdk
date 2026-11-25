@@ -1312,6 +1312,32 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
+    /// Sign archiving or unarchiving a conversation, group or one-to-one.
+    ///
+    /// The result holds the request's ``action_signatures``, one entry: pass
+    /// them to the archive request
+    /// (``POST /2/chat/conversations/{id}/archive``) or the unarchive request
+    /// (``DELETE`` on the same path). The SDK generates the action's message
+    /// id; read it back from the entry.
+    ///
+    /// Args:
+    ///     params: A ``ConversationArchiveParams``.
+    ///
+    /// Returns:
+    ///     A dict with ``action_signatures``, shaped as
+    ///     ``prepare_message_delete`` returns it.
+    pub(crate) fn prepare_conversation_archive(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, ConversationArchiveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_conversation_archive(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
     /// Export private keys as raw bytes for secure storage.
     ///
     /// Warning: Handle with care — these are your secret keys!
