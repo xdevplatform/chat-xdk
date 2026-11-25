@@ -469,6 +469,35 @@ pub fn build_message_content(
     serialize_thrift(&holder)
 }
 
+/// Build forward content: the forwarded message's text and entities in
+/// `forwarded_message`, the sender's optional comment as the message text,
+/// sent from the forward sheet as the X apps mark a forward.
+#[allow(clippy::vec_box)]
+pub fn build_forward_content(
+    comment: Option<&str>,
+    entities: Option<Vec<Box<ThriftRichTextEntity>>>,
+    attachments: Option<Vec<Box<ThriftMessageAttachment>>>,
+    forwarded: crate::thrift::product::ForwardedMessage,
+) -> Result<Vec<u8>, SdkError> {
+    let content = MessageContents::new(
+        comment.map(str::to_string),
+        entities,
+        attachments,
+        None,
+        Some(Box::new(forwarded)),
+        Some(Box::new(
+            crate::thrift::product::SentFromSurface::MESSAGE_FORWARD_SHEET,
+        )),
+        None,
+        None,
+        None,
+    );
+    let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::Message(Box::new(
+        content,
+    )))));
+    serialize_thrift(&holder)
+}
+
 /// Build text message content carrying a pre-built reply preview.
 #[allow(clippy::vec_box)]
 pub fn build_message_content_with_preview(
@@ -499,11 +528,12 @@ pub fn build_message_content_with_preview(
 pub fn build_reaction_add_content(
     target_message_sequence_id: &str,
     emoji: &str,
+    attachment_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageReactionAdd::new(
         Some(target_message_sequence_id.to_string()),
         Some(emoji.to_string()),
-        None,
+        attachment_id.map(str::to_string),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::ReactionAdd(
         Box::new(content),
@@ -540,11 +570,12 @@ pub fn build_message_edit_content(
 pub fn build_reaction_remove_content(
     target_message_sequence_id: &str,
     emoji: &str,
+    attachment_id: Option<&str>,
 ) -> Result<Vec<u8>, SdkError> {
     let content = MessageReactionRemove::new(
         Some(target_message_sequence_id.to_string()),
         Some(emoji.to_string()),
-        None,
+        attachment_id.map(str::to_string),
     );
     let holder = MessageEntryHolder::new(Some(Box::new(MessageEntryContents::ReactionRemove(
         Box::new(content),
@@ -1154,13 +1185,13 @@ mod tests {
 
     #[test]
     fn test_build_reaction_add_content() {
-        let content = build_reaction_add_content("seq-123", "👍").unwrap();
+        let content = build_reaction_add_content("seq-123", "👍", None).unwrap();
         assert!(!content.is_empty());
     }
 
     #[test]
     fn test_build_reaction_remove_content() {
-        let content = build_reaction_remove_content("seq-123", "👍").unwrap();
+        let content = build_reaction_remove_content("seq-123", "👍", None).unwrap();
         assert!(!content.is_empty());
     }
 
@@ -2000,13 +2031,13 @@ mod tests {
     #[test]
     fn test_build_reaction_add_content_with_emoji_sequence() {
         // Multi-codepoint emoji
-        let content = build_reaction_add_content("seq-10", "👨‍👩‍👧‍👦").unwrap();
+        let content = build_reaction_add_content("seq-10", "👨‍👩‍👧‍👦", None).unwrap();
         assert!(!content.is_empty());
     }
 
     #[test]
     fn test_build_reaction_remove_content_with_emoji_sequence() {
-        let content = build_reaction_remove_content("seq-10", "❤️").unwrap();
+        let content = build_reaction_remove_content("seq-10", "❤️", None).unwrap();
         assert!(!content.is_empty());
     }
 }

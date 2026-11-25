@@ -425,6 +425,27 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_encrypt_message(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Encrypt a forward of an existing message for the X API.
+        ///
+        ///  `params_json` — single JSON document: `conversation_id`, `forwarded_text`
+        ///  (the full text of the message being forwarded; empty when it has none),
+        ///  plus optional `forwarded_entities` (`[[start,end,"type"],...]` into
+        ///  `forwarded_text`), `text` (a comment sent with the forward) and `entities`
+        ///  (into `text`), `attachments` (the original's attachments, each file
+        ///  uploaded again to this conversation), `sender_id` /
+        ///  `signing_key_version` (unset resolves from the session identity),
+        ///  `conversation_key` (base64) / `conversation_key_version` (unset resolves
+        ///  from the opt-in key cache), `should_notify`, and `ttl_msec`. A forward
+        ///  with an empty `forwarded_text` and no attachments fails with an
+        ///  invalid-input error.
+        ///
+        ///  Returns JSON `SendPayload`; its id and files work as for
+        ///  `chat_xdk_encrypt_message`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_encrypt_forward", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_encrypt_forward(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Encrypt a reply message for the X API.
         ///
         ///  `params_json` — same document as `chat_xdk_encrypt_message` plus the
@@ -439,6 +460,9 @@ namespace ChatXdk
         ///  names no original as invalid. With `reply_to_event`, a
         ///  `reply_to_message_id` other than the id the event carries fails with an
         ///  invalid-input error.
+        ///  Optional `reply_to_attachment_id` replies to one attachment of the
+        ///  original: it needs `reply_to_event`, and the preview then quotes only
+        ///  that attachment.
         ///
         ///  Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
         ///  and files work as for `chat_xdk_encrypt_message`.
@@ -456,7 +480,8 @@ namespace ChatXdk
         ///  callers that no longer hold the raw event. Optional `sender_id` /
         ///  `signing_key_version` (unset resolves from the session identity) and
         ///  `conversation_key` (base64) / `conversation_key_version` (unset resolves
-        ///  from the opt-in key cache).
+        ///  from the opt-in key cache). Optional `target_attachment_id` reacts to one
+        ///  attachment of the target and needs `target_event`.
         ///
         ///  Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
         /// </summary>
@@ -968,6 +993,18 @@ namespace ChatXdk
         internal static extern FfiResult chat_xdk_prepare_message_ttl_remove(ChatHandle* handle, byte* params_json);
 
         /// <summary>
+        ///  Sign muting or unmuting a conversation, group or one-to-one, for the
+        ///  signer alone.
+        ///
+        ///  `params_json` — `conversation_id`, `muted` (`true` signs a mute, `false`
+        ///  an unmute), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the mute request's `action_signatures`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_mute", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_mute(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
         ///  Sign one screen-capture setting change.
         ///
         ///  `params_json` — `conversation_id`, `change` (`BlockingEnabled`,
@@ -978,6 +1015,17 @@ namespace ChatXdk
         /// </summary>
         [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_screen_capture", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern FfiResult chat_xdk_prepare_screen_capture(ChatHandle* handle, byte* params_json);
+
+        /// <summary>
+        ///  Sign archiving or unarchiving a conversation, group or one-to-one.
+        ///
+        ///  `params_json` — `conversation_id`, `archived` (`true` signs an archive,
+        ///  `false` an unarchive), plus optional `sender_id` / `signing_key_version`.
+        ///
+        ///  Returns JSON `PreparedAction`: the archive request's `action_signatures`.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "chat_xdk_prepare_conversation_archive", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern FfiResult chat_xdk_prepare_conversation_archive(ChatHandle* handle, byte* params_json);
 
         /// <summary>
         ///  Build the signed action for marking a conversation read.

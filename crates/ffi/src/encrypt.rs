@@ -1,4 +1,4 @@
-//! Message encryption: messages, replies, reactions and edits.
+//! Message encryption: messages, forwards, replies, reactions and edits.
 
 use super::*;
 
@@ -81,6 +81,67 @@ pub extern "C" fn chat_xdk_encrypt_message(
     })
 }
 
+/// Encrypt a forward of an existing message for the X API.
+///
+/// `params_json` — single JSON document: `conversation_id`, `forwarded_text`
+/// (the full text of the message being forwarded; empty when it has none),
+/// plus optional `forwarded_entities` (`[[start,end,"type"],...]` into
+/// `forwarded_text`), `text` (a comment sent with the forward) and `entities`
+/// (into `text`), `attachments` (the original's attachments, each file
+/// uploaded again to this conversation), `sender_id` /
+/// `signing_key_version` (unset resolves from the session identity),
+/// `conversation_key` (base64) / `conversation_key_version` (unset resolves
+/// from the opt-in key cache), `should_notify`, and `ttl_msec`. A forward
+/// with an empty `forwarded_text` and no attachments fails with an
+/// invalid-input error.
+///
+/// Returns JSON `SendPayload`; its id and files work as for
+/// `chat_xdk_encrypt_message`.
+#[no_mangle]
+pub extern "C" fn chat_xdk_encrypt_forward(
+    handle: *const ChatHandle,
+    params_json: *const c_char,
+) -> FfiResult {
+    catch_ffi(|| {
+        if handle.is_null() {
+            return err_result("Null handle");
+        }
+        let h = unsafe { &*handle };
+        let mut p: FfiEncryptForwardParams = match parse_params(try_str!(params_json)) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let ckey_bytes = match decode_ckey_bytes(p.conversation_key.as_deref()) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        let attachments = match p.attachments.take().map(parse_attachments).transpose() {
+            Ok(a) => a,
+            Err(e) => return e,
+        };
+
+        let mut params = EncryptForwardParams::new(p.conversation_id, p.forwarded_text);
+        params.forwarded_entities = p.forwarded_entities.map(entity_tuples_to_descs);
+        params.text = p.text.filter(|t| !t.is_empty());
+        params.entities = p.entities.map(entity_tuples_to_descs);
+        params.attachments = attachments;
+        params.sender_id = p.sender_id;
+        params.signing_key_version = p.signing_key_version;
+        params.conversation_key = ckey_bytes;
+        params.conversation_key_version = p.conversation_key_version;
+        params.should_notify = p.should_notify;
+        params.ttl_msec = p.ttl_msec;
+
+        match h.inner.encrypt_forward(&params) {
+            Ok(payload) => match serde_json::to_string(&payload) {
+                Ok(json) => ok_data(&json),
+                Err(e) => internal_error(e),
+            },
+            Err(e) => err_from(e),
+        }
+    })
+}
+
 /// Parse attachment descriptors from a JSON array via the core serde types,
 /// so the field requirements are defined once in core: an attachment missing
 /// a required media field is rejected rather than silently defaulted.
@@ -110,6 +171,9 @@ pub(crate) fn parse_quick_reply(value: serde_json::Value) -> Result<QuickReply, 
 /// names no original as invalid. With `reply_to_event`, a
 /// `reply_to_message_id` other than the id the event carries fails with an
 /// invalid-input error.
+/// Optional `reply_to_attachment_id` replies to one attachment of the
+/// original: it needs `reply_to_event`, and the preview then quotes only
+/// that attachment.
 ///
 /// Returns JSON `SendPayload`, whose `message_id` is the reply's id; its id
 /// and files work as for `chat_xdk_encrypt_message`.
@@ -168,6 +232,7 @@ pub extern "C" fn chat_xdk_encrypt_reply(
         params.attachments = attachments;
         params.reply_to_entities = p.reply_to_entities.map(entity_tuples_to_descs);
         params.reply_to_attachments = reply_to_attachments;
+        params.reply_to_attachment_id = p.reply_to_attachment_id;
         params.quick_reply = quick_reply;
         params.should_notify = p.should_notify;
         params.ttl_msec = p.ttl_msec;
@@ -193,7 +258,8 @@ pub extern "C" fn chat_xdk_encrypt_reply(
 /// callers that no longer hold the raw event. Optional `sender_id` /
 /// `signing_key_version` (unset resolves from the session identity) and
 /// `conversation_key` (base64) / `conversation_key_version` (unset resolves
-/// from the opt-in key cache).
+/// from the opt-in key cache). Optional `target_attachment_id` reacts to one
+/// attachment of the target and needs `target_event`.
 ///
 /// Returns JSON `SendPayload`; the SDK-generated `message_id` is a field on it.
 #[no_mangle]
@@ -240,6 +306,7 @@ pub(crate) fn encrypt_reaction_impl(
     params.signing_key_version = p.signing_key_version;
     params.conversation_key = ckey_bytes;
     params.conversation_key_version = p.conversation_key_version;
+    params.target_attachment_id = p.target_attachment_id;
 
     let result = if remove {
         h.inner.encrypt_remove_reaction(&params)

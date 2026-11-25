@@ -276,8 +276,44 @@ public final class ChatCore implements AutoCloseable {
             List<String> replyToCkces,
             QuickReply quickReply)
             throws Exception {
+        return encryptReply(conversationId, text, conversationKey, conversationKeyVersion,
+                replyToEvent, null, entities, attachments, ttlMsec, replyToCkces, quickReply);
+    }
+
+    /**
+     * Encrypt + sign a reply to one attachment of {@code replyToEvent}, such as one
+     * photo of an album: {@code replyToAttachmentId} is its {@code attachment_id}, and
+     * the preview quotes only that attachment. With {@code conversationKey} and
+     * {@code conversationKeyVersion} null, the conversation key comes from the SDK's
+     * cache.
+     */
+    public SendBody encryptReplyToAttachment(
+            String conversationId,
+            String text,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String replyToEvent,
+            String replyToAttachmentId)
+            throws Exception {
+        return encryptReply(conversationId, text, conversationKey, conversationKeyVersion,
+                replyToEvent, replyToAttachmentId, null, null, null, null, null);
+    }
+
+    private SendBody encryptReply(
+            String conversationId,
+            String text,
+            byte[] conversationKey,
+            String conversationKeyVersion,
+            String replyToEvent,
+            String replyToAttachmentId,
+            List<EntityDescriptor> entities,
+            List<AttachmentDescriptor> attachments,
+            Long ttlMsec,
+            List<String> replyToCkces,
+            QuickReply quickReply)
+            throws Exception {
         SendPayload payload;
-        if (replyToEvent == null) {
+        if (replyToEvent == null && replyToAttachmentId == null) {
             EncryptMessageParams params = new EncryptMessageParams(conversationId, text);
             params.conversationKey = conversationKey;
             params.conversationKeyVersion = conversationKeyVersion;
@@ -291,12 +327,52 @@ public final class ChatCore implements AutoCloseable {
             params.conversationKey = conversationKey;
             params.conversationKeyVersion = conversationKeyVersion;
             params.replyToCkces = replyToCkces;
+            params.replyToAttachmentId = replyToAttachmentId;
             params.entities = entities;
             params.attachments = attachments;
             params.quickReply = quickReply;
             params.ttlMsec = ttlMsec;
             payload = chat.encryptReply(params);
         }
+        // The SDK generates the message id and returns it in the payload.
+        return new SendBody(
+                payload.messageId,
+                payload.encodedMessageCreateEvent,
+                payload.encodedMessageEventSignature,
+                payload.xdkVersion,
+                payload.eventB64);
+    }
+
+    /**
+     * Encrypt + sign a forward of an existing message, as the X apps' forward sheet
+     * sends it. {@code forwardedText} is the full text of the message being forwarded
+     * (empty for one with only attachments) and {@code forwardedEntities} its entities;
+     * {@code text} is an optional comment with its own {@code entities};
+     * {@code attachments} are the original's attachments, each file uploaded again to
+     * this conversation. The original travels as the message's
+     * {@code forwarded_message}, the comment as its text, and the message is marked as
+     * sent from the forward sheet. With {@code conversationKey} and
+     * {@code conversationKeyVersion} null, the conversation key comes from the SDK's
+     * cache.
+     */
+    public SendBody encryptForward(
+            String conversationId,
+            String forwardedText,
+            List<EntityDescriptor> forwardedEntities,
+            String text,
+            List<EntityDescriptor> entities,
+            List<AttachmentDescriptor> attachments,
+            byte[] conversationKey,
+            String conversationKeyVersion)
+            throws Exception {
+        EncryptForwardParams params = new EncryptForwardParams(conversationId, forwardedText);
+        params.forwardedEntities = forwardedEntities;
+        params.text = text;
+        params.entities = entities;
+        params.attachments = attachments;
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        SendPayload payload = chat.encryptForward(params);
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
                 payload.messageId,
@@ -315,9 +391,28 @@ public final class ChatCore implements AutoCloseable {
             byte[] conversationKey,
             String conversationKeyVersion)
             throws Exception {
+        return encryptReactionToAttachment(add, targetEventB64, null, emoji, conversationKey, conversationKeyVersion);
+    }
+
+    /**
+     * Like {@link #encryptReaction}, for one attachment of the target:
+     * {@code targetAttachmentId} is the {@code attachment_id} of an attachment the raw
+     * event carries, such as one photo of an album, or null for the whole message.
+     * The SDK decrypts the event to check the attachment is in it. Remove the reaction
+     * with the same {@code targetAttachmentId}.
+     */
+    public SendBody encryptReactionToAttachment(
+            boolean add,
+            String targetEventB64,
+            String targetAttachmentId,
+            String emoji,
+            byte[] conversationKey,
+            String conversationKeyVersion)
+            throws Exception {
         EncryptReactionParams params = new EncryptReactionParams(targetEventB64, emoji);
         params.conversationKey = conversationKey;
         params.conversationKeyVersion = conversationKeyVersion;
+        params.targetAttachmentId = targetAttachmentId;
         SendPayload payload = add ? chat.encryptAddReaction(params) : chat.encryptRemoveReaction(params);
         // The SDK generates the message id and returns it in the payload.
         return new SendBody(
@@ -463,6 +558,32 @@ public final class ChatCore implements AutoCloseable {
     /** Decrypt a group title or description the X API returns. */
     public String decrypt(String ciphertextB64, byte[] conversationKey) {
         return chat.decrypt(ciphertextB64, conversationKey);
+    }
+
+    // -- Conversation archive -------------------------------------------------
+
+    /**
+     * Sign archiving ({@code archived} true) or unarchiving (false) a conversation, group
+     * or one-to-one. Send {@code actionSignatures} on
+     * {@code POST /2/chat/conversations/{id}/archive} to archive, or on {@code DELETE} of
+     * the same path to unarchive. Signed with the session identity.
+     */
+    public PreparedAction prepareConversationArchive(String conversationId, boolean archived)
+            throws Exception {
+        return chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, archived));
+    }
+
+    // -- Conversation mute ----------------------------------------------------
+
+    /**
+     * Sign muting ({@code muted} true) or unmuting (false) a conversation, group or
+     * one-to-one, for this bot alone. The event is signed in the bot's own
+     * {@code {userId}:{userId}} conversation and names {@code conversationId} in
+     * canonical colon form; send {@code actionSignatures} with a mute or unmute request
+     * that names the conversation in that same form. Signed with the session identity.
+     */
+    public PreparedAction prepareConversationMute(String conversationId, boolean muted) throws Exception {
+        return chat.prepareConversationMute(new ConversationMuteParams(conversationId, muted));
     }
 
     /** Pull the plain text out of a decrypted Message event, or null. */

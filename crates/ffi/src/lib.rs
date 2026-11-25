@@ -23,9 +23,10 @@ use chat_xdk_core::error::{ErrorKind, SdkError};
 #[cfg(feature = "juicebox")]
 use chat_xdk_core::keys::juicebox::JuiceboxConfig;
 use chat_xdk_core::{
-    AttachmentDescriptor, ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams,
-    DecryptFileParams, DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams,
-    EncryptFileWithKeyParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    AttachmentDescriptor, ConversationArchiveParams, ConversationKeyChangeParams,
+    ConversationMuteParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
+    DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
     EntityDescriptor, FileDecryptorParams, FileEncryptorParams, GroupAdminsAddParams,
     GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
     GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,

@@ -2156,6 +2156,66 @@ func TestPrepareGroupActionsSignEachAction(t *testing.T) {
 	}
 }
 
+func TestPrepareConversationArchive(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// A 1:1 id is signed in its canonical colon form; a group id as it is.
+	// The payload ends at the conversation id.
+	for _, c := range []struct {
+		conversation, signed string
+		archived             bool
+		event                string
+	}{
+		{"222-111", "111:222", true, "ArchiveConversation"},
+		{"222-111", "111:222", false, "UnarchiveConversation"},
+		{"g999", "g999", true, "ArchiveConversation"},
+		{"g999", "g999", false, "UnarchiveConversation"},
+	} {
+		prepared, err := chat.PrepareConversationArchive(ConversationArchiveParams{
+			SenderID:          "111",
+			SigningKeyVersion: "1",
+			ConversationID:    c.conversation,
+			Archived:          c.archived,
+		})
+		sig := onlyAction(t, prepared, err)
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" {
+			t.Errorf("%s: expected a message_id and an encoded detail", c.event)
+		}
+		if sig.MessageEventSignature.PublicKeyVersion != "1" {
+			t.Errorf("expected public_key_version 1, got %q", sig.MessageEventSignature.PublicKeyVersion)
+		}
+		want := fmt.Sprintf("ConversationMetadataChangeEvent.%s,%s,111,%s", c.event, sig.MessageID, c.signed)
+		if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 || !signedOver(t, chat, sig, want) {
+			t.Errorf("expected the action to sign %q", want)
+		}
+	}
+
+	// With no identity in the params the session identity signs.
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "111", SigningKeyVersion: "7"}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	prepared, err := chat.PrepareConversationArchive(ConversationArchiveParams{ConversationID: "g999"})
+	sig := onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", sig.MessageEventSignature.PublicKeyVersion)
+	}
+	want := fmt.Sprintf("ConversationMetadataChangeEvent.UnarchiveConversation,%s,111,g999", sig.MessageID)
+	if !signedOver(t, chat, sig, want) {
+		t.Errorf("expected an unset Archived to sign an unarchive: %q", want)
+	}
+
+	_, err = chat.PrepareConversationArchive(ConversationArchiveParams{Archived: true})
+	if err == nil || !strings.Contains(err.Error(), "conversation_id is empty") {
+		t.Errorf("expected an empty conversation_id error, got %v", err)
+	}
+}
+
 func TestPrepareMarkConversationRead(t *testing.T) {
 	v := loadVectors(t)
 
@@ -2225,6 +2285,66 @@ func TestPrepareMarkConversationRead(t *testing.T) {
 
 // TestSendPayloadTakesTheRequestFieldNames checks that a payload marshals
 // under the send request's field names and unmarshals unchanged.
+func TestPrepareConversationMute(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+
+	// The event belongs to the signer's own 111:111 conversation and names
+	// the muted one: a 1:1 id in canonical colon form, a group id as it is.
+	for _, c := range []struct {
+		conversation, mutedID string
+		muted                 bool
+		event                 string
+	}{
+		{"222-111", "111:222", true, "MuteConversation"},
+		{"222-111", "111:222", false, "UnmuteConversation"},
+		{"g999", "g999", true, "MuteConversation"},
+		{"g999", "g999", false, "UnmuteConversation"},
+	} {
+		prepared, err := chat.PrepareConversationMute(ConversationMuteParams{
+			SenderID:          "111",
+			SigningKeyVersion: "1",
+			ConversationID:    c.conversation,
+			Muted:             c.muted,
+		})
+		sig := onlyAction(t, prepared, err)
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" {
+			t.Errorf("%s: expected a message_id and an encoded detail", c.event)
+		}
+		if sig.MessageEventSignature.PublicKeyVersion != "1" {
+			t.Errorf("expected public_key_version 1, got %q", sig.MessageEventSignature.PublicKeyVersion)
+		}
+		want := fmt.Sprintf("ConversationMetadataChangeEvent.%s,%s,111,111:111,%s", c.event, sig.MessageID, c.mutedID)
+		if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 || !signedOver(t, chat, sig, want) {
+			t.Errorf("expected the action to sign %q", want)
+		}
+	}
+
+	// With no identity in the params the session identity signs.
+	if err := chat.SetIdentity(SetIdentityParams{UserID: "111", SigningKeyVersion: "7"}); err != nil {
+		t.Fatalf("SetIdentity failed: %v", err)
+	}
+	prepared, err := chat.PrepareConversationMute(ConversationMuteParams{ConversationID: "g999"})
+	sig := onlyAction(t, prepared, err)
+	if sig.MessageEventSignature.PublicKeyVersion != "7" {
+		t.Errorf("expected public_key_version 7, got %q", sig.MessageEventSignature.PublicKeyVersion)
+	}
+	want := fmt.Sprintf("ConversationMetadataChangeEvent.UnmuteConversation,%s,111,111:111,g999", sig.MessageID)
+	if !signedOver(t, chat, sig, want) {
+		t.Errorf("expected an unset Muted to sign an unmute: %q", want)
+	}
+
+	_, err = chat.PrepareConversationMute(ConversationMuteParams{Muted: true})
+	if err == nil || !strings.Contains(err.Error(), "conversation_id is empty") {
+		t.Errorf("expected an empty conversation_id error, got %v", err)
+	}
+}
+
 func TestSendPayloadTakesTheRequestFieldNames(t *testing.T) {
 	v := loadVectors(t)
 	chat := mediaSender(t, v)
@@ -4728,6 +4848,78 @@ func quickReplyChat(t *testing.T, v sdkVectors) *Chat {
 	return chat
 }
 
+// TestAttachmentTargetsReachTheCore checks TargetAttachmentID and
+// ReplyToAttachmentID reach the core: each needs the raw event, which the
+// SDK decrypts to find the attachment, so an id the event does not carry is
+// rejected.
+func TestAttachmentTargetsReachTheCore(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	wantInvalid := func(what string, err error, want string) {
+		t.Helper()
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput ||
+			!strings.Contains(chatErr.Message, want) {
+			t.Errorf("%s: want an invalid-input error containing %q, got %v", what, want, err)
+		}
+	}
+
+	reaction := EncryptReactionParams{
+		TargetEvent:            v.EventMessageB64,
+		Emoji:                  "\U0001F44D",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		TargetAttachmentID:     "att-1",
+	}
+	_, err := chat.EncryptAddReaction(reaction)
+	wantInvalid("reaction to an unknown attachment", err, "target_attachment_id 'att-1' not found")
+	reaction.TargetEvent = ""
+	reaction.ConversationID = v.EventConversationID
+	reaction.TargetMessageSequenceID = "1"
+	_, err = chat.EncryptRemoveReaction(reaction)
+	wantInvalid("reaction without the event", err, "target_attachment_id needs target_event")
+
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "replying to one attachment",
+		ReplyToEvent:           v.EventMessageB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToAttachmentID:    "att-1",
+	})
+	wantInvalid("reply to an unknown attachment", err, "reply_to_attachment_id 'att-1' not found")
+}
+
+func TestMessageContentReactionToOneAttachment(t *testing.T) {
+	var event Event
+	err := json.Unmarshal([]byte(`{
+		"type": "Message",
+		"content": {
+			"content_type": "Reaction",
+			"emoji": "x",
+			"target_message_sequence_id": "seq-42",
+			"target_attachment_id": "att-1"
+		},
+		"verified": true
+	}`), &event)
+	if err != nil {
+		t.Fatalf("Event.UnmarshalJSON failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || msg.Content.ReactionContent == nil ||
+		msg.Content.ReactionContent.TargetAttachmentID != "att-1" {
+		t.Fatalf("unexpected reaction: %+v", msg)
+	}
+}
+
 func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
 	v := loadVectors(t)
 	chat := quickReplyChat(t, v)
@@ -5077,5 +5269,71 @@ func TestUserIDsAreDigitStrings(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "Invalid reply_to_sender_id '12x'") {
 		t.Fatalf("EncryptReply with a non-numeric reply sender: got %v", err)
+	}
+}
+
+// TestEncryptForwardCarriesTheOriginalAndTheComment sends a forward and
+// decrypts it: the original's text and entities travel as the forwarded
+// message, the comment as the message text, sent from the forward sheet.
+func TestEncryptForwardCarriesTheOriginalAndTheComment(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t)}); err != nil {
+		t.Fatalf("ImportKeys failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	params := EncryptForwardParams{
+		ConversationID:         "conv-1",
+		ForwardedText:          "see https://x.com",
+		ForwardedEntities:      []EntityTuple{NewEntity(4, 17, "url")},
+		Text:                   "look",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	}
+	payload, err := chat.EncryptForward(params)
+	if err != nil {
+		t.Fatalf("EncryptForward: %v", err)
+	}
+	event, err := chat.DecryptEvent(DecryptEventParams{
+		EventB64:         payload.EventB64,
+		ConversationKeys: v.conversationKeys(t),
+		SigningKeys:      v.eventSigningKeys(),
+	})
+	if err != nil {
+		t.Fatalf("DecryptEvent: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || !msg.Verified {
+		t.Fatalf("expected a verified message, got %s", event.Raw())
+	}
+	text := msg.Content.TextContent
+	if text == nil || text.Text != "look" {
+		t.Fatalf("expected the comment as the text, got %s", event.Raw())
+	}
+	var forwarded struct {
+		MessageText string            `json:"message_text"`
+		Entities    []json.RawMessage `json:"entities"`
+	}
+	if err := json.Unmarshal(text.ForwardedMessage, &forwarded); err != nil {
+		t.Fatalf("forwarded_message: %v", err)
+	}
+	if forwarded.MessageText != "see https://x.com" || len(forwarded.Entities) != 1 {
+		t.Fatalf("unexpected forwarded_message %s", text.ForwardedMessage)
+	}
+	if string(text.SentFrom) != `"MESSAGE_FORWARD_SHEET"` {
+		t.Fatalf("expected sent_from MESSAGE_FORWARD_SHEET, got %s", text.SentFrom)
+	}
+
+	params.ForwardedText = ""
+	params.ForwardedEntities = nil
+	_, err = chat.EncryptForward(params)
+	var chatErr *Error
+	if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput ||
+		!strings.Contains(chatErr.Message, "nothing to forward") {
+		t.Fatalf("expected an invalid-input error for an empty forward, got %v", err)
 	}
 }

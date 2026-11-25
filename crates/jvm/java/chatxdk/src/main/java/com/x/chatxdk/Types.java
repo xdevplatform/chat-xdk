@@ -1107,6 +1107,69 @@ public final class Types {
     }
 
     /**
+     * Parameters for {@link Chat#encryptForward}.
+     *
+     * <p>A forward is a new message carrying another message: its full text and entities as
+     * {@link #forwardedText} and {@link #forwardedEntities}, and its attachments, each file
+     * uploaded again to this conversation, as {@link #attachments}. {@link #text} is an optional
+     * comment. Identity and key overrides resolve as for {@link EncryptMessageParams}.
+     */
+    public static final class EncryptForwardParams {
+        /** ID of the conversation the message is forwarded to. */
+        public final String conversationId;
+
+        /** The full text of the message being forwarded; empty when it has none. */
+        public final String forwardedText;
+
+        /** Optional rich-text entities of the forwarded message, as offsets into {@link #forwardedText}. */
+        public List<EntityDescriptor> forwardedEntities;
+
+        /** Optional comment sent with the forward. */
+        public String text;
+
+        /** Optional rich-text entities of the comment, as offsets into {@link #text}. */
+        public List<EntityDescriptor> entities;
+
+        /**
+         * Optional attachments of the forwarded message, each file uploaded again to this
+         * conversation and named by the media hash key that upload started with.
+         */
+        public List<AttachmentDescriptor> attachments;
+
+        /** User ID of the sender; resolves from the session identity when null. */
+        public String senderId;
+
+        /** Version of the sender's signing key; resolves from the session identity when null. */
+        public String signingKeyVersion;
+
+        /**
+         * Raw 32-byte conversation key; resolves from the key cache when null
+         * (set together with {@link #conversationKeyVersion}).
+         */
+        public byte[] conversationKey;
+
+        /** Version of the conversation key; resolves from the key cache when null. */
+        public String conversationKeyVersion;
+
+        /** Whether to send a push notification. Defaults to true. */
+        public Boolean shouldNotify;
+
+        /** Time-to-live for disappearing messages in milliseconds. */
+        public Long ttlMsec;
+
+        /**
+         * Create params with the required fields; all optional fields default to null.
+         *
+         * @param conversationId ID of the conversation the message is forwarded to.
+         * @param forwardedText The full text of the message being forwarded; empty when it has none.
+         */
+        public EncryptForwardParams(String conversationId, String forwardedText) {
+            this.conversationId = conversationId;
+            this.forwardedText = forwardedText;
+        }
+    }
+
+    /**
      * Parameters for {@link Chat#encryptReply}.
      *
      * <p>The preferred form passes the raw signed event being replied to
@@ -1185,6 +1248,13 @@ public final class Types {
         /** Attachments of the quoted message (for the preview); derived from {@link #replyToEvent} when null. */
         public List<AttachmentDescriptor> replyToAttachments;
 
+        /**
+         * {@code attachment_id} of the one attachment of the original being replied to; null
+         * replies to the whole message. Needs {@link #replyToEvent}, and
+         * {@link #replyToAttachments} must stay null: the preview quotes only that attachment.
+         */
+        public String replyToAttachmentId;
+
         /** Optional quick reply: a request offering options, or a response selecting one. */
         public QuickReply quickReply;
 
@@ -1246,6 +1316,13 @@ public final class Types {
 
         /** Version of the conversation key; resolves from the key cache when null. */
         public String conversationKeyVersion;
+
+        /**
+         * {@code attachment_id} of the attachment of the target the reaction is for; null reacts
+         * to the whole message. Needs {@link #targetEvent}, which the SDK decrypts to check the
+         * attachment belongs to it.
+         */
+        public String targetAttachmentId;
 
         /**
          * Create params with the required fields; all optional fields default to null.
@@ -2232,6 +2309,24 @@ public final class Types {
         }
     }
 
+    /**
+     * Parameters for {@link Chat#prepareConversationMute}. {@code muted} true signs a
+     * mute, false an unmute. {@code senderId} and {@code signingKeyVersion} are optional
+     * overrides: null resolves from the session identity.
+     */
+    public static final class ConversationMuteParams {
+        /** A group id or a one-to-one id, in either {@code A:B} or {@code A-B} form. */
+        public final String conversationId;
+        public final boolean muted;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public ConversationMuteParams(String conversationId, boolean muted) {
+            this.conversationId = conversationId;
+            this.muted = muted;
+        }
+    }
+
     /** Parameters for {@link Chat#prepareScreenCapture}. */
     public static final class ScreenCaptureParams {
         public final String conversationId;
@@ -2242,6 +2337,24 @@ public final class Types {
         public ScreenCaptureParams(String conversationId, ScreenCaptureChange change) {
             this.conversationId = conversationId;
             this.change = change;
+        }
+    }
+
+    /**
+     * Parameters for {@link Chat#prepareConversationArchive}. {@code archived} true signs an
+     * archive, false an unarchive. {@code senderId} and {@code signingKeyVersion} are optional
+     * overrides: null resolves from the session identity.
+     */
+    public static final class ConversationArchiveParams {
+        /** A group id or a one-to-one id, in either {@code A:B} or {@code A-B} form. */
+        public final String conversationId;
+        public final boolean archived;
+        public String senderId;
+        public String signingKeyVersion;
+
+        public ConversationArchiveParams(String conversationId, boolean archived) {
+            this.conversationId = conversationId;
+            this.archived = archived;
         }
     }
 }

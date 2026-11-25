@@ -605,6 +605,30 @@ async function main() {
     return event.content;
   };
 
+  // 4b1. A forward carries the original's text and entities, the comment as
+  // its own text, and is marked as sent from the forward sheet.
+  const forwardParams = {
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "conv-1",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  };
+  const forwarded = decryptOwn(chat.encryptForward({
+    ...forwardParams,
+    forwardedText: "see https://x.com",
+    forwardedEntities: [[4, 17, "url"]],
+    text: "look",
+  }));
+  assert.equal(forwarded.text, "look");
+  assert.equal(forwarded.forwardedMessage.messageText, "see https://x.com");
+  assert.equal(forwarded.forwardedMessage.entities.length, 1);
+  assert.equal(forwarded.sentFrom, "messageForwardSheet");
+  assert.throws(
+    () => chat.encryptForward({ ...forwardParams, forwardedText: "" }),
+    /nothing to forward/,
+  );
+
   // 4b2. replyToSenderId precision: a snowflake-sized id passed as a string
   // must land in the reply payload exactly. The id is above 2^53, where JS
   // numbers stop being exact.
@@ -667,6 +691,18 @@ async function main() {
     targetMessageSequenceId: "seq-99",
   });
   assert.equal(decryptOwn(removePayload).targetMessageSequenceId, "seq-99");
+  // targetAttachmentId and replyToAttachmentId reach the core, which needs
+  // the raw event to check the attachment against.
+  for (const encrypt of ["encryptAddReaction", "encryptRemoveReaction"]) {
+    assert.throws(
+      () => chat[encrypt]({ ...reactionParams, targetAttachmentId: "att-1" }),
+      /target_attachment_id needs target_event/,
+    );
+  }
+  assert.throws(
+    () => chat.encryptReply({ ...replyParamsBase, replyToAttachmentId: "att-1" }),
+    /reply_to_attachment_id needs reply_to_event/,
+  );
 
   // 4c2. encryptEdit produces a signed payload that decrypts back to the
   // edit: updated text, target sequence id, and the [start, end, type]
@@ -957,6 +993,12 @@ async function main() {
       ["GroupChangeEvent.GroupJoinRequest", () => ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
       ["GroupChangeEvent.GroupJoinReject", () => ",g100,910010",
         () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
+      // A mute is the signer's own: it is signed in the 111:111 self
+      // conversation and names the muted one, a 1:1 in canonical form.
+      ["ConversationMetadataChangeEvent.MuteConversation", () => ",111:111,g100",
+        () => chat.prepareConversationMute({ ...ident, muted: true })],
+      ["ConversationMetadataChangeEvent.UnmuteConversation", () => ",111:111,111:222",
+        () => chat.prepareConversationMute({ ...ident, conversationId: "222-111", muted: false })],
       ["ConversationMetadataChangeEvent.MessageDurationChange", () => ",g100,86400000",
         () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
       ["ConversationMetadataChangeEvent.MessageDurationRemove", () => ",g100",
@@ -972,7 +1014,43 @@ async function main() {
       const payload = `${event},${action.messageId},111${signedFields(result)}`;
       assert.ok(signs(chat, action, payload), payload);
     }
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident }),
+      /prepareConversationMute params.*muted/,
+    );
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident, conversationId: "", muted: true }),
+      /conversation_id is empty/,
+    );
   }
+
+  // 4c3c. prepareConversationArchive signs an archive or an unarchive with
+  // the signing key; a 1:1 id is signed in canonical colon form, a group id
+  // as it is, and the payload ends at the conversation id.
+  for (const [conversationId, signed] of [["222-111", "111:222"], ["g999", "g999"]]) {
+    for (const [archived, event] of [[true, "ArchiveConversation"], [false, "UnarchiveConversation"]]) {
+      const archiveSig = onlyAction(chat.prepareConversationArchive({
+        senderId: "111",
+        signingKeyVersion: "1",
+        conversationId,
+        archived,
+      }));
+      assert.ok(archiveSig.messageId.length > 0);
+      assert.ok(archiveSig.encodedMessageEventDetail.length > 0);
+      assert.equal(archiveSig.messageEventSignature.publicKeyVersion, "1");
+      assert.equal(archiveSig.messageEventSignature.signingPublicKey, v.signing_public_b64);
+      assert.ok(signs(chat, archiveSig,
+        `ConversationMetadataChangeEvent.${event},${archiveSig.messageId},111,${signed}`));
+    }
+  }
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "g999" }),
+    /prepareConversationArchive params.*archived/,
+  );
+  assert.throws(
+    () => chat.prepareConversationArchive({ senderId: "111", signingKeyVersion: "1", conversationId: "", archived: true }),
+    /conversation_id is empty/,
+  );
 
   // 4c4. prepareMarkConversationRead signs the read point and its time with
   // the signing key; 1:1 ids are signed in canonical colon form.

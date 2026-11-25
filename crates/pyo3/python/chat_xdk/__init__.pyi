@@ -391,6 +391,36 @@ class EncryptMessageParams:
         ttl_msec: Optional[int] = None,
     ) -> None: ...
 
+class EncryptForwardParams:
+    conversation_id: str
+    forwarded_text: str
+    forwarded_entities: Optional[list[tuple[int, int, str]]]
+    text: Optional[str]
+    entities: Optional[list[tuple[int, int, str]]]
+    attachments: Optional[list[dict]]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    should_notify: Optional[bool]
+    ttl_msec: Optional[int]
+    def __init__(
+        self,
+        conversation_id: str,
+        forwarded_text: str,
+        *,
+        forwarded_entities: Optional[list[tuple[int, int, str]]] = None,
+        text: Optional[str] = None,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        attachments: Optional[list[dict]] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+        should_notify: Optional[bool] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> None: ...
+
 class EncryptReplyParams:
     conversation_id: str
     text: str
@@ -409,6 +439,7 @@ class EncryptReplyParams:
     attachments: Optional[list[dict]]
     reply_to_entities: Optional[list[tuple[int, int, str]]]
     reply_to_attachments: Optional[list[dict]]
+    reply_to_attachment_id: Optional[str]
     quick_reply: Optional[QuickReply]
     should_notify: Optional[bool]
     ttl_msec: Optional[int]
@@ -432,6 +463,7 @@ class EncryptReplyParams:
         attachments: Optional[list[dict]] = None,
         reply_to_entities: Optional[list[tuple[int, int, str]]] = None,
         reply_to_attachments: Optional[list[dict]] = None,
+        reply_to_attachment_id: Optional[str] = None,
         quick_reply: Optional[QuickReply] = None,
         should_notify: Optional[bool] = None,
         ttl_msec: Optional[int] = None,
@@ -446,6 +478,7 @@ class EncryptReactionParams:
     signing_key_version: Optional[str]
     conversation_key: Optional[bytes]
     conversation_key_version: Optional[str]
+    target_attachment_id: Optional[str]
     def __init__(
         self,
         target_event: Optional[str] = None,
@@ -457,6 +490,7 @@ class EncryptReactionParams:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+        target_attachment_id: Optional[str] = None,
     ) -> None: ...
 
 class EncryptEditParams:
@@ -483,6 +517,20 @@ class EncryptEditParams:
         signing_key_version: Optional[str] = None,
         conversation_key: Optional[bytes] = None,
         conversation_key_version: Optional[str] = None,
+    ) -> None: ...
+
+class ConversationArchiveParams:
+    conversation_id: str
+    archived: bool
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        archived: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
     ) -> None: ...
 
 class ConversationKeyChangeParams:
@@ -789,6 +837,20 @@ class MessageTtlRemoveParams:
         signing_key_version: Optional[str] = None,
     ) -> None: ...
 
+class ConversationMuteParams:
+    conversation_id: str
+    muted: bool
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    def __init__(
+        self,
+        conversation_id: str,
+        muted: bool,
+        *,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+    ) -> None: ...
+
 class ScreenCaptureParams:
     conversation_id: str
     change: ScreenCaptureChange
@@ -1036,7 +1098,9 @@ class Chat:
     def prepare_group_join_reject(self, params: GroupJoinRejectParams) -> PreparedAction: ...
     def prepare_message_ttl_change(self, params: MessageTtlChangeParams) -> PreparedAction: ...
     def prepare_message_ttl_remove(self, params: MessageTtlRemoveParams) -> PreparedAction: ...
+    def prepare_conversation_mute(self, params: ConversationMuteParams) -> PreparedAction: ...
     def prepare_screen_capture(self, params: ScreenCaptureParams) -> PreparedAction: ...
+    def prepare_conversation_archive(self, params: ConversationArchiveParams) -> PreparedAction: ...
 
     # Events
     def extract_conversation_keys(self, events: list[str]) -> ConversationKeyResult: ...
@@ -1045,6 +1109,7 @@ class Chat:
 
     # Message Encryption
     def encrypt_message(self, params: EncryptMessageParams) -> SendPayload: ...
+    def encrypt_forward(self, params: EncryptForwardParams) -> SendPayload: ...
     def encrypt_reply(self, params: EncryptReplyParams) -> SendPayload: ...
     def encrypt_add_reaction(self, params: EncryptReactionParams) -> SendPayload: ...
     def encrypt_remove_reaction(self, params: EncryptReactionParams) -> SendPayload: ...

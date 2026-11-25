@@ -621,6 +621,31 @@ impl Chat {
         Ok(to_py_send_payload(payload))
     }
 
+    /// Encrypt a forward of an existing message for the X API.
+    ///
+    /// The forward is a new message carrying the original's full text and
+    /// entities, an optional comment, and the original's attachments
+    /// uploaded again to this conversation. Its id and files work as for
+    /// ``encrypt_message``.
+    ///
+    /// Args:
+    ///     params: An ``EncryptForwardParams``.
+    ///
+    /// Returns:
+    ///     The ``SendPayload`` to send to the X API.
+    pub(crate) fn encrypt_forward(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, EncryptForwardParams>,
+    ) -> PyResult<SendPayload> {
+        let payload = self
+            .inner
+            .encrypt_forward(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        Ok(to_py_send_payload(payload))
+    }
+
+    /// Encrypt a reply message for the X API.
     /// Encrypt a reply message for the X API.
     ///
     /// Like ``encrypt_message`` but populates the replying_to_preview so the
@@ -1271,6 +1296,34 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
+    /// Sign muting or unmuting a conversation, group or one-to-one, for the
+    /// signer alone.
+    ///
+    /// The event is signed for the signer's own ``{sender_id}:{sender_id}``
+    /// conversation and names the muted conversation, in canonical colon
+    /// form for a one-to-one. Send the result's ``action_signatures`` with a
+    /// mute or unmute request that names the conversation in that same form.
+    /// The SDK generates the action's message id; read it back from the
+    /// entry.
+    ///
+    /// Args:
+    ///     params: A ``ConversationMuteParams``.
+    ///
+    /// Returns:
+    ///     A dict with ``action_signatures``, shaped as
+    ///     ``prepare_message_delete`` returns it.
+    pub(crate) fn prepare_conversation_mute(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, ConversationMuteParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_conversation_mute(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
     /// Sign one screen-capture setting change.
     pub(crate) fn prepare_screen_capture(
         &self,
@@ -1280,6 +1333,32 @@ impl Chat {
         let prepared = self
             .inner
             .prepare_screen_capture(&params.to_core(py)?)
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
+    /// Sign archiving or unarchiving a conversation, group or one-to-one.
+    ///
+    /// The result holds the request's ``action_signatures``, one entry: pass
+    /// them to the archive request
+    /// (``POST /2/chat/conversations/{id}/archive``) or the unarchive request
+    /// (``DELETE`` on the same path). The SDK generates the action's message
+    /// id; read it back from the entry.
+    ///
+    /// Args:
+    ///     params: A ``ConversationArchiveParams``.
+    ///
+    /// Returns:
+    ///     A dict with ``action_signatures``, shaped as
+    ///     ``prepare_message_delete`` returns it.
+    pub(crate) fn prepare_conversation_archive(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, ConversationArchiveParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_conversation_archive(&params.to_core())
             .map_err(to_py_err)?;
         prepared_action_to_pydict(py, &prepared)
     }

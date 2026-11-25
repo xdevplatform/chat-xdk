@@ -786,6 +786,16 @@ func (c *Chat) PrepareMessageTtlRemove(params MessageTtlRemoveParams) (*Prepared
 	return c.prepareAction(params, ffiPrepareMessageTtlRemove)
 }
 
+// PrepareConversationMute signs muting or unmuting a conversation, group or
+// one-to-one, for the signer alone: the action_signatures of the mute or
+// unmute request, one entry. The event is signed for the signer's own
+// "{sender}:{sender}" conversation and names the muted conversation in
+// canonical colon form, the form the request must name it in. The SDK
+// generates the action's message id; read it back from the entry.
+func (c *Chat) PrepareConversationMute(params ConversationMuteParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareConversationMute)
+}
+
 // PrepareScreenCapture signs one screen-capture setting change.
 func (c *Chat) PrepareScreenCapture(params ScreenCaptureParams) (*PreparedAction, error) {
 	return c.prepareAction(params, ffiPrepareScreenCapture)
@@ -823,6 +833,15 @@ func (c *Chat) prepareAction(params any, call func(handle, string) (string, erro
 		return nil, err
 	}
 	return &out, nil
+}
+
+// PrepareConversationArchive signs archiving or unarchiving a conversation,
+// group or one-to-one: the action_signatures of the archive request
+// (POST /2/chat/conversations/{id}/archive) or the unarchive request (DELETE
+// on the same path), one entry. The SDK generates the action's message id;
+// read it back from the entry.
+func (c *Chat) PrepareConversationArchive(params ConversationArchiveParams) (*PreparedAction, error) {
+	return c.prepareAction(params, ffiPrepareConversationArchive)
 }
 
 // PrepareMessageDelete builds the signed action for deleting messages from a
@@ -922,6 +941,27 @@ func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error)
 		return nil, err
 	}
 	data, err := ffiEncryptMessage(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var payload SendPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
+// EncryptForward encrypts a forward of an existing message for the X API:
+// a new message carrying the original's full text and entities, an
+// optional comment, and the original's attachments uploaded again to this
+// conversation. Its id and files work as in EncryptMessage.
+func (c *Chat) EncryptForward(params EncryptForwardParams) (*SendPayload, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiEncryptForward(c.h, string(j))
 	if err != nil {
 		return nil, err
 	}

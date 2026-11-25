@@ -218,7 +218,9 @@ document's `guesses_remaining`. The message reads
 | 59 | **prepare_group_join_reject** | `prepare_group_join_reject(&GroupJoinRejectParams) → PreparedAction` | `prepareGroupJoinReject(params) → PreparedAction` | `prepare_group_join_reject(GroupJoinRejectParams) → dict` | `PrepareGroupJoinReject(GroupJoinRejectParams) (*PreparedAction, error)` | `prepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` | `PrepareGroupJoinReject(GroupJoinRejectParams)` → `PreparedAction` |
 | 60 | **prepare_message_ttl_change** | `prepare_message_ttl_change(&MessageTtlChangeParams) → PreparedAction` | `prepareMessageTtlChange(params) → PreparedAction` | `prepare_message_ttl_change(MessageTtlChangeParams) → dict` | `PrepareMessageTtlChange(MessageTtlChangeParams) (*PreparedAction, error)` | `prepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` | `PrepareMessageTtlChange(MessageTtlChangeParams)` → `PreparedAction` |
 | 61 | **prepare_message_ttl_remove** | `prepare_message_ttl_remove(&MessageTtlRemoveParams) → PreparedAction` | `prepareMessageTtlRemove(params) → PreparedAction` | `prepare_message_ttl_remove(MessageTtlRemoveParams) → dict` | `PrepareMessageTtlRemove(MessageTtlRemoveParams) (*PreparedAction, error)` | `prepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` | `PrepareMessageTtlRemove(MessageTtlRemoveParams)` → `PreparedAction` |
+| 66 | **prepare_conversation_mute** | `prepare_conversation_mute(&ConversationMuteParams) → PreparedAction` | `prepareConversationMute(params) → PreparedAction` | `prepare_conversation_mute(ConversationMuteParams) → dict` | `PrepareConversationMute(ConversationMuteParams) (*PreparedAction, error)` | `prepareConversationMute(ConversationMuteParams)` → `PreparedAction` | `PrepareConversationMute(ConversationMuteParams)` → `PreparedAction` |
 | 62 | **prepare_screen_capture** | `prepare_screen_capture(&ScreenCaptureParams) → PreparedAction` | `prepareScreenCapture(params) → PreparedAction` | `prepare_screen_capture(ScreenCaptureParams) → dict` | `PrepareScreenCapture(ScreenCaptureParams) (*PreparedAction, error)` | `prepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` | `PrepareScreenCapture(ScreenCaptureParams)` → `PreparedAction` |
+| 65 | **prepare_conversation_archive** | `prepare_conversation_archive(&ConversationArchiveParams) → PreparedAction` | `prepareConversationArchive(params) → PreparedAction` | `prepare_conversation_archive(ConversationArchiveParams) → dict` | `PrepareConversationArchive(ConversationArchiveParams) (*PreparedAction, error)` | `prepareConversationArchive(ConversationArchiveParams)` → `PreparedAction` | `PrepareConversationArchive(ConversationArchiveParams)` → `PreparedAction` |
 
 Each `prepare_*`, `encrypt_*`, `decrypt_event(s)` and file method takes a
 single params value, named the same in every language: Rust
@@ -929,6 +931,83 @@ ConversationMetadataChangeEvent.MessageDurationRemove,{message_id},{sender_id},{
 
 ---
 
+#### prepare_conversation_mute
+
+Sign muting or unmuting a conversation for the signer alone.
+`ConversationMuteParams` requires `conversation_id` (a group id, or a
+one-to-one id in `A:B` or `A-B` form, or the other member's bare user id) and
+`muted`: `true` signs a mute, `false` an unmute.
+
+Mute state is personal, so the event is not sent in the muted conversation:
+X sends it in the signer's own self conversation, `{sender_id}:{sender_id}`,
+with the muted conversation as the one id of its `MuteConversation` (or
+`UnmuteConversation`) change. The id is signed in canonical form, a
+one-to-one as `min:max`. Send the `PreparedAction`'s `action_signatures` with
+a mute or unmute request that names the conversation in that same form: the
+backend builds the event from the request's ids and accepts the signature
+only if its encoded event matches. Returns one `PreparedAction` signature,
+over:
+
+```text
+ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{conversation_id}
+ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{conversation_id}
+```
+
+```rust
+// Rust
+let mute = chat.prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, true))?;
+let unmute = chat.prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, false))?;
+// mute.action_signatures / unmute.action_signatures: one entry each
+```
+
+```typescript
+// JS
+const mute = chat.prepareConversationMute({ conversationId, muted: true });
+const unmute = chat.prepareConversationMute({ conversationId, muted: false });
+// mute.actionSignatures / unmute.actionSignatures: one entry each
+```
+
+```python
+# Python
+from chat_xdk import ConversationMuteParams
+
+mute = chat.prepare_conversation_mute(ConversationMuteParams(conversation_id, True))
+unmute = chat.prepare_conversation_mute(ConversationMuteParams(conversation_id, False))
+# mute["action_signatures"] / unmute["action_signatures"]: one entry each
+```
+
+```go
+// Go — Muted false, the zero value, signs an unmute
+mute, err := chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+    ConversationID: conversationID,
+    Muted:          true,
+})
+unmute, err := chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+    ConversationID: conversationID,
+    Muted:          false,
+})
+// mute.ActionSignatures / unmute.ActionSignatures: one entry each
+```
+
+```java
+// JVM
+PreparedAction mute = chat.prepareConversationMute(new ConversationMuteParams(conversationId, true));
+PreparedAction unmute = chat.prepareConversationMute(new ConversationMuteParams(conversationId, false));
+// mute.actionSignatures / unmute.actionSignatures: one entry each
+```
+
+```csharp
+// .NET
+PreparedAction mute = chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted: true));
+PreparedAction unmute = chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted: false));
+// mute.ActionSignatures / unmute.ActionSignatures: one entry each
+```
+
+`decrypt_events` and `decrypt_event` verify the event, delivered in the self
+conversation, and return it as a `SettingsChange` of `muted` or `unmuted`.
+
+---
+
 #### prepare_screen_capture
 
 Sign one screen-capture setting. `change` is a `ScreenCaptureChange`:
@@ -951,6 +1030,75 @@ ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{message_id},{sender
 Every new params type takes optional `sender_id` and `signing_key_version`,
 resolved from `set_identity` when omitted. A one-to-one id is signed in its
 canonical colon form. Any signed component that contains a comma is rejected.
+
+---
+
+#### prepare_conversation_archive
+
+Sign archiving or unarchiving a conversation. `ConversationArchiveParams`
+requires `conversation_id` (a group id, or a one-to-one id in `A:B` or `A-B`
+form) and `archived`: `true` signs an archive, `false` an unarchive. It works
+for groups and one-to-one conversations alike. Send the `PreparedAction`'s
+`action_signatures` as the `action_signatures` field of
+`POST /2/chat/conversations/{id}/archive` (archive) or
+`DELETE /2/chat/conversations/{id}/archive` (unarchive); until now an API
+archive went out unsigned.
+
+The event is a `ConversationMetadataChangeEvent` whose `ArchiveConversation`
+(or `UnarchiveConversation`) change has no conversation ids set, as X clients
+sign it, so the signature has no fields after the conversation id. Returns one
+`PreparedAction` signature, over:
+
+```text
+ConversationMetadataChangeEvent.ArchiveConversation,{message_id},{sender_id},{conversation_id}
+ConversationMetadataChangeEvent.UnarchiveConversation,{message_id},{sender_id},{conversation_id}
+```
+
+```rust
+let archive = chat.prepare_conversation_archive(&ConversationArchiveParams::new(conversation_id, true))?;
+let unarchive = chat.prepare_conversation_archive(&ConversationArchiveParams::new(conversation_id, false))?;
+// archive.action_signatures, unarchive.action_signatures
+```
+
+```typescript
+const archive = chat.prepareConversationArchive({ conversationId, archived: true });
+const unarchive = chat.prepareConversationArchive({ conversationId, archived: false });
+// archive.actionSignatures, unarchive.actionSignatures
+```
+
+```python
+archive = chat.prepare_conversation_archive(ConversationArchiveParams(conversation_id, True))
+unarchive = chat.prepare_conversation_archive(ConversationArchiveParams(conversation_id, False))
+# archive["action_signatures"], unarchive["action_signatures"]
+```
+
+```go
+archive, err := chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+    ConversationID: conversationID,
+    Archived:       true,
+})
+unarchive, err := chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+    ConversationID: conversationID,
+    Archived:       false,
+})
+// archive.ActionSignatures, unarchive.ActionSignatures
+```
+
+```java
+PreparedAction archive = chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, true));
+PreparedAction unarchive = chat.prepareConversationArchive(new ConversationArchiveParams(conversationId, false));
+// archive.actionSignatures, unarchive.actionSignatures
+```
+
+```csharp
+var archive = chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, true));
+var unarchive = chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, false));
+// archive.ActionSignatures, unarchive.ActionSignatures
+```
+
+`decrypt_events` and `decrypt_event` verify an archive or unarchive event and
+return it as a `SettingsChange` of `archived` or `unarchived`. If the event's
+id list is set, the verifier signs those ids after the conversation id.
 
 ---
 
@@ -1809,6 +1957,7 @@ type ConversationKeyMap = { [version: string]: Uint8Array };
 | # | Method | Rust | JS | Python | Go | JVM | .NET |
 |---|--------|------|-----|--------|-----|------|------|
 | 26 | **encrypt_message** | `encrypt_message(&EncryptMessageParams) → SendPayload` | `encryptMessage(params: EncryptMessageParams) → SendPayload` | `encrypt_message(EncryptMessageParams) → SendPayload` | `EncryptMessage(params EncryptMessageParams) (*SendPayload, error)` | `encryptMessage(EncryptMessageParams)` | `EncryptMessage(EncryptMessageParams)` |
+| 67 | **encrypt_forward** | `encrypt_forward(&EncryptForwardParams) → SendPayload` | `encryptForward(params: EncryptForwardParams) → SendPayload` | `encrypt_forward(EncryptForwardParams) → SendPayload` | `EncryptForward(params EncryptForwardParams) (*SendPayload, error)` | `encryptForward(EncryptForwardParams)` | `EncryptForward(EncryptForwardParams)` |
 | 27 | **encrypt_reply** | `encrypt_reply(&EncryptReplyParams) → SendPayload` | `encryptReply(params: EncryptReplyParams) → SendPayload` | `encrypt_reply(EncryptReplyParams) → SendPayload` | `EncryptReply(params EncryptReplyParams) (*SendPayload, error)` | `encryptReply(EncryptReplyParams)` | `EncryptReply(EncryptReplyParams)` |
 | 28 | **encrypt_add_reaction** | `encrypt_add_reaction(&EncryptReactionParams) → SendPayload` | `encryptAddReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_add_reaction(EncryptReactionParams) → SendPayload` | `EncryptAddReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptAddReaction(EncryptReactionParams)` | `EncryptAddReaction(EncryptReactionParams)` |
 | 29 | **encrypt_remove_reaction** | `encrypt_remove_reaction(&EncryptReactionParams) → SendPayload` | `encryptRemoveReaction(params: EncryptReactionParams) → SendPayload` | `encrypt_remove_reaction(EncryptReactionParams) → SendPayload` | `EncryptRemoveReaction(params EncryptReactionParams) (*SendPayload, error)` | `encryptRemoveReaction(EncryptReactionParams)` | `EncryptRemoveReaction(EncryptReactionParams)` |
@@ -1927,6 +2076,21 @@ breaks receivers. This mirrors the first-party encrypted-send rules and will
 be relaxed when clients support heterogeneous attachment lists; the wire
 format already carries them.
 
+**Forwards.** `encrypt_forward` sends an existing message on as a new
+message, the way the X apps' forward sheet does. Its `EncryptForwardParams`
+takes `conversation_id` (where the forward goes) and `forwarded_text`, the
+full text of the message being forwarded (empty when it has none), plus
+optional `forwarded_entities` (offsets into `forwarded_text`), `text` (a
+comment) with `entities` (offsets into `text`), `attachments` (the
+original's attachments, each file uploaded again to this conversation and
+encrypted afterwards as for `encrypt_message`), and the identity, key,
+`should_notify` and `ttl_msec` fields of `EncryptMessageParams`. The
+original travels in the message's `forwarded_message`, the comment as its
+`text`, and `sent_from` is `MESSAGE_FORWARD_SHEET`, so the decrypted
+message reads back with those fields. A forward with an empty
+`forwarded_text` and no attachments, or with `entities` but no `text`, fails
+with `InvalidInput`.
+
 **Replies are event-based.** The preferred form of `EncryptReplyParams` adds
 `reply_to_event` — the base64 raw signed event being replied to. The SDK
 derives the reply preview (sequence id, message id, sender, text, entities,
@@ -1952,6 +2116,105 @@ own copy of the original. With `reply_to_event`,
 the id comes from the event, and a `reply_to_message_id` other than it fails
 with an invalid-input error: recipients reject a preview whose id is not
 its embedded original's.
+
+**A reply or reaction can target one attachment.** `reply_to_attachment_id`
+on `EncryptReplyParams` and `target_attachment_id` on
+`EncryptReactionParams` (`replyToAttachmentId` / `targetAttachmentId` in JS
+and on the JVM, `ReplyToAttachmentID` / `TargetAttachmentID` in Go,
+`ReplyToAttachmentId` / `TargetAttachmentId` in .NET) name the
+`attachment_id` of one attachment of the original, such as one photo of an
+album; left unset, the reply or reaction is to the whole message. Each needs
+the raw event (`reply_to_event` or `target_event`): the SDK decrypts it and
+fails with an invalid-input error, listing the ids the original carries,
+when the attachment is not among them. A reply to one attachment quotes only
+that attachment in its preview, so `reply_to_attachments` must stay unset,
+and recipients mark the preview invalid when the attachment it names is not
+in the embedded original. A reaction to one attachment is removed with the
+same `target_attachment_id`. On decrypt, a reaction or reaction removal
+carries it as `target_attachment_id` (`targetAttachmentId` in JS) and a reply
+preview as `replying_to_attachment_id`, omitted when unset.
+
+The ids come from the decrypted original's `attachments`, each entry's
+`attachment_id` (`attachmentId` in JS). v1 sends, this SDK's included, give
+every attachment one; v0 sends carry none, so their attachments can't be
+targeted.
+
+```rust
+// Rust
+let reply = chat.encrypt_reply(
+    &EncryptReplyParams::new(conversation_id, "this one", original_event_b64)
+        .with_reply_to_attachment_id(attachment_id),
+)?;
+let params = EncryptReactionParams::new(original_event_b64, "👍").with_target_attachment_id(attachment_id);
+let reaction = chat.encrypt_add_reaction(&params)?;
+let removal = chat.encrypt_remove_reaction(&params)?; // the same attachment
+```
+
+```typescript
+// JS — decrypted: content.replyingToPreview.replyingToAttachmentId, content.targetAttachmentId
+const reply = chat.encryptReply({
+  conversationId,
+  text: "this one",
+  replyToEvent: originalEventB64,
+  replyToAttachmentId: attachmentId,
+});
+const reaction = chat.encryptAddReaction({
+  emoji: "👍",
+  targetEvent: originalEventB64,
+  targetAttachmentId: attachmentId,
+});
+```
+
+```python
+# Python — decrypted: content["replying_to_preview"]["replying_to_attachment_id"],
+# content["target_attachment_id"]
+reply = chat.encrypt_reply(
+    EncryptReplyParams(
+        conversation_id, "this one", original_event_b64, reply_to_attachment_id=attachment_id
+    )
+)
+reaction = chat.encrypt_add_reaction(
+    EncryptReactionParams(original_event_b64, "👍", target_attachment_id=attachment_id)
+)
+```
+
+```go
+// Go — decrypted: Content.ReactionContent.TargetAttachmentID; the reply's
+// TextContent.ReplyingToPreview JSON carries replying_to_attachment_id
+reply, err := chat.EncryptReply(chatxdk.EncryptReplyParams{
+    ConversationID:      conversationID,
+    Text:                "this one",
+    ReplyToEvent:        originalEventB64,
+    ReplyToAttachmentID: attachmentID,
+})
+reaction, err := chat.EncryptAddReaction(chatxdk.EncryptReactionParams{
+    TargetEvent:        originalEventB64,
+    Emoji:              "👍",
+    TargetAttachmentID: attachmentID,
+})
+```
+
+```java
+// JVM
+EncryptReplyParams replyParams = new EncryptReplyParams(conversationId, "this one", originalEventB64);
+replyParams.replyToAttachmentId = attachmentId;
+SendPayload reply = chat.encryptReply(replyParams);
+EncryptReactionParams reactionParams = new EncryptReactionParams(originalEventB64, "👍");
+reactionParams.targetAttachmentId = attachmentId;
+SendPayload reaction = chat.encryptAddReaction(reactionParams);
+```
+
+```csharp
+// .NET
+var reply = chat.EncryptReply(new EncryptReplyParams(conversationId, "this one", originalEventB64)
+{
+    ReplyToAttachmentId = attachmentId,
+});
+var reaction = chat.EncryptAddReaction(new EncryptReactionParams(originalEventB64, "👍")
+{
+    TargetAttachmentId = attachmentId,
+});
+```
 
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
@@ -2052,6 +2315,12 @@ let reply = chat.encrypt_reply(&EncryptReplyParams::new(
 ))?;
 let reaction =
     chat.encrypt_add_reaction(&EncryptReactionParams::new(original_event_b64, "👍"))?;
+
+// Forward the original's full text (and its entities and re-uploaded files)
+// to another conversation, with a comment
+let forward = chat.encrypt_forward(
+    &EncryptForwardParams::new(other_conversation_id, original_text).with_text("look at this"),
+)?;
 ```
 
 ```typescript
@@ -2072,11 +2341,17 @@ const reply = chat.encryptReply({
   replyToEvent: originalEventB64,
 });
 const reaction = chat.encryptAddReaction({ emoji: "👍", targetEvent: originalEventB64 });
+const forward = chat.encryptForward({
+  conversationId: otherConversationId,
+  forwardedText: originalText,
+  text: "look at this",
+});
 ```
 
 ```python
 # Python — params classes: required fields positional, optionals as keywords
 from chat_xdk import (
+    EncryptForwardParams,
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
@@ -2093,6 +2368,68 @@ message_id = payload.message_id  # generated by the SDK
 
 reply = chat.encrypt_reply(EncryptReplyParams(conversation_id, "pong", original_event_b64))
 reaction = chat.encrypt_add_reaction(EncryptReactionParams(original_event_b64, "👍"))
+forward = chat.encrypt_forward(
+    EncryptForwardParams(other_conversation_id, original_text, text="look at this")
+)
+```
+
+```go
+// Go
+chat.SetIdentity(chatxdk.SetIdentityParams{UserID: myUserID, SigningKeyVersion: signingKeyVersion})
+chat.SetCacheKeys(true)
+
+ttl := int64(86_400_000)
+payload, err := chat.EncryptMessage(chatxdk.EncryptMessageParams{
+    ConversationID: conversationID,
+    Text:           "Hello",
+    TTLMsec:        &ttl,
+})
+messageID := payload.MessageID // generated by the SDK
+
+reply, err := chat.EncryptReply(chatxdk.EncryptReplyParams{
+    ConversationID: conversationID,
+    Text:           "pong",
+    ReplyToEvent:   originalEventB64,
+})
+reaction, err := chat.EncryptAddReaction(chatxdk.EncryptReactionParams{TargetEvent: originalEventB64, Emoji: "👍"})
+forward, err := chat.EncryptForward(chatxdk.EncryptForwardParams{
+    ConversationID: otherConversationID,
+    ForwardedText:  originalText,
+    Text:           "look at this",
+})
+```
+
+```java
+// JVM — required fields in the constructor, optionals as public fields
+chat.setIdentity(new SetIdentityParams(myUserId, signingKeyVersion));
+chat.setCacheKeys(true);
+
+EncryptMessageParams message = new EncryptMessageParams(conversationId, "Hello");
+message.ttlMsec = 86_400_000L;
+SendPayload payload = chat.encryptMessage(message);
+String messageId = payload.messageId; // generated by the SDK
+
+SendPayload reply = chat.encryptReply(new EncryptReplyParams(conversationId, "pong", originalEventB64));
+SendPayload reaction = chat.encryptAddReaction(new EncryptReactionParams(originalEventB64, "👍"));
+EncryptForwardParams forwardParams = new EncryptForwardParams(otherConversationId, originalText);
+forwardParams.text = "look at this";
+SendPayload forward = chat.encryptForward(forwardParams);
+```
+
+```csharp
+// .NET — required fields in the constructor, optionals as init properties
+chat.SetIdentity(new SetIdentityParams(myUserId, signingKeyVersion));
+chat.SetCacheKeys(true);
+
+var payload = chat.EncryptMessage(new EncryptMessageParams(conversationId, "Hello") { TtlMsec = 86_400_000 });
+var messageId = payload.MessageId; // generated by the SDK
+
+var reply = chat.EncryptReply(new EncryptReplyParams(conversationId, "pong", originalEventB64));
+var reaction = chat.EncryptAddReaction(new EncryptReactionParams(originalEventB64, "👍"));
+var forward = chat.EncryptForward(new EncryptForwardParams(otherConversationId, originalText)
+{
+    Text = "look at this",
+});
 ```
 
 ### Files (Media)
@@ -2355,7 +2692,10 @@ one-call prepare methods (`prepare_conversation_key_change`,
 signatures (a conversation-key change plus the group change). Message deletes
 and read receipts are signed by `prepare_message_delete` and
 `prepare_mark_conversation_read`, which each return a `PreparedAction` with
-one entry in its `actionSignatures`.
+one entry in its `actionSignatures`; archiving and unarchiving a conversation
+are signed by `prepare_conversation_archive`, which does the same.
+Muting and unmuting are signed by `prepare_conversation_mute`, which does the
+same, for the signer's own self conversation.
 
 ### Utilities
 
@@ -3164,8 +3504,8 @@ type MessageContent =
       quickReply?: QuickReply;
       ctas?: unknown[];
     }
-  | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string }
-  | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string }
+  | { contentType: 'reaction'; emoji: string; targetMessageSequenceId: string; targetAttachmentId?: string }
+  | { contentType: 'reactionRemoved'; emoji: string; targetMessageSequenceId: string; targetAttachmentId?: string }
   | { contentType: 'edit'; targetMessageSequenceId: string; targetMessageId?: string; updatedText: string; entities?: RichTextEntity[] }
   | { contentType: 'markRead' }
   | { contentType: 'markUnread' }
@@ -3604,6 +3944,8 @@ type SettingsChange =
   | { setting: 'messageDurationRemoved' }
   | { setting: 'muted' }
   | { setting: 'unmuted' }
+  | { setting: 'archived' }
+  | { setting: 'unarchived' }
   | { setting: 'screenCaptureDetectionEnabled' }
   | { setting: 'screenCaptureDetectionDisabled' }
   | { setting: 'screenCaptureBlockingEnabled' }

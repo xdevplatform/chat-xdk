@@ -400,10 +400,22 @@ func ffiPrepareMessageTtlRemove(h handle, paramsJSON string) (string, error) {
 	return ffiResult(C.chat_xdk_prepare_message_ttl_remove(h, c))
 }
 
+func ffiPrepareConversationMute(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_conversation_mute(h, c))
+}
+
 func ffiPrepareScreenCapture(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
 	return ffiResult(C.chat_xdk_prepare_screen_capture(h, c))
+}
+
+func ffiPrepareConversationArchive(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_prepare_conversation_archive(h, c))
 }
 
 func ffiPrepareMarkConversationRead(h handle, paramsJSON string) (string, error) {
@@ -426,6 +438,12 @@ func ffiEncryptMessage(h handle, paramsJSON string) (string, error) {
 	c := C.CString(paramsJSON)
 	defer C.free(unsafe.Pointer(c))
 	return ffiResult(C.chat_xdk_encrypt_message(h, c))
+}
+
+func ffiEncryptForward(h handle, paramsJSON string) (string, error) {
+	c := C.CString(paramsJSON)
+	defer C.free(unsafe.Pointer(c))
+	return ffiResult(C.chat_xdk_encrypt_forward(h, c))
 }
 
 func ffiEncryptReply(h handle, paramsJSON string) (string, error) {

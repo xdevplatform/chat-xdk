@@ -1085,9 +1085,30 @@ namespace ChatXdk
         public PreparedAction PrepareMessageTtlRemove(MessageTtlRemoveParams parameters)
             => CallAction(BuildPrepareMessageTtlRemoveJson(parameters), NativeMethods.chat_xdk_prepare_message_ttl_remove);
 
+        /// <summary>
+        /// Sign muting or unmuting a conversation, group or one-to-one, for the
+        /// signer alone: the <c>action_signatures</c> of the mute or unmute request,
+        /// one entry. The event is signed for the signer's own
+        /// <c>{sender}:{sender}</c> conversation and names the muted conversation
+        /// in canonical colon form, the form the request must name it in. The SDK
+        /// generates the action's message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationMute(ConversationMuteParams parameters)
+            => CallAction(BuildPrepareConversationMuteJson(parameters), NativeMethods.chat_xdk_prepare_conversation_mute);
+
         /// <summary>Sign one screen-capture setting change.</summary>
         public PreparedAction PrepareScreenCapture(ScreenCaptureParams parameters)
             => CallAction(BuildPrepareScreenCaptureJson(parameters), NativeMethods.chat_xdk_prepare_screen_capture);
+
+        /// <summary>
+        /// Sign archiving or unarchiving a conversation, group or one-to-one: the
+        /// <c>action_signatures</c> of the archive request
+        /// (<c>POST /2/chat/conversations/{id}/archive</c>) or the unarchive request
+        /// (<c>DELETE</c> on the same path), one entry. The SDK generates the action's
+        /// message id; read it back from the entry.
+        /// </summary>
+        public PreparedAction PrepareConversationArchive(ConversationArchiveParams parameters)
+            => CallAction(BuildPrepareConversationArchiveJson(parameters), NativeMethods.chat_xdk_prepare_conversation_archive);
 
         // Shared helper: marshal the single-JSON params document, call the
         // native prepare export, deserialise PreparedConversationChange.
@@ -1157,6 +1178,19 @@ namespace ChatXdk
             ThrowIfDisposed();
             var json = BuildEncryptMessageJson(parameters);
             return CallEncryptEndpoint(json, NativeMethods.chat_xdk_encrypt_message);
+        }
+
+        /// <summary>
+        /// Encrypt a forward of an existing message for the X API: a new message carrying the
+        /// original's full text and entities, an optional comment, and the original's
+        /// attachments uploaded again to this conversation. Its id and files work as for
+        /// <see cref="EncryptMessage"/>.
+        /// </summary>
+        public SendPayload EncryptForward(EncryptForwardParams parameters)
+        {
+            ThrowIfDisposed();
+            var json = BuildEncryptForwardJson(parameters);
+            return CallEncryptEndpoint(json, NativeMethods.chat_xdk_encrypt_forward);
         }
 
         /// <summary>
@@ -1525,6 +1559,26 @@ namespace ChatXdk
             return ParamsJson(dict);
         }
 
+        private static string BuildEncryptForwardJson(EncryptForwardParams p)
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["forwarded_text"] = p.ForwardedText,
+                ["forwarded_entities"] = p.ForwardedEntities != null ? SerialiseEntities(p.ForwardedEntities) : null,
+                ["text"] = p.Text,
+                ["entities"] = p.Entities != null ? SerialiseEntities(p.Entities) : null,
+                ["attachments"] = p.Attachments,
+                ["sender_id"] = p.SenderId,
+                ["signing_key_version"] = p.SigningKeyVersion,
+                ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
+                ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["should_notify"] = p.ShouldNotify,
+                ["ttl_msec"] = p.TtlMsec,
+            };
+            return ParamsJson(dict);
+        }
+
         private static string BuildEncryptReplyJson(EncryptReplyParams p)
         {
             var dict = new Dictionary<string, object?>
@@ -1546,6 +1600,7 @@ namespace ChatXdk
                 ["attachments"] = p.Attachments,
                 ["reply_to_entities"] = p.ReplyToEntities != null ? SerialiseEntities(p.ReplyToEntities) : null,
                 ["reply_to_attachments"] = p.ReplyToAttachments,
+                ["reply_to_attachment_id"] = p.ReplyToAttachmentId,
                 ["quick_reply"] = p.QuickReply,
                 ["should_notify"] = p.ShouldNotify,
                 ["ttl_msec"] = p.TtlMsec,
@@ -1565,6 +1620,7 @@ namespace ChatXdk
                 ["signing_key_version"] = p.SigningKeyVersion,
                 ["conversation_key"] = p.ConversationKey != null ? Convert.ToBase64String(p.ConversationKey) : null,
                 ["conversation_key_version"] = p.ConversationKeyVersion,
+                ["target_attachment_id"] = p.TargetAttachmentId,
             };
             return ParamsJson(dict);
         }
@@ -1736,12 +1792,30 @@ namespace ChatXdk
             }, p.SenderId, p.SigningKeyVersion);
         }
 
+        private static string BuildPrepareConversationMuteJson(ConversationMuteParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["muted"] = p.Muted,
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
         private static string BuildPrepareScreenCaptureJson(ScreenCaptureParams p)
         {
             return IdentityJson(new Dictionary<string, object?>
             {
                 ["conversation_id"] = p.ConversationId,
                 ["change"] = p.Change.ToString(),
+            }, p.SenderId, p.SigningKeyVersion);
+        }
+
+        private static string BuildPrepareConversationArchiveJson(ConversationArchiveParams p)
+        {
+            return IdentityJson(new Dictionary<string, object?>
+            {
+                ["conversation_id"] = p.ConversationId,
+                ["archived"] = p.Archived,
             }, p.SenderId, p.SigningKeyVersion);
         }
 

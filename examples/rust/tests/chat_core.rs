@@ -14,15 +14,16 @@ use std::sync::{Arc, Mutex};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{
-    AttachmentDescriptor, EntityDescriptor, MissingSigningKey, PreparedConversationChange,
-    PublicKeyInput, PublicKeyRecord,
+    AttachmentDescriptor, AttachmentInfo, EntityDescriptor, Event, MessageContent,
+    MissingSigningKey, PreparedConversationChange, PublicKeyInput, PublicKeyRecord,
+    SentFromSurface, SentFromSurfaceKnown, SettingsChange,
 };
 use chatbot_rs::bot::Bot;
 use chatbot_rs::chat_core::{
-    prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
+    prep_to_request, removal_to_request, ChatCore, ForwardOptions, ReplyOptions, SendBody,
 };
 use chatbot_rs::x_api::{ChatApi, EventItem};
-use common::{delivered, key_change_and_message, party, public_keys_of, texts};
+use common::{delivered, delivered_action, key_change_and_message, party, public_keys_of, texts};
 use serde_json::{json, Value};
 
 fn load_vectors() -> Value {
@@ -280,6 +281,73 @@ fn prepare_group_create_yields_two_signatures() {
 }
 
 #[test]
+fn prepare_conversation_archive_signs_archive_and_unarchive() {
+    // Each signed action is sendable as it is, and a recipient verifies it
+    // as the setting it signs.
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let record = PublicKeyRecord::new(
+        v["event_signing_key_version"].as_str().unwrap(),
+        v["identity_public_b64"].as_str().unwrap(),
+        v["signing_public_b64"].as_str().unwrap(),
+        v["identity_public_key_signature_b64"].as_str().unwrap(),
+    );
+    core.fetch_public_keys_with(move |_| Ok(vec![record.clone()]));
+    let sender = v["event_sender_id"].as_str().unwrap();
+
+    for archived in [true, false] {
+        let prepared = core
+            .prepare_conversation_archive("g123", archived)
+            .expect("prepare_conversation_archive");
+        assert_eq!(prepared.action_signatures.len(), 1);
+        let sig = &prepared.action_signatures[0];
+        assert!(!sig.message_id.is_empty());
+        assert!(!sig.encoded_message_event_detail.is_empty());
+        assert!(!sig.message_event_signature.signature.is_empty());
+
+        let event = delivered_action(sig, sender, "g123", "2100000000000000000");
+        let result = core.decrypt_batch(&[event.as_str()]);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.events.len(), 1);
+        match &result.events[0].event {
+            Event::SettingsChange(change) => {
+                assert!(change.verified);
+                if archived {
+                    assert!(matches!(change.change, SettingsChange::Archived));
+                } else {
+                    assert!(matches!(change.change, SettingsChange::Unarchived));
+                }
+            }
+            other => panic!("expected a settings change, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn prepare_conversation_mute_signs_mute_and_unmute() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let signing = core.public_keys().expect("public_keys").signing;
+    for muted in [true, false] {
+        let prepared = core
+            .prepare_conversation_mute("g123", muted)
+            .expect("prepare_conversation_mute");
+        assert_eq!(prepared.action_signatures.len(), 1, "muted={muted}");
+        let sig = &prepared.action_signatures[0];
+        assert!(!sig.message_id.is_empty(), "muted={muted}");
+        assert!(
+            !sig.encoded_message_event_detail.is_empty(),
+            "muted={muted}"
+        );
+        assert!(
+            !sig.message_event_signature.signature.is_empty(),
+            "muted={muted}"
+        );
+        assert_eq!(sig.message_event_signature.signing_public_key, signing);
+    }
+}
+
+#[test]
 fn encrypt_reaction_produces_sendable_payload() {
     let v = load_vectors();
     let core = loaded_core(&v);
@@ -305,6 +373,195 @@ fn encrypt_reaction_produces_sendable_payload() {
             "xdk_version"
         ]
     );
+}
+
+#[test]
+fn reply_and_reaction_target_one_attachment() {
+    // Attachments carry ids in v1 sends: the feature switches turn v1 on, as
+    // the X API's answer would.
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    core.set_feature_switches(200, br#"{"features":{"v1_send":true}}"#);
+    let sender = v["event_sender_id"].as_str().unwrap().to_string();
+    let record = PublicKeyRecord::new(
+        v["event_signing_key_version"].as_str().unwrap(),
+        v["identity_public_b64"].as_str().unwrap(),
+        v["signing_public_b64"].as_str().unwrap(),
+        v["identity_public_key_signature_b64"].as_str().unwrap(),
+    );
+    core.fetch_public_keys_with(move |user_id| {
+        if user_id == sender {
+            Ok(vec![record.clone()])
+        } else {
+            Err(format!("no public keys for user {user_id}"))
+        }
+    });
+    let conversation_id = v["event_conversation_id"].as_str().unwrap();
+    let key = conversation_key(&v);
+    let version = v["event_conversation_key_version"].as_str().unwrap();
+    let photo = |media_hash_key: &str| AttachmentDescriptor::Media {
+        media_hash_key: media_hash_key.to_string(),
+        width: 4,
+        height: 3,
+        filesize_bytes: 1024,
+        filename: format!("{media_hash_key}.jpg"),
+        media_type: Some(1),
+        duration_millis: None,
+        plaintext_sha256: None,
+    };
+    let album = core
+        .encrypt_reply(
+            conversation_id,
+            "two photos",
+            ReplyOptions {
+                attachments: Some(vec![photo("photo-1"), photo("photo-2")]),
+                ..Default::default()
+            }
+            .with_conversation_key(&key, version),
+        )
+        .expect("encrypt_reply (album)");
+    let album = delivered(&album.event_b64, "2100000000000000001");
+
+    // The key change gives the SDK the key the album opens with.
+    let page = core.decrypt_batch(&[v["event_key_change_b64"].as_str().unwrap(), album.as_str()]);
+    assert!(page.errors.is_empty(), "{:?}", page.errors);
+    let attachment_ids: Vec<String> = match &page.events[1].event {
+        Event::Message(msg) => msg
+            .attachments
+            .iter()
+            .filter_map(|attachment| match attachment {
+                AttachmentInfo::Media(media) => media.attachment_id.clone(),
+                _ => None,
+            })
+            .collect(),
+        other => panic!("expected the album, got {other:?}"),
+    };
+    assert_eq!(attachment_ids.len(), 2, "{attachment_ids:?}");
+    let second = attachment_ids[1].as_str();
+
+    let reply = core
+        .encrypt_reply(
+            conversation_id,
+            "the second one",
+            ReplyOptions {
+                reply_to_event: Some(album.clone()),
+                reply_to_attachment_id: Some(second.to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("encrypt_reply (to one attachment)");
+    let decrypted = core
+        .decrypt_one(
+            &delivered(&reply.event_b64, "2100000000000000002"),
+            &HashMap::new(),
+        )
+        .expect("decrypt_one (reply)");
+    match &decrypted {
+        Event::Message(msg) => match &msg.content {
+            MessageContent::Text {
+                replying_to_preview: Some(preview),
+                ..
+            } => assert_eq!(preview.replying_to_attachment_id.as_deref(), Some(second)),
+            other => panic!("expected a reply, got {other:?}"),
+        },
+        other => panic!("expected a message, got {other:?}"),
+    }
+
+    for (add, sequence_id) in [
+        (true, "2100000000000000003"),
+        (false, "2100000000000000004"),
+    ] {
+        let body = core
+            .encrypt_reaction_to_attachment(add, &album, second, "\u{1f44d}", &key, version)
+            .expect("encrypt_reaction_to_attachment");
+        let decrypted = core
+            .decrypt_one(&delivered(&body.event_b64, sequence_id), &HashMap::new())
+            .expect("decrypt_one (reaction)");
+        let target_attachment_id = match &decrypted {
+            Event::Message(msg) => match &msg.content {
+                MessageContent::Reaction {
+                    target_attachment_id,
+                    ..
+                } if add => target_attachment_id.clone(),
+                MessageContent::ReactionRemoved {
+                    target_attachment_id,
+                    ..
+                } if !add => target_attachment_id.clone(),
+                other => panic!("expected a reaction (add={add}), got {other:?}"),
+            },
+            other => panic!("expected a message, got {other:?}"),
+        };
+        assert_eq!(target_attachment_id.as_deref(), Some(second));
+    }
+}
+
+#[test]
+fn encrypt_forward_round_trips_the_original_and_the_comment() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let sender = v["event_sender_id"].as_str().unwrap().to_string();
+    let record = PublicKeyRecord::new(
+        v["event_signing_key_version"].as_str().unwrap(),
+        v["identity_public_b64"].as_str().unwrap(),
+        v["signing_public_b64"].as_str().unwrap(),
+        v["identity_public_key_signature_b64"].as_str().unwrap(),
+    );
+    core.fetch_public_keys_with(move |user_id| {
+        if user_id == sender {
+            Ok(vec![record.clone()])
+        } else {
+            Err(format!("no public keys for user {user_id}"))
+        }
+    });
+    let key = conversation_key(&v);
+    let body = core
+        .encrypt_forward(
+            v["event_conversation_id"].as_str().unwrap(),
+            "the original message",
+            ForwardOptions {
+                text: Some("look at this".to_string()),
+                ..Default::default()
+            }
+            .with_conversation_key(&key, v["event_conversation_key_version"].as_str().unwrap()),
+        )
+        .expect("encrypt_forward");
+
+    // The key change gives the SDK the key the forward opens with.
+    let forward = delivered(&body.event_b64, "2100000000000000001");
+    let page = core.decrypt_batch(&[
+        v["event_key_change_b64"].as_str().unwrap(),
+        forward.as_str(),
+    ]);
+    assert!(page.errors.is_empty(), "{:?}", page.errors);
+    match &page.events[1].event {
+        Event::Message(msg) => match &msg.content {
+            MessageContent::Text {
+                text,
+                forwarded_message,
+                sent_from,
+                ..
+            } => {
+                assert_eq!(text, "look at this");
+                assert_eq!(
+                    forwarded_message
+                        .as_ref()
+                        .and_then(|original| original.message_text.as_deref()),
+                    Some("the original message")
+                );
+                assert!(
+                    matches!(
+                        sent_from,
+                        Some(SentFromSurface::Known(
+                            SentFromSurfaceKnown::MessageForwardSheet
+                        ))
+                    ),
+                    "{sent_from:?}"
+                );
+            }
+            other => panic!("expected a text message, got {other:?}"),
+        },
+        other => panic!("expected a message, got {other:?}"),
+    }
 }
 
 #[test]

@@ -265,6 +265,167 @@ impl std::fmt::Debug for EncryptMessageParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::encrypt_forward`].
+///
+/// A forward is a new message in `conversation_id` that carries another
+/// message: its full text and entities as `forwarded_text` and
+/// `forwarded_entities`, and its attachments, uploaded again for this
+/// conversation, as `attachments`. `text` is the sender's optional comment.
+/// A forward with no `forwarded_text` needs `attachments`.
+///
+/// The conversation key is zeroized when the params are dropped and is
+/// redacted from `Debug` output. No `PartialEq` is derived:
+/// equality would byte-compare the key non-constant-time.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct EncryptForwardParams {
+    /// ID of the conversation the message is forwarded to.
+    pub conversation_id: String,
+    /// The full text of the message being forwarded; empty when it has none.
+    pub forwarded_text: String,
+    /// Optional rich-text entities of the message being forwarded, as
+    /// offsets into `forwarded_text`.
+    pub forwarded_entities: Option<Vec<EntityDescriptor>>,
+    /// Optional comment sent with the forward.
+    pub text: Option<String>,
+    /// Optional rich-text entities of the comment, as offsets into `text`.
+    pub entities: Option<Vec<EntityDescriptor>>,
+    /// Optional attachments of the message being forwarded, each file
+    /// uploaded again to this conversation and named by the media hash key
+    /// that upload started with.
+    pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// User ID of the sender; resolves from the session identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the message; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key used to encrypt the message content;
+    /// resolves from the key cache when unset (set together with
+    /// `conversation_key_version`).
+    pub conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key used for encryption; resolves from the
+    /// key cache when unset (set together with `conversation_key`).
+    pub conversation_key_version: Option<String>,
+    /// Whether to send a push notification. `None` defaults to `true`.
+    pub should_notify: Option<bool>,
+    /// Optional TTL in milliseconds for disappearing messages.
+    pub ttl_msec: Option<i64>,
+}
+
+impl EncryptForwardParams {
+    /// Create params with required fields; all optional fields default to
+    /// `None`. `forwarded_text` is the full text of the message being
+    /// forwarded; pass an empty string for one without text and set
+    /// `attachments`.
+    pub fn new(conversation_id: impl Into<String>, forwarded_text: impl Into<String>) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            forwarded_text: forwarded_text.into(),
+            forwarded_entities: None,
+            text: None,
+            entities: None,
+            attachments: None,
+            sender_id: None,
+            signing_key_version: None,
+            conversation_key: None,
+            conversation_key_version: None,
+            should_notify: None,
+            ttl_msec: None,
+        }
+    }
+
+    /// Set the rich-text entities of the message being forwarded.
+    pub fn with_forwarded_entities(mut self, forwarded_entities: Vec<EntityDescriptor>) -> Self {
+        self.forwarded_entities = Some(forwarded_entities);
+        self
+    }
+
+    /// Set the comment sent with the forward.
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = non_empty(text);
+        self
+    }
+
+    /// Set the rich-text entities of the comment.
+    pub fn with_entities(mut self, entities: Vec<EntityDescriptor>) -> Self {
+        self.entities = Some(entities);
+        self
+    }
+
+    /// Set the attachments of the message being forwarded, each file
+    /// uploaded again to this conversation.
+    pub fn with_attachments(mut self, attachments: Vec<AttachmentDescriptor>) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
+
+    /// Set whether to send a push notification.
+    pub fn with_should_notify(mut self, should_notify: bool) -> Self {
+        self.should_notify = Some(should_notify);
+        self
+    }
+
+    /// Set the TTL in milliseconds of a disappearing message.
+    pub fn with_ttl_msec(mut self, ttl_msec: i64) -> Self {
+        self.ttl_msec = Some(ttl_msec);
+        self
+    }
+
+    /// Set the explicit conversation key and its version.
+    ///
+    /// The two travel together: the version names the key the recipients use
+    /// to decrypt, so setting one without the other is rejected at encrypt
+    /// time.
+    pub fn with_conversation_key(
+        mut self,
+        conversation_key: Vec<u8>,
+        conversation_key_version: impl Into<String>,
+    ) -> Self {
+        self.conversation_key = Some(conversation_key);
+        self.conversation_key_version = Some(conversation_key_version.into());
+        self
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+impl Drop for EncryptForwardParams {
+    fn drop(&mut self) {
+        self.conversation_key.zeroize();
+    }
+}
+
+impl std::fmt::Debug for EncryptForwardParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptForwardParams")
+            .field("conversation_id", &self.conversation_id)
+            .field("forwarded_text", &self.forwarded_text)
+            .field("forwarded_entities", &self.forwarded_entities)
+            .field("text", &self.text)
+            .field("entities", &self.entities)
+            .field("attachments", &self.attachments)
+            .field("sender_id", &self.sender_id)
+            .field("signing_key_version", &self.signing_key_version)
+            .field(
+                "conversation_key",
+                &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("conversation_key_version", &self.conversation_key_version)
+            .field("should_notify", &self.should_notify)
+            .field("ttl_msec", &self.ttl_msec)
+            .finish()
+    }
+}
+
 /// Parameters for [`crate::ChatCore::encrypt_reply`].
 ///
 /// The preferred form passes `reply_to_event` — the base64 raw signed event
@@ -336,6 +497,11 @@ pub struct EncryptReplyParams {
     /// Optional attachments from the original message (for the reply
     /// preview); derived from `reply_to_event` when unset.
     pub reply_to_attachments: Option<Vec<AttachmentDescriptor>>,
+    /// `attachment_id` of the one attachment of the original being replied
+    /// to; unset replies to the whole message. Requires `reply_to_event`,
+    /// which the SDK decrypts to find the attachment and quote only it in
+    /// the preview, so `reply_to_attachments` must stay unset.
+    pub reply_to_attachment_id: Option<String>,
     /// Optional quick reply: a request offering selectable options, or a
     /// response selecting one.
     pub quick_reply: Option<QuickReply>,
@@ -373,6 +539,7 @@ impl EncryptReplyParams {
             attachments: None,
             reply_to_entities: None,
             reply_to_attachments: None,
+            reply_to_attachment_id: None,
             quick_reply: None,
             should_notify: None,
             ttl_msec: None,
@@ -416,6 +583,16 @@ impl EncryptReplyParams {
     /// Set the preview's text, overriding the one `reply_to_event` carries.
     pub fn with_reply_to_text(mut self, reply_to_text: impl Into<String>) -> Self {
         self.reply_to_text = non_empty(reply_to_text);
+        self
+    }
+
+    /// Reply to one attachment of the original: the `attachment_id` of an
+    /// attachment `reply_to_event` carries.
+    pub fn with_reply_to_attachment_id(
+        mut self,
+        reply_to_attachment_id: impl Into<String>,
+    ) -> Self {
+        self.reply_to_attachment_id = non_empty(reply_to_attachment_id);
         self
     }
 
@@ -524,6 +701,7 @@ impl std::fmt::Debug for EncryptReplyParams {
             .field("attachments", &self.attachments)
             .field("reply_to_entities", &self.reply_to_entities)
             .field("reply_to_attachments", &self.reply_to_attachments)
+            .field("reply_to_attachment_id", &self.reply_to_attachment_id)
             .field("quick_reply", &self.quick_reply)
             .field("should_notify", &self.should_notify)
             .field("ttl_msec", &self.ttl_msec)
@@ -569,6 +747,10 @@ pub struct EncryptReactionParams {
     /// Version of the conversation key used for encryption; resolves from the
     /// key cache when unset (set together with `conversation_key`).
     pub conversation_key_version: Option<String>,
+    /// `attachment_id` of the attachment in the target message the reaction
+    /// is for; unset reacts to the whole message. Requires `target_event`,
+    /// which the SDK decrypts to check the attachment belongs to it.
+    pub target_attachment_id: Option<String>,
 }
 
 impl EncryptReactionParams {
@@ -586,6 +768,7 @@ impl EncryptReactionParams {
             signing_key_version: None,
             conversation_key: None,
             conversation_key_version: None,
+            target_attachment_id: None,
         }
     }
 
@@ -602,6 +785,13 @@ impl EncryptReactionParams {
         target_message_sequence_id: impl Into<String>,
     ) -> Self {
         self.target_message_sequence_id = non_empty(target_message_sequence_id);
+        self
+    }
+
+    /// React to one attachment of the target: the `attachment_id` of an
+    /// attachment `target_event` carries.
+    pub fn with_target_attachment_id(mut self, target_attachment_id: impl Into<String>) -> Self {
+        self.target_attachment_id = non_empty(target_attachment_id);
         self
     }
 
@@ -655,6 +845,7 @@ impl std::fmt::Debug for EncryptReactionParams {
                 &self.conversation_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("conversation_key_version", &self.conversation_key_version)
+            .field("target_attachment_id", &self.target_attachment_id)
             .finish()
     }
 }
@@ -1932,6 +2123,46 @@ impl MessageTtlRemoveParams {
     }
 }
 
+/// Parameters for [`crate::ChatCore::prepare_conversation_mute`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ConversationMuteParams {
+    /// ID of the conversation being muted or unmuted: a group id or a
+    /// one-to-one id, in either `A:B` or `A-B` form.
+    pub conversation_id: String,
+    /// `true` signs a mute, `false` an unmute.
+    pub muted: bool,
+    /// User ID of the sender signing the action; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the action; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ConversationMuteParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, muted: bool) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            muted,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
 /// Parameters for [`crate::ChatCore::prepare_screen_capture`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -1954,6 +2185,46 @@ impl ScreenCaptureParams {
         Self {
             conversation_id: conversation_id.into(),
             change,
+            sender_id: None,
+            signing_key_version: None,
+        }
+    }
+
+    /// Set the explicit sender identity, overriding the session identity.
+    pub fn with_identity(
+        mut self,
+        sender_id: impl Into<String>,
+        signing_key_version: impl Into<String>,
+    ) -> Self {
+        self.sender_id = non_empty(sender_id);
+        self.signing_key_version = non_empty(signing_key_version);
+        self
+    }
+}
+
+/// Parameters for [`crate::ChatCore::prepare_conversation_archive`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ConversationArchiveParams {
+    /// ID of the conversation being archived or unarchived: a group id or a
+    /// one-to-one id, in either `A:B` or `A-B` form.
+    pub conversation_id: String,
+    /// `true` signs an archive, `false` an unarchive.
+    pub archived: bool,
+    /// User ID of the sender signing the action; resolves from the session
+    /// identity when unset.
+    pub sender_id: Option<String>,
+    /// Version of the signing key used to sign the action; resolves from the
+    /// session identity when unset.
+    pub signing_key_version: Option<String>,
+}
+
+impl ConversationArchiveParams {
+    /// Create params with required fields; identity fields default to `None`.
+    pub fn new(conversation_id: impl Into<String>, archived: bool) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            archived,
             sender_id: None,
             signing_key_version: None,
         }

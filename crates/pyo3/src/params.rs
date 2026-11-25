@@ -110,6 +110,104 @@ impl EncryptMessageParams {
     }
 }
 
+/// Parameters for ``Chat.encrypt_forward``.
+///
+/// A forward is a new message carrying another message: its full text and
+/// entities as ``forwarded_text`` and ``forwarded_entities``, and its
+/// attachments, each file uploaded again to this conversation, as
+/// ``attachments``. ``text`` is an optional comment. Identity and key fields
+/// resolve like ``EncryptMessageParams``.
+#[pyclass(get_all, set_all)]
+pub struct EncryptForwardParams {
+    /// ID of the conversation the message is forwarded to.
+    pub(crate) conversation_id: String,
+    /// The full text of the message being forwarded; ``""`` when it has none.
+    pub(crate) forwarded_text: String,
+    /// ``(start, end, entity_type)`` tuples of the forwarded message, as
+    /// UTF-8 byte offsets into ``forwarded_text``.
+    pub(crate) forwarded_entities: Option<Py<PyAny>>,
+    /// Optional comment sent with the forward.
+    pub(crate) text: Option<String>,
+    /// ``(start, end, entity_type)`` tuples of the comment, as UTF-8 byte
+    /// offsets into ``text``.
+    pub(crate) entities: Option<Py<PyAny>>,
+    /// The forwarded message's attachment dicts, as for
+    /// ``EncryptMessageParams.attachments``, each file uploaded again to
+    /// this conversation.
+    pub(crate) attachments: Option<Py<PyAny>>,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key (``bytes``); set it together with
+    /// ``conversation_key_version``.
+    pub(crate) conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key, as its key-change event carries it.
+    pub(crate) conversation_key_version: Option<String>,
+    /// Whether to send a push notification (default ``True``).
+    pub(crate) should_notify: Option<bool>,
+    /// TTL in milliseconds for disappearing messages.
+    pub(crate) ttl_msec: Option<i64>,
+}
+
+#[pymethods]
+impl EncryptForwardParams {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        forwarded_text: String,
+        forwarded_entities: Option<Py<PyAny>>,
+        text: Option<String>,
+        entities: Option<Py<PyAny>>,
+        attachments: Option<Py<PyAny>>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
+        should_notify: Option<bool>,
+        ttl_msec: Option<i64>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            forwarded_text,
+            forwarded_entities,
+            text,
+            entities,
+            attachments,
+            sender_id,
+            signing_key_version,
+            conversation_key,
+            conversation_key_version,
+            should_notify,
+            ttl_msec,
+        }
+    }
+}
+
+impl EncryptForwardParams {
+    pub(crate) fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::EncryptForwardParams> {
+        let mut params = chat_xdk_core::EncryptForwardParams::new(
+            self.conversation_id.as_str(),
+            self.forwarded_text.as_str(),
+        );
+        params.forwarded_entities =
+            entities_field(py, &self.forwarded_entities, "forwarded_entities")?;
+        params.text = self.text.clone().filter(|t| !t.is_empty());
+        params.entities = entities_field(py, &self.entities, "entities")?;
+        params.attachments = attachments_field(py, &self.attachments, "attachments")?;
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
+        params.should_notify = self.should_notify;
+        params.ttl_msec = self.ttl_msec;
+        Ok(params)
+    }
+}
+
 /// Parameters for ``Chat.encrypt_reply``.
 ///
 /// The preferred form passes ``reply_to_event`` — the base64 raw signed event
@@ -168,6 +266,10 @@ pub struct EncryptReplyParams {
     /// Attachment dicts of the quoted message (for the preview); derived
     /// from ``reply_to_event`` when ``None``.
     pub(crate) reply_to_attachments: Option<Py<PyAny>>,
+    /// ``attachment_id`` of the one attachment of the original being
+    /// replied to; ``None`` replies to the whole message. Needs
+    /// ``reply_to_event``, and ``reply_to_attachments`` must stay ``None``.
+    pub(crate) reply_to_attachment_id: Option<String>,
     /// ``QuickReply`` dict: a request offering options, or a response
     /// selecting one.
     pub(crate) quick_reply: Option<Py<PyAny>>,
@@ -181,7 +283,7 @@ pub struct EncryptReplyParams {
 impl EncryptReplyParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_message_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, quick_reply=None, should_notify=None, ttl_msec=None))]
+    #[pyo3(signature = (conversation_id, text, reply_to_event=None, *, reply_to_edit_event=None, reply_to_ckces=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, reply_to_sequence_id=None, reply_to_message_id=None, reply_to_sender_id=None, reply_to_text=None, entities=None, attachments=None, reply_to_entities=None, reply_to_attachments=None, reply_to_attachment_id=None, quick_reply=None, should_notify=None, ttl_msec=None))]
     pub(crate) fn new(
         conversation_id: String,
         text: String,
@@ -200,6 +302,7 @@ impl EncryptReplyParams {
         attachments: Option<Py<PyAny>>,
         reply_to_entities: Option<Py<PyAny>>,
         reply_to_attachments: Option<Py<PyAny>>,
+        reply_to_attachment_id: Option<String>,
         quick_reply: Option<Py<PyAny>>,
         should_notify: Option<bool>,
         ttl_msec: Option<i64>,
@@ -222,6 +325,7 @@ impl EncryptReplyParams {
             attachments,
             reply_to_entities,
             reply_to_attachments,
+            reply_to_attachment_id,
             quick_reply,
             should_notify,
             ttl_msec,
@@ -253,6 +357,7 @@ impl EncryptReplyParams {
             entities_field(py, &self.reply_to_entities, "reply_to_entities")?;
         params.reply_to_attachments =
             attachments_field(py, &self.reply_to_attachments, "reply_to_attachments")?;
+        params.reply_to_attachment_id = self.reply_to_attachment_id.clone();
         params.quick_reply = quick_reply_field(py, &self.quick_reply)?;
         params.should_notify = self.should_notify;
         params.ttl_msec = self.ttl_msec;
@@ -290,13 +395,16 @@ pub struct EncryptReactionParams {
     pub(crate) conversation_key: Option<Vec<u8>>,
     /// Version of the conversation key, as its key-change event carries it.
     pub(crate) conversation_key_version: Option<String>,
+    /// ``attachment_id`` of the attachment of the target the reaction is
+    /// for; ``None`` reacts to the whole message. Needs ``target_event``.
+    pub(crate) target_attachment_id: Option<String>,
 }
 
 #[pymethods]
 impl EncryptReactionParams {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None))]
+    #[pyo3(signature = (target_event=None, emoji=None, *, conversation_id=None, target_message_sequence_id=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, target_attachment_id=None))]
     pub(crate) fn new(
         target_event: Option<String>,
         emoji: Option<String>,
@@ -306,6 +414,7 @@ impl EncryptReactionParams {
         signing_key_version: Option<String>,
         conversation_key: Option<Vec<u8>>,
         conversation_key_version: Option<String>,
+        target_attachment_id: Option<String>,
     ) -> PyResult<Self> {
         Ok(Self {
             target_event,
@@ -316,6 +425,7 @@ impl EncryptReactionParams {
             signing_key_version,
             conversation_key,
             conversation_key_version,
+            target_attachment_id,
         })
     }
 }
@@ -332,6 +442,7 @@ impl EncryptReactionParams {
         params.signing_key_version = self.signing_key_version.clone();
         params.conversation_key = self.conversation_key.clone();
         params.conversation_key_version = self.conversation_key_version.clone();
+        params.target_attachment_id = self.target_attachment_id.clone();
         params
     }
 }
@@ -1346,6 +1457,51 @@ impl MessageTtlRemoveParams {
     }
 }
 
+/// Parameters for ``Chat.prepare_conversation_mute``.
+///
+/// ``muted`` ``True`` signs a mute, ``False`` an unmute.
+#[pyclass(get_all, set_all)]
+pub struct ConversationMuteParams {
+    /// ID of the conversation: a group id or a one-to-one id, in either
+    /// ``A:B`` or ``A-B`` form.
+    pub(crate) conversation_id: String,
+    pub(crate) muted: bool,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ConversationMuteParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, muted, *, sender_id=None, signing_key_version=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        muted: bool,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            muted,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl ConversationMuteParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::ConversationMuteParams {
+        let mut params =
+            chat_xdk_core::ConversationMuteParams::new(self.conversation_id.as_str(), self.muted);
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
+    }
+}
+
 /// Parameters for ``Chat.prepare_screen_capture``.
 ///
 /// ``change`` is a :class:`ScreenCaptureChange` value.
@@ -1392,6 +1548,53 @@ impl ScreenCaptureParams {
         params.sender_id = self.sender_id.clone();
         params.signing_key_version = self.signing_key_version.clone();
         Ok(params)
+    }
+}
+
+/// Parameters for ``Chat.prepare_conversation_archive``.
+///
+/// ``archived`` ``True`` signs an archive, ``False`` an unarchive.
+#[pyclass(get_all, set_all)]
+pub struct ConversationArchiveParams {
+    /// ID of the conversation: a group id or a one-to-one id, in either
+    /// ``A:B`` or ``A-B`` form.
+    pub(crate) conversation_id: String,
+    pub(crate) archived: bool,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[pymethods]
+impl ConversationArchiveParams {
+    #[new]
+    #[pyo3(signature = (conversation_id, archived, *, sender_id=None, signing_key_version=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        archived: bool,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            archived,
+            sender_id,
+            signing_key_version,
+        }
+    }
+}
+
+impl ConversationArchiveParams {
+    pub(crate) fn to_core(&self) -> chat_xdk_core::ConversationArchiveParams {
+        let mut params = chat_xdk_core::ConversationArchiveParams::new(
+            self.conversation_id.as_str(),
+            self.archived,
+        );
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params
     }
 }
 

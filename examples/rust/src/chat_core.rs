@@ -22,12 +22,13 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
-    DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
+    AttachmentDescriptor, ChatCore as SdkCore, ConversationArchiveParams,
+    ConversationKeyChangeParams, ConversationMuteParams, DecryptEventParams, DecryptEventsParams,
+    DecryptEventsResult, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
     EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
     GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
-    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
+    PreparedAction, PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
+    PublicKeyRecord, PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -42,6 +43,10 @@ pub struct ReplyOptions {
     /// Base64 raw key-change events, needed when the original message was
     /// encrypted under a different key version than the reply.
     pub reply_to_ckces: Option<Vec<String>>,
+    /// `attachment_id` of the one attachment of `reply_to_event` to reply
+    /// to, such as one photo of an album; the preview quotes only that
+    /// attachment. `None` replies to the whole message.
+    pub reply_to_attachment_id: Option<String>,
     /// Rich-text entities (mentions, URLs, etc.) as byte ranges in the text.
     pub entities: Option<Vec<EntityDescriptor>>,
     /// Attachment descriptors to embed. Each file names the media hash key
@@ -58,6 +63,33 @@ pub struct ReplyOptions {
 }
 
 impl ReplyOptions {
+    /// Encrypt under `key` at `version` rather than the SDK's cached key.
+    pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
+        self.conversation_key = Some((key.clone(), version.to_string()));
+        self
+    }
+}
+
+/// Optional extras for [`ChatCore::encrypt_forward`].
+#[derive(Debug, Clone, Default)]
+pub struct ForwardOptions {
+    /// Rich-text entities of the message being forwarded, as byte ranges in
+    /// its text.
+    pub forwarded_entities: Option<Vec<EntityDescriptor>>,
+    /// A comment sent with the forward.
+    pub text: Option<String>,
+    /// Rich-text entities of the comment, as byte ranges in `text`.
+    pub entities: Option<Vec<EntityDescriptor>>,
+    /// The original's attachments, each file uploaded again to this
+    /// conversation and named by the media hash key that upload started
+    /// with; encrypt the files afterwards with [`ChatCore::encrypt_media`].
+    pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// The conversation key and its version to encrypt under, overriding
+    /// the SDK's cached key.
+    pub conversation_key: Option<(XChatConversationKey, String)>,
+}
+
+impl ForwardOptions {
     /// Encrypt under `key` at `version` rather than the SDK's cached key.
     pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
         self.conversation_key = Some((key.clone(), version.to_string()));
@@ -306,8 +338,8 @@ impl ChatCore {
             Some((key, version)) => (Some(key.to_bytes()), Some(version)),
             None => (None, None),
         };
-        let payload = match &options.reply_to_event {
-            None => {
+        let payload =
+            if options.reply_to_event.is_none() && options.reply_to_attachment_id.is_none() {
                 let mut params = EncryptMessageParams::new(conversation_id, text);
                 params.conversation_key = conversation_key;
                 params.conversation_key_version = conversation_key_version;
@@ -316,20 +348,54 @@ impl ChatCore {
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_message(&params)?
-            }
-            Some(reply_to_event) => {
-                let mut params =
-                    EncryptReplyParams::new(conversation_id, text, reply_to_event.clone());
+            } else {
+                let mut params = EncryptReplyParams::new(
+                    conversation_id,
+                    text,
+                    options.reply_to_event.unwrap_or_default(),
+                );
                 params.conversation_key = conversation_key;
                 params.conversation_key_version = conversation_key_version;
-                params.reply_to_ckces = options.reply_to_ckces.clone();
+                params.reply_to_ckces = options.reply_to_ckces;
+                params.reply_to_attachment_id = options.reply_to_attachment_id;
                 params.entities = options.entities;
                 params.attachments = options.attachments;
                 params.quick_reply = options.quick_reply;
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(&params)?
-            }
-        };
+            };
+        Ok(SendBody {
+            // The SDK generates the message id and returns it in the payload.
+            message_id: payload.message_id,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
+            xdk_version: payload.xdk_version,
+            conversation_token: None,
+            event_b64: payload.event_b64,
+        })
+    }
+
+    /// Encrypt + sign a forward of an existing message to `conversation_id`,
+    /// as the X apps' forward sheet sends it. `forwarded_text` is the full
+    /// text of the message being forwarded, empty for one with only
+    /// attachments. The original travels as the message's
+    /// `forwarded_message`, the comment in `options` as its text, and the
+    /// message is marked as sent from the forward sheet.
+    pub fn encrypt_forward(
+        &self,
+        conversation_id: &str,
+        forwarded_text: &str,
+        options: ForwardOptions,
+    ) -> Result<SendBody, SdkError> {
+        let mut params = EncryptForwardParams::new(conversation_id, forwarded_text);
+        if let Some((key, version)) = options.conversation_key {
+            params = params.with_conversation_key(key.to_bytes(), version);
+        }
+        params.forwarded_entities = options.forwarded_entities;
+        params.text = options.text;
+        params.entities = options.entities;
+        params.attachments = options.attachments;
+        let payload = self.inner.encrypt_forward(&params)?;
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,
@@ -353,10 +419,38 @@ impl ChatCore {
     ) -> Result<SendBody, SdkError> {
         let params = EncryptReactionParams::new(target_event, emoji)
             .with_conversation_key(conversation_key.to_bytes(), conversation_key_version);
+        self.send_reaction(add, &params)
+    }
+
+    /// Like [`ChatCore::encrypt_reaction`], for one attachment of the target:
+    /// `target_attachment_id` is the `attachment_id` of an attachment
+    /// `target_event` carries, such as one photo of an album. The SDK
+    /// decrypts `target_event` to check the attachment is in it. Remove the
+    /// reaction with the same `target_attachment_id`.
+    pub fn encrypt_reaction_to_attachment(
+        &self,
+        add: bool,
+        target_event: &str,
+        target_attachment_id: &str,
+        emoji: &str,
+        conversation_key: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<SendBody, SdkError> {
+        let params = EncryptReactionParams::new(target_event, emoji)
+            .with_conversation_key(conversation_key.to_bytes(), conversation_key_version)
+            .with_target_attachment_id(target_attachment_id);
+        self.send_reaction(add, &params)
+    }
+
+    fn send_reaction(
+        &self,
+        add: bool,
+        params: &EncryptReactionParams,
+    ) -> Result<SendBody, SdkError> {
         let payload = if add {
-            self.inner.encrypt_add_reaction(&params)?
+            self.inner.encrypt_add_reaction(params)?
         } else {
-            self.inner.encrypt_remove_reaction(&params)?
+            self.inner.encrypt_remove_reaction(params)?
         };
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
@@ -536,6 +630,38 @@ impl ChatCore {
         conversation_key: &XChatConversationKey,
     ) -> Result<String, SdkError> {
         self.inner.decrypt(ciphertext_b64, conversation_key)
+    }
+
+    // -- Conversation archive -----------------------------------------------
+
+    /// Sign archiving (`archived` true) or unarchiving (false) a
+    /// conversation, group or one-to-one. Send `action_signatures` on
+    /// `POST /2/chat/conversations/{id}/archive` to archive, or on `DELETE`
+    /// of the same path to unarchive. Signed with the session identity.
+    pub fn prepare_conversation_archive(
+        &self,
+        conversation_id: &str,
+        archived: bool,
+    ) -> Result<PreparedAction, SdkError> {
+        let params = ConversationArchiveParams::new(conversation_id, archived);
+        self.inner.prepare_conversation_archive(&params)
+    }
+
+    // -- Conversation mute --------------------------------------------------
+
+    /// Sign muting (`muted` true) or unmuting (false) a conversation, group
+    /// or one-to-one, for this bot alone. The event is signed in the bot's
+    /// own `{user_id}:{user_id}` conversation and names `conversation_id` in
+    /// canonical colon form; send `action_signatures` with a mute or unmute
+    /// request that names the conversation in that same form. Signed with
+    /// the session identity.
+    pub fn prepare_conversation_mute(
+        &self,
+        conversation_id: &str,
+        muted: bool,
+    ) -> Result<PreparedAction, SdkError> {
+        self.inner
+            .prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, muted))
     }
 }
 

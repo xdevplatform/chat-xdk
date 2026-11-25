@@ -95,7 +95,7 @@ export interface MessageEventSignature {
  * encrypted group text: the `actionSignatures` it carries. Returned by
  * prepareMessageDelete, prepareMarkConversationRead, prepareGroupLeave (one
  * entry per signed event), prepareGroupAvatarChange, and the admin, invite,
- * join-request, message-TTL and screen-capture prepares.
+ * join-request, message-TTL, screen-capture and conversation-archive prepares.
  */
 export interface PreparedAction {
   actionSignatures: ActionSignature[];
@@ -592,6 +592,46 @@ export interface EncryptMessageParams {
 }
 
 /**
+ * Parameters for encryptForward.
+ *
+ * A forward is a new message carrying another message: its full text and
+ * entities as `forwardedText` and `forwardedEntities`, and its attachments,
+ * each file uploaded again to this conversation, as `attachments`. `text`
+ * is an optional comment. A forward with no `forwardedText` needs
+ * `attachments`.
+ */
+export interface EncryptForwardParams {
+  /** ID of the conversation the message is forwarded to. */
+  conversationId: string;
+  /** The full text of the message being forwarded; `""` when it has none. */
+  forwardedText: string;
+  /** Optional rich-text entities of the forwarded message, as offsets into forwardedText. */
+  forwardedEntities?: EntityTuple[] | null;
+  /** Optional comment sent with the forward. */
+  text?: string | null;
+  /** Optional rich-text entities of the comment, as offsets into text. */
+  entities?: EntityTuple[] | null;
+  /**
+   * Optional attachments of the forwarded message, each file uploaded again
+   * to this conversation and named by the media hash key that upload
+   * started with.
+   */
+  attachments?: AttachmentDescriptor[] | null;
+  /** User ID of the sender; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the message; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+  /** Raw 32-byte conversation key; resolves from the key cache when omitted. Set together with conversationKeyVersion. */
+  conversationKey?: Uint8Array | null;
+  /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
+  conversationKeyVersion?: string | null;
+  /** Whether to send a push notification. Omitted defaults to true. */
+  shouldNotify?: boolean | null;
+  /** Optional TTL in milliseconds for disappearing messages. */
+  ttlMsec?: number | null;
+}
+
+/**
  * Parameters for encryptReply.
  *
  * The preferred form passes `replyToEvent` — the base64 raw signed event
@@ -655,6 +695,12 @@ export interface EncryptReplyParams {
   replyToEntities?: EntityTuple[] | null;
   /** Attachments from the original message (for the reply preview); derived from replyToEvent when omitted. */
   replyToAttachments?: AttachmentDescriptor[] | null;
+  /**
+   * attachmentId of the one attachment of the original being replied to;
+   * omitted replies to the whole message. Needs replyToEvent, and
+   * replyToAttachments must stay omitted: the preview quotes only that attachment.
+   */
+  replyToAttachmentId?: string | null;
   /** Optional quick reply: a request offering options, or a response selecting one. */
   quickReply?: QuickReply | null;
   /** Whether to send a push notification. Omitted defaults to true. */
@@ -692,6 +738,12 @@ export interface EncryptReactionParams {
   conversationKey?: Uint8Array | null;
   /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
   conversationKeyVersion?: string | null;
+  /**
+   * attachmentId of the attachment of the target the reaction is for;
+   * omitted reacts to the whole message. Needs targetEvent, which the SDK
+   * decrypts to check the attachment belongs to it.
+   */
+  targetAttachmentId?: string | null;
 }
 
 /**
@@ -972,11 +1024,39 @@ export interface MessageTtlRemoveParams {
   signingKeyVersion?: string | null;
 }
 
+/**
+ * Parameters for prepareConversationMute.
+ */
+export interface ConversationMuteParams {
+  /** ID of the conversation: a group id or a one-to-one id, in either `A:B` or `A-B` form. */
+  conversationId: string;
+  /** `true` signs a mute, `false` an unmute. */
+  muted: boolean;
+  /** User ID of the sender signing the action; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the action; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
 /** Parameters for prepareScreenCapture. */
 export interface ScreenCaptureParams {
   conversationId: string;
   change: ScreenCaptureChange;
   senderId?: string | null;
+  signingKeyVersion?: string | null;
+}
+
+/**
+ * Parameters for prepareConversationArchive.
+ */
+export interface ConversationArchiveParams {
+  /** ID of the conversation: a group id or a one-to-one id, in either `A:B` or `A-B` form. */
+  conversationId: string;
+  /** `true` signs an archive, `false` an unarchive. */
+  archived: boolean;
+  /** User ID of the sender signing the action; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the action; resolves from the session identity when omitted. */
   signingKeyVersion?: string | null;
 }
 
@@ -1408,6 +1488,11 @@ export interface MessageContent {
    * `sequenceId` of the target message.
    */
   targetMessageSequenceId?: string;
+  /**
+   * Present on 'reaction' and 'reactionRemoved' content for one attachment
+   * of the target: that attachment's attachmentId.
+   */
+  targetAttachmentId?: string;
   /** Present on 'edit' content sent as v1: the target message's signed message id. */
   targetMessageId?: string;
   /** Present on 'text' and 'edit' content: rich-text entities. */
@@ -1756,6 +1841,9 @@ interface ChatCrypto {
   /** Encrypt a text message. */
   encryptMessage(params: EncryptMessageParams): SendPayload;
 
+  /** Encrypt a forward of an existing message. */
+  encryptForward(params: EncryptForwardParams): SendPayload;
+
   /** Encrypt a reply. */
   encryptReply(params: EncryptReplyParams): SendPayload;
 
@@ -1988,8 +2076,18 @@ interface ChatCrypto {
   /** Sign clearing a conversation's message TTL. */
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
 
+  /**
+   * Sign muting or unmuting a conversation, group or one-to-one, for the
+   * signer alone: signed for the signer's own `{senderId}:{senderId}`
+   * conversation, naming the muted conversation in canonical form.
+   */
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
+
   /** Sign one screen-capture setting change. */
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+
+  /** Sign archiving or unarchiving a conversation, group or one-to-one. */
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 }
 
 /** Internal crypto engine wrapped by ChatWithJuicebox. Not part of the public API. */
@@ -2019,6 +2117,7 @@ declare class Chat implements ChatCrypto {
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
   matchesRegisteredKey(publicKeyB64: string): boolean;
   encryptMessage(params: EncryptMessageParams): SendPayload;
+  encryptForward(params: EncryptForwardParams): SendPayload;
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
@@ -2048,7 +2147,9 @@ declare class Chat implements ChatCrypto {
   prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
   prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 }
 
 /**
@@ -2176,6 +2277,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   verifyKeyBinding(identityPublicKeyB64: string, signingPublicKeyB64: string, identityPublicKeySignatureB64: string): boolean;
   matchesRegisteredKey(publicKeyB64: string): boolean;
   encryptMessage(params: EncryptMessageParams): SendPayload;
+  encryptForward(params: EncryptForwardParams): SendPayload;
   encryptReply(params: EncryptReplyParams): SendPayload;
   encryptAddReaction(params: EncryptReactionParams): SendPayload;
   encryptRemoveReaction(params: EncryptReactionParams): SendPayload;
@@ -2205,7 +2307,9 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
   prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
+  prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 
   /**
    * Release the WASM-side crypto engine: clears key material (`lock()`) and

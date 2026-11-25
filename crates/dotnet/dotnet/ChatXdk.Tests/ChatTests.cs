@@ -867,6 +867,39 @@ namespace ChatXdk.Tests
             Assert.NotEmpty(payload.EncodedMessageCreateEvent);
         }
 
+        [Fact]
+        public void AttachmentTargets_NeedTheRawEvent()
+        {
+            using var chat = CreateUnlocked();
+            var ckey = NewConvKey(chat);
+            var reaction = new EncryptReactionParams(targetEvent: null, "👍")
+            {
+                ConversationId = "conv-1",
+                TargetMessageSequenceId = "seq-99",
+                SenderId = "1001",
+                SigningKeyVersion = "66",
+                ConversationKey = ckey,
+                ConversationKeyVersion = "1",
+                TargetAttachmentId = "att-1",
+            };
+            var ex = Assert.Throws<ChatXdkException>(() => chat.EncryptAddReaction(reaction));
+            Assert.Contains("target_attachment_id needs target_event", ex.Message);
+            ex = Assert.Throws<ChatXdkException>(() => chat.EncryptRemoveReaction(reaction));
+            Assert.Contains("target_attachment_id needs target_event", ex.Message);
+
+            ex = Assert.Throws<ChatXdkException>(() => chat.EncryptReply(
+                new EncryptReplyParams("conv-1", "reply", replyToEvent: null)
+                {
+                    SenderId = "1001",
+                    SigningKeyVersion = "66",
+                    ConversationKey = ckey,
+                    ConversationKeyVersion = "1",
+                    ReplyToSequenceId = "seq-42",
+                    ReplyToAttachmentId = "att-1",
+                }));
+            Assert.Contains("reply_to_attachment_id needs reply_to_event", ex.Message);
+        }
+
         // EncryptEdit
 
         [Fact]
@@ -914,6 +947,62 @@ namespace ChatXdk.Tests
             var roundTrip = json.Deserialize<SendPayload>()!;
             Assert.Equal(payload.EncodedMessageCreateEvent, roundTrip.EncodedMessageCreateEvent);
             Assert.Equal(payload.EncodedMessageEventSignature, roundTrip.EncodedMessageEventSignature);
+        }
+
+        // PrepareConversationMute
+
+        [Fact]
+        public void PrepareConversationMute_SignsForTheSelfConversation()
+        {
+            using var chat = CreateUnlocked();
+
+            // The event belongs to the signer's own 111:111 conversation and names
+            // the muted one: a 1:1 id in canonical colon form, a group id as it is.
+            foreach (var (conversation, mutedId) in new[] { ("222-111", "111:222"), ("g999", "g999") })
+            {
+                foreach (var (muted, eventName) in new[] { (true, "MuteConversation"), (false, "UnmuteConversation") })
+                {
+                    var sig = OnlyAction(chat.PrepareConversationMute(new ConversationMuteParams(conversation, muted)
+                    {
+                        SenderId = "111",
+                        SigningKeyVersion = "1",
+                    }));
+
+                    Assert.NotEmpty(sig.MessageId);
+                    Assert.NotEmpty(sig.EncodedMessageEventDetail);
+                    Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+                    Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+                    Assert.True(Signs(chat, sig,
+                        $"ConversationMetadataChangeEvent.{eventName},{sig.MessageId},111,111:111,{mutedId}"));
+                }
+            }
+        }
+
+        [Fact]
+        public void PrepareConversationMute_DefaultsToSessionIdentity()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("111", "7"));
+
+            var sig = OnlyAction(chat.PrepareConversationMute(new ConversationMuteParams("g999", true)));
+
+            Assert.Equal("7", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.True(Signs(chat, sig,
+                $"ConversationMetadataChangeEvent.MuteConversation,{sig.MessageId},111,111:111,g999"));
+        }
+
+        [Fact]
+        public void PrepareConversationMute_RejectsEmptyConversationId()
+        {
+            using var chat = CreateUnlocked();
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareConversationMute(
+                new ConversationMuteParams("", true)
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.Contains("conversation_id is empty", ex.Message);
         }
 
         // PrepareMessageDelete
@@ -1134,6 +1223,62 @@ namespace ChatXdk.Tests
             }));
 
             Assert.True(Signs(chat, sig, $"MessageDeleteEvent,{sig.MessageId},111,g999,1,seq-1"));
+        }
+
+        // PrepareConversationArchive
+
+        [Fact]
+        public void PrepareConversationArchive_SignsArchiveAndUnarchive()
+        {
+            using var chat = CreateUnlocked();
+
+            // A 1:1 id is signed in its canonical colon form, a group id as it
+            // is; the payload ends at the conversation id.
+            foreach (var (conversation, signed) in new[] { ("222-111", "111:222"), ("g999", "g999") })
+            {
+                foreach (var (archived, eventName) in new[] { (true, "ArchiveConversation"), (false, "UnarchiveConversation") })
+                {
+                    var sig = OnlyAction(chat.PrepareConversationArchive(new ConversationArchiveParams(conversation, archived)
+                    {
+                        SenderId = "111",
+                        SigningKeyVersion = "1",
+                    }));
+
+                    Assert.NotEmpty(sig.MessageId);
+                    Assert.NotEmpty(sig.EncodedMessageEventDetail);
+                    Assert.Equal("1", sig.MessageEventSignature.PublicKeyVersion);
+                    Assert.Equal(chat.GetPublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+                    Assert.True(Signs(chat, sig,
+                        $"ConversationMetadataChangeEvent.{eventName},{sig.MessageId},111,{signed}"));
+                }
+            }
+        }
+
+        [Fact]
+        public void PrepareConversationArchive_DefaultsToSessionIdentity()
+        {
+            using var chat = CreateUnlocked();
+            chat.SetIdentity(new SetIdentityParams("111", "7"));
+
+            var sig = OnlyAction(chat.PrepareConversationArchive(new ConversationArchiveParams("g999", true)));
+
+            Assert.Equal("7", sig.MessageEventSignature.PublicKeyVersion);
+            Assert.True(Signs(chat, sig,
+                $"ConversationMetadataChangeEvent.ArchiveConversation,{sig.MessageId},111,g999"));
+        }
+
+        [Fact]
+        public void PrepareConversationArchive_RejectsEmptyConversationId()
+        {
+            using var chat = CreateUnlocked();
+
+            var ex = Assert.Throws<ChatXdkException>(() => chat.PrepareConversationArchive(
+                new ConversationArchiveParams("", true)
+                {
+                    SenderId = "111",
+                    SigningKeyVersion = "1",
+                }));
+            Assert.Contains("conversation_id is empty", ex.Message);
         }
 
         // PrepareMarkConversationRead
@@ -1911,6 +2056,45 @@ namespace ChatXdk.Tests
         // Failure events are unsigned by protocol: the fixture failure decodes
         // with no conversation or signing keys, and the JSON carries the
         // PascalCase discriminator values.
+        // A forward carries the original's text and entities, the comment as its
+        // own text, and is marked as sent from the forward sheet.
+        [Fact]
+        public void EncryptForward_CarriesTheOriginalAndTheComment()
+        {
+            var v = LoadVectors();
+            using var chat = new Chat();
+            chat.ImportKeys(new ImportKeysParams(Convert.FromBase64String(v.PrivateKeysConcatB64)));
+            chat.SetIdentity(new SetIdentityParams(v.EventSenderId, v.EventSigningKeyVersion));
+            var key = Convert.FromBase64String(v.ConversationKeyB64);
+
+            var payload = chat.EncryptForward(new EncryptForwardParams("conv-1", "see https://x.com")
+            {
+                ForwardedEntities = new[] { new EntityDescriptor(4, 17, "url") },
+                Text = "look",
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            });
+            var e = chat.DecryptEvent(new DecryptEventParams(payload.EventB64, ConversationKeys(v))
+            {
+                SigningKeys = EventSigningKeys(v),
+            });
+            Assert.True(e.GetProperty("verified").GetBoolean());
+            var content = e.GetProperty("content");
+            Assert.Equal("look", content.GetProperty("text").GetString());
+            var forwarded = content.GetProperty("forwarded_message");
+            Assert.Equal("see https://x.com", forwarded.GetProperty("message_text").GetString());
+            Assert.Equal(1, forwarded.GetProperty("entities").GetArrayLength());
+            Assert.Equal("MESSAGE_FORWARD_SHEET", content.GetProperty("sent_from").GetString());
+
+            var error = Assert.Throws<ChatXdkException>(() => chat.EncryptForward(new EncryptForwardParams("conv-1", "")
+            {
+                ConversationKey = key,
+                ConversationKeyVersion = v.EventConversationKeyVersion,
+            }));
+            Assert.Equal(ChatXdkErrorKind.InvalidInput, error.Kind);
+            Assert.Contains("nothing to forward", error.Message);
+        }
+
         // Reactions and edits name their target by its sequence id; a v0 edit
         // carries no target message id.
         [Fact]

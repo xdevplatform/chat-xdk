@@ -453,6 +453,7 @@ export class ChatWithJuicebox {
   }
   matchesRegisteredKey(publicKeyB64) { return this.#inner.matchesRegisteredKey(publicKeyB64); }
   encryptMessage(params) { return this.#inner.encryptMessage(params); }
+  encryptForward(params) { return this.#inner.encryptForward(params); }
   encryptReply(params) { return this.#inner.encryptReply(params); }
   encryptAddReaction(params) { return this.#inner.encryptAddReaction(params); }
   encryptRemoveReaction(params) { return this.#inner.encryptRemoveReaction(params); }
@@ -482,7 +483,9 @@ export class ChatWithJuicebox {
   prepareGroupJoinReject(params) { return this.#inner.prepareGroupJoinReject(params); }
   prepareMessageTtlChange(params) { return this.#inner.prepareMessageTtlChange(params); }
   prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
+  prepareConversationMute(params) { return this.#inner.prepareConversationMute(params); }
   prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
+  prepareConversationArchive(params) { return this.#inner.prepareConversationArchive(params); }
 
   // The public-key hook (handled in this JS layer)
 

@@ -632,10 +632,25 @@ then the media URL), description (`GroupDescriptionChange`, key version then
 the encrypted description), admin add and remove, invite enable (`url`,
 expiry or `null`, affiliate or `null`), invite disable, join request, join
 reject, message TTL (`MessageDurationChange` with the millisecond count, or
-`MessageDurationRemove` with no further fields), and one screen-capture
+`MessageDurationRemove` with no further fields), one screen-capture
 event (`EnableScreenCaptureBlocking`, `DisableScreenCaptureBlocking`,
 `EnableScreenCaptureDetection`, or `DisableScreenCaptureDetection`) with no
-further fields.
+further fields, and archive or unarchive
+(`ConversationMetadataChangeEvent.ArchiveConversation` or
+`ConversationMetadataChangeEvent.UnarchiveConversation`, from
+`prepare_conversation_archive`) with no further fields: the id list the event
+can carry is left unset, as X clients sign it, and a verifier signs the ids
+after the conversation id when it is set.
+
+`prepare_conversation_mute` signs a `MuteConversation` or
+`UnmuteConversation` change as X clients do: in the signer's own
+`{sender_id}:{sender_id}` conversation, with the muted conversation's
+canonical id as the one field after it:
+
+```
+"ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+"ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+```
 
 #### Verifying newer versions
 
@@ -935,6 +950,8 @@ The SDK closes this on both sides:
   [message key](#message-keys), that key travels with it
   (`raw_event_message_key` / `raw_event_edit_message_key`), so recipients can
   open it without its conversation key; a conversation key is never carried.
+  A reply to one attachment (`reply_to_attachment_id`) quotes only that
+  attachment and names it in `replying_to_attachment_id`.
 - **Receive** (`decrypt_event` / `decrypt_events`): when a decrypted message
   carries a preview with an embedded raw event, the SDK always validates it:
   1. The raw event must belong to the **same conversation** as the reply.
@@ -950,7 +967,9 @@ The SDK closes this on both sides:
      code units as X clients count them, must be equal, so a preview may
      cut the text after those 140), entities (the claimed list must be the
      quoted one exactly, and an absent list matches only an absent one), and
-     attachments.
+     attachments. A preview that names one attachment of the original
+     (`replying_to_attachment_id`, set by `reply_to_attachment_id`) is
+     invalid unless the original carries an attachment with that id.
   4. When an **edit event is embedded**, it must verify the same way and come
      from the original's author, and the text and entity claims are checked
      against the edit's updated contents instead of the original's; the
@@ -973,6 +992,28 @@ passes through with no validation outcome, so histories written before raw
 events were embedded remain readable. The media such a preview shows still
 opens, under a key found from the preview's own fields, and is as
 unvalidated as the preview (see [Media Keys](#media-keys)).
+
+### Forwarded messages
+
+`encrypt_forward` builds a forward as the X apps' forward sheet does: a new
+message in the target conversation, encrypted and signed by the forwarder
+like any other (same key resolution, message id and v0/v1 format as
+`encrypt_message`). Its `MessageContents` carry:
+
+- `forwarded_message`: the original's full text (`message_text`) and its
+  entities, as the caller passes them in `forwarded_text` and
+  `forwarded_entities`.
+- `text` and `entities`: the forwarder's optional comment, unset when there
+  is none.
+- `attachments`: the original's attachments, each file uploaded again to
+  the target conversation and encrypted under this message, as for
+  `encrypt_message` (see [Media Keys](#media-keys)).
+- `sent_from = MESSAGE_FORWARD_SHEET`.
+
+Unlike a reply preview, a forward embeds no raw event of the original, so
+nothing ties `forwarded_message` to the message or the author it came from:
+recipients verify the forwarder's signature over the whole forward, and the
+forwarded content is only what the forwarder claims it is.
 
 ---
 

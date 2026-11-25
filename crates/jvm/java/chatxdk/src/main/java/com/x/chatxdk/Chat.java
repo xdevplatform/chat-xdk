@@ -1042,12 +1042,43 @@ public final class Chat implements AutoCloseable {
                 ChatNative.INSTANCE::chat_xdk_prepare_message_ttl_remove);
     }
 
+    /**
+     * Sign muting or unmuting a conversation, group or one-to-one, for the signer
+     * alone: the {@code action_signatures} of the mute or unmute request, one entry.
+     * The event is signed for the signer's own {@code {sender}:{sender}} conversation
+     * and names the muted conversation in canonical colon form, the form the request
+     * must name it in. The SDK generates the action's message id; read it back from
+     * the entry.
+     */
+    public PreparedAction prepareConversationMute(ConversationMuteParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareConversationMuteJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_conversation_mute);
+    }
+
     /** Sign one screen-capture setting change. */
     public PreparedAction prepareScreenCapture(ScreenCaptureParams parameters) throws Exception {
         throwIfDisposed();
         return callAction(
                 buildPrepareScreenCaptureJson(parameters),
                 ChatNative.INSTANCE::chat_xdk_prepare_screen_capture);
+    }
+
+    /**
+     * Sign archiving or unarchiving a conversation, group or one-to-one: the
+     * {@code action_signatures} of the archive request
+     * ({@code POST /2/chat/conversations/{id}/archive}) or the unarchive request
+     * ({@code DELETE} on the same path), one entry. The SDK generates the action's
+     * message id; read it back from the entry.
+     */
+    public PreparedAction prepareConversationArchive(ConversationArchiveParams parameters)
+            throws Exception {
+        throwIfDisposed();
+        return callAction(
+                buildPrepareConversationArchiveJson(parameters),
+                ChatNative.INSTANCE::chat_xdk_prepare_conversation_archive);
     }
 
     private PreparedConversationChange callPrepare(String paramsJson, ParamsJsonFn fn) throws Exception {
@@ -1105,6 +1136,16 @@ public final class Chat implements AutoCloseable {
     public SendPayload encryptMessage(EncryptMessageParams parameters) throws Exception {
         throwIfDisposed();
         return callEncrypt(buildEncryptMessageJson(parameters), ChatNative.INSTANCE::chat_xdk_encrypt_message);
+    }
+
+    /**
+     * Encrypt a forward of an existing message for the X API: a new message carrying the
+     * original's full text and entities, an optional comment, and the original's attachments
+     * uploaded again to this conversation. Its id and files work as for {@link #encryptMessage}.
+     */
+    public SendPayload encryptForward(EncryptForwardParams parameters) throws Exception {
+        throwIfDisposed();
+        return callEncrypt(buildEncryptForwardJson(parameters), ChatNative.INSTANCE::chat_xdk_encrypt_forward);
     }
 
     /**
@@ -1507,6 +1548,32 @@ public final class Chat implements AutoCloseable {
         }
     }
 
+    private static String buildEncryptForwardJson(EncryptForwardParams p) throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("forwarded_text", p.forwardedText);
+        if (p.forwardedEntities != null) {
+            n.set("forwarded_entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.forwardedEntities)));
+        }
+        if (p.text != null) {
+            n.put("text", p.text);
+        }
+        if (p.entities != null) {
+            n.set("entities", ChatJson.MAPPER.valueToTree(serializeEntities(p.entities)));
+        }
+        if (p.attachments != null) {
+            n.set("attachments", ChatJson.MAPPER.valueToTree(p.attachments));
+        }
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
+        if (p.shouldNotify != null) {
+            n.put("should_notify", p.shouldNotify);
+        }
+        if (p.ttlMsec != null) {
+            n.put("ttl_msec", p.ttlMsec);
+        }
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
     private static String buildEncryptMessageJson(EncryptMessageParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
@@ -1568,6 +1635,9 @@ public final class Chat implements AutoCloseable {
         if (p.replyToAttachments != null) {
             n.set("reply_to_attachments", ChatJson.MAPPER.valueToTree(p.replyToAttachments));
         }
+        if (p.replyToAttachmentId != null) {
+            n.put("reply_to_attachment_id", p.replyToAttachmentId);
+        }
         if (p.quickReply != null) {
             n.set("quick_reply", ChatJson.MAPPER.valueToTree(p.quickReply));
         }
@@ -1591,6 +1661,9 @@ public final class Chat implements AutoCloseable {
         }
         if (p.targetMessageSequenceId != null) {
             n.put("target_message_sequence_id", p.targetMessageSequenceId);
+        }
+        if (p.targetAttachmentId != null) {
+            n.put("target_attachment_id", p.targetAttachmentId);
         }
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, p.conversationKey, p.conversationKeyVersion);
         return ChatJson.MAPPER.writeValueAsString(n);
@@ -1793,10 +1866,28 @@ public final class Chat implements AutoCloseable {
         return ChatJson.MAPPER.writeValueAsString(n);
     }
 
+    private static String buildPrepareConversationMuteJson(ConversationMuteParams p)
+            throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("muted", p.muted);
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
     private static String buildPrepareScreenCaptureJson(ScreenCaptureParams p) throws Exception {
         ObjectNode n = ChatJson.MAPPER.createObjectNode();
         n.put("conversation_id", p.conversationId);
         n.put("change", p.change.name());
+        putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
+        return ChatJson.MAPPER.writeValueAsString(n);
+    }
+
+    private static String buildPrepareConversationArchiveJson(ConversationArchiveParams p)
+            throws Exception {
+        ObjectNode n = ChatJson.MAPPER.createObjectNode();
+        n.put("conversation_id", p.conversationId);
+        n.put("archived", p.archived);
         putIdentityAndKey(n, p.senderId, p.signingKeyVersion, null, null);
         return ChatJson.MAPPER.writeValueAsString(n);
     }

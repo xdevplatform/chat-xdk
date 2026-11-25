@@ -374,6 +374,30 @@ public class ChatCoreTests
             core.DecryptOne("not-valid-base64!!!", new Dictionary<string, byte[]>()));
     }
 
+    [Theory]
+    [InlineData(true, "Archived")]
+    [InlineData(false, "Unarchived")]
+    public async Task PrepareConversationArchive_Signs_Archive_And_Unarchive(bool archived, string setting)
+    {
+        // The signed action is sendable as it is, and a recipient verifies it
+        // as the setting it signs.
+        using var user = new Party("5001");
+        var prepared = user.Core.PrepareConversationArchive("g123", archived);
+        var sig = Assert.Single(prepared.ActionSignatures);
+        Assert.False(string.IsNullOrEmpty(sig.MessageId));
+        Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+        Assert.False(string.IsNullOrEmpty(sig.MessageEventSignature.Signature));
+
+        user.Core.FetchPublicKeysWith(PublicKeysOf(new List<string>(), user));
+        var result = await user.Core.DecryptBatchAsync(
+            new[] { DeliveredAction(sig, user.UserId, "g123", "2100000000000000000") });
+        Assert.Empty(result.Errors);
+        var evt = Assert.Single(result.Events).Event;
+        Assert.Equal("SettingsChange", evt.GetProperty("type").GetString());
+        Assert.True(evt.GetProperty("verified").GetBoolean());
+        Assert.Equal(setting, evt.GetProperty("change").GetProperty("setting").GetString());
+    }
+
     [Fact]
     public async Task PrepToRequest_Maps_The_Rest_Shape()
     {
@@ -455,6 +479,23 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void PrepareConversationMute_Signs_Mute_And_Unmute()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        foreach (var muted in new[] { true, false })
+        {
+            var prepared = core.PrepareConversationMute("g123", muted);
+            var sig = Assert.Single(prepared.ActionSignatures);
+            Assert.False(string.IsNullOrEmpty(sig.MessageId));
+            Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+            Assert.False(string.IsNullOrEmpty(sig.MessageEventSignature.Signature));
+            Assert.Equal(core.PublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+        }
+    }
+
+    [Fact]
     public void EncryptReaction_Produces_Sendable_Payload()
     {
         var v = LoadVectors();
@@ -473,6 +514,57 @@ public class ChatCoreTests
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageCreateEvent));
         Assert.False(string.IsNullOrEmpty(body.EncodedMessageEventSignature));
         Assert.False(string.IsNullOrEmpty(body.XdkVersion));
+    }
+
+    [Fact]
+    public void Attachment_Targets_Reach_The_Core()
+    {
+        // A reply or reaction to one attachment names an attachment_id the raw
+        // event carries; the SDK decrypts the event to check it. The fixture
+        // message carries no attachment, so the SDK rejects the id, naming it.
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        var convKey = Convert.FromBase64String(v.ConversationKeyB64);
+        foreach (var add in new[] { true, false })
+        {
+            var ex = Assert.Throws<ChatXdkException>(() => core.EncryptReaction(
+                add, v.EventMessageB64, "\U0001F44D", convKey, v.EventConversationKeyVersion,
+                targetAttachmentId: "att-1"));
+            Assert.Contains("target_attachment_id 'att-1' not found", ex.Message);
+        }
+        var replyEx = Assert.Throws<ChatXdkException>(() => core.EncryptReply(
+            v.EventConversationId, "the first one", convKey, v.EventConversationKeyVersion,
+            replyToEvent: v.EventMessageB64, replyToAttachmentId: "att-1"));
+        Assert.Contains("reply_to_attachment_id 'att-1' not found", replyEx.Message);
+    }
+
+    [Fact]
+    public async Task EncryptForward_Round_Trips_The_Original_And_The_Comment()
+    {
+        // A user rotates a group's key and forwards a message under it, then
+        // reads the page back: the key change, then the forward.
+        using var user = new Party("5001");
+        var prepared = await user.Core.PrepareConversationKeyChangeAsync(new[] { user.PublicKey }, "g900");
+        var keyChange = DeliveredAction(prepared.ActionSignatures[0], user.UserId, "g900", "2100000000000000000");
+        var body = user.Core.EncryptForward(
+            "g900",
+            "the original message",
+            text: "look at this",
+            conversationKey: prepared.ConversationKey,
+            conversationKeyVersion: prepared.ConversationKeyVersion);
+        user.Core.FetchPublicKeysWith(PublicKeysOf(new List<string>(), user));
+
+        var result = await user.Core.DecryptBatchAsync(
+            new[] { keyChange, Delivered(body.EventB64, "2100000000000000001") });
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, result.Events.Count);
+        var content = result.Events[1].Event.GetProperty("content");
+        Assert.Equal("look at this", content.GetProperty("text").GetString());
+        Assert.Equal(
+            "the original message",
+            content.GetProperty("forwarded_message").GetProperty("message_text").GetString());
+        Assert.Equal("MESSAGE_FORWARD_SHEET", content.GetProperty("sent_from").GetString());
     }
 
     [Fact]

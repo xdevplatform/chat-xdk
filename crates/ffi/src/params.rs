@@ -43,6 +43,27 @@ pub(crate) struct FfiEncryptMessageParams {
 }
 
 #[derive(serde::Deserialize)]
+pub(crate) struct FfiEncryptForwardParams {
+    pub(crate) conversation_id: String,
+    pub(crate) forwarded_text: String,
+    pub(crate) forwarded_entities: Option<Vec<(i32, i32, String)>>,
+    #[serde(default)]
+    pub(crate) text: Option<String>,
+    #[serde(default)]
+    pub(crate) sender_id: Option<String>,
+    #[serde(default)]
+    pub(crate) signing_key_version: Option<String>,
+    #[serde(default)]
+    pub(crate) conversation_key: Option<String>,
+    #[serde(default)]
+    pub(crate) conversation_key_version: Option<String>,
+    pub(crate) entities: Option<Vec<(i32, i32, String)>>,
+    pub(crate) attachments: Option<serde_json::Value>,
+    pub(crate) should_notify: Option<bool>,
+    pub(crate) ttl_msec: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
 pub(crate) struct FfiEncryptReplyParams {
     pub(crate) conversation_id: String,
     pub(crate) text: String,
@@ -71,6 +92,8 @@ pub(crate) struct FfiEncryptReplyParams {
     pub(crate) quick_reply: Option<serde_json::Value>,
     pub(crate) reply_to_entities: Option<Vec<(i32, i32, String)>>,
     pub(crate) reply_to_attachments: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) reply_to_attachment_id: Option<String>,
     pub(crate) should_notify: Option<bool>,
     pub(crate) ttl_msec: Option<i64>,
 }
@@ -92,6 +115,8 @@ pub(crate) struct FfiEncryptReactionParams {
     pub(crate) conversation_key: Option<String>,
     #[serde(default)]
     pub(crate) conversation_key_version: Option<String>,
+    #[serde(default)]
+    pub(crate) target_attachment_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -285,9 +310,29 @@ pub(crate) struct FfiMessageTtlRemoveParams {
 }
 
 #[derive(serde::Deserialize)]
+pub(crate) struct FfiConversationMuteParams {
+    pub(crate) conversation_id: String,
+    pub(crate) muted: bool,
+    #[serde(default)]
+    pub(crate) sender_id: Option<String>,
+    #[serde(default)]
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 pub(crate) struct FfiScreenCaptureParams {
     pub(crate) conversation_id: String,
     pub(crate) change: String,
+    #[serde(default)]
+    pub(crate) sender_id: Option<String>,
+    #[serde(default)]
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct FfiConversationArchiveParams {
+    pub(crate) conversation_id: String,
+    pub(crate) archived: bool,
     #[serde(default)]
     pub(crate) sender_id: Option<String>,
     #[serde(default)]

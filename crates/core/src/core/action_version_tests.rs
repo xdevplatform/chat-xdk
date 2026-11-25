@@ -10,10 +10,10 @@
 use super::test_support::{enable_v1_send, frame, Party, SIGNING_KEY_VERSION};
 use super::*;
 use crate::params::{
-    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupTitleChangeParams, MessageTtlChangeParams,
-    MessageTtlRemoveParams, ScreenCaptureParams,
+    ConversationArchiveParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupTitleChangeParams,
+    MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
 };
 use crate::signatures::ActionSignature;
 use crate::thrift::event::{
@@ -210,6 +210,20 @@ fn single_actions(party: &Party) -> Vec<(ActionSignature, String)> {
             ),
             "ConversationMetadataChangeEvent.EnableScreenCaptureBlocking,{id},910004,g100"
                 .to_string(),
+        ),
+        (
+            first(
+                core.prepare_conversation_archive(&ConversationArchiveParams::new(GROUP, true))
+                    .unwrap(),
+            ),
+            "ConversationMetadataChangeEvent.ArchiveConversation,{id},910004,g100".to_string(),
+        ),
+        (
+            first(
+                core.prepare_conversation_archive(&ConversationArchiveParams::new(GROUP, false))
+                    .unwrap(),
+            ),
+            "ConversationMetadataChangeEvent.UnarchiveConversation,{id},910004,g100".to_string(),
         ),
         (
             first(
@@ -635,5 +649,41 @@ fn a_member_add_signs_its_description_slot_while_sends_are_v1() {
         assert_eq!(add.signature_payload, expected, "{description:?}");
         assert_eq!(add.message_event_signature.signature_version, version);
         assert!(verifies(&party, add, GROUP, &HashMap::new()));
+    }
+}
+
+#[test]
+fn conversation_mute_signs_at_the_action_version_in_the_self_conversation() {
+    for v1 in [false, true] {
+        let party = signer();
+        if v1 {
+            enable_v1_send(&party.core);
+        }
+        for (muted, event) in [(true, "MuteConversation"), (false, "UnmuteConversation")] {
+            let signature = party
+                .core
+                .prepare_conversation_mute(&crate::params::ConversationMuteParams::new(
+                    GROUP, muted,
+                ))
+                .unwrap()
+                .action_signatures[0]
+                .clone();
+            let mut expected = format!(
+                "ConversationMetadataChangeEvent.{event},{},910004,910004:910004,g100",
+                signature.message_id
+            );
+            if v1 {
+                expected.push_str(",signature_version=10");
+            }
+            assert_eq!(signature.signature_payload, expected);
+            assert_eq!(
+                signature.message_event_signature.signature_version,
+                if v1 { "10" } else { "7" }
+            );
+            assert!(
+                verifies(&party, &signature, "910004:910004", &HashMap::new()),
+                "{expected}"
+            );
+        }
     }
 }

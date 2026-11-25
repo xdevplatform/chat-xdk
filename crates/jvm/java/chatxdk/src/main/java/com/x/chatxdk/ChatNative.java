@@ -104,13 +104,19 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_message_ttl_remove(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_conversation_mute(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_prepare_screen_capture(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_prepare_conversation_archive(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_prepare_mark_conversation_read(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_decrypt_event(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_message(Pointer handle, Pointer paramsJson);
+
+    FfiResult.ByValue chat_xdk_encrypt_forward(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_encrypt_reply(Pointer handle, Pointer paramsJson);
 

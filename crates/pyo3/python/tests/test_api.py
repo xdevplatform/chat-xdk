@@ -226,8 +226,10 @@ class TestParams(unittest.TestCase):
             "MessageDeleteParams",
             "MessageTtlChangeParams",
             "MessageTtlRemoveParams",
+            "ConversationMuteParams",
             "ScreenCaptureChange",
             "ScreenCaptureParams",
+            "ConversationArchiveParams",
             "MarkConversationReadParams",
             "SetIdentityParams",
             "ImportKeysParams",
@@ -287,6 +289,7 @@ class TestParams(unittest.TestCase):
             EncryptFileWithKeyParams,
             EncryptMessageParams,
             EncryptReactionParams,
+            ConversationArchiveParams,
             EncryptReplyParams,
             FileDecryptorParams,
             FileEncryptorParams,
@@ -299,6 +302,7 @@ class TestParams(unittest.TestCase):
             MessageDeleteParams,
             ScreenCaptureParams,
             SetIdentityParams,
+            ConversationMuteParams,
         )
 
         missing_required = [
@@ -309,9 +313,11 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], []),
             lambda: GroupCreateParams([], "g1", []),
             lambda: MessageDeleteParams("conv-1", []),
+            lambda: ConversationMuteParams("g1"),
             lambda: GroupMembersRemoveParams([], "g1"),
             lambda: GroupTitleChangeParams("g1"),
             lambda: ScreenCaptureParams("g1"),
+            lambda: ConversationArchiveParams("g1"),
             lambda: MarkConversationReadParams("conv-1"),
             lambda: SetIdentityParams("1001"),
             lambda: ImportKeysParams(),
@@ -337,9 +343,11 @@ class TestParams(unittest.TestCase):
             lambda: GroupMembersChangeParams([], "g1", [], [], [], [], "1001"),
             lambda: GroupCreateParams([], "g1", [], [], "1001"),
             lambda: MessageDeleteParams("conv-1", [], True, "1001"),
+            lambda: ConversationMuteParams("g1", True, "1001"),
             lambda: GroupMembersRemoveParams([], "g1", ["1"], "1001"),
             lambda: GroupTitleChangeParams("g1", "Board", "1001"),
             lambda: MarkConversationReadParams("conv-1", "seq-1", 1700000000123),
+            lambda: ConversationArchiveParams("conv-1", True, "1001"),
             lambda: ImportKeysParams(b"keys", "1"),
             lambda: DecryptEventParams("event", {}, []),
             lambda: DecryptEventsParams([], []),
@@ -681,6 +689,49 @@ class TestApiShapes(unittest.TestCase):
                 )
             )
 
+    def test_encrypt_forward_carries_the_original_and_the_comment(self):
+        from chat_xdk import DecryptEventParams, EncryptForwardParams, InvalidInputError
+
+        chat, v = self._unlocked_chat()
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+
+        def forward(forwarded_text, **kwargs):
+            return chat.encrypt_forward(
+                EncryptForwardParams(
+                    "1002-1001", forwarded_text,
+                    sender_id="1001",
+                    signing_key_version="1",
+                    conversation_key=conv_key,
+                    conversation_key_version="7",
+                    **kwargs,
+                )
+            )
+
+        payload = forward(
+            "see https://x.com",
+            forwarded_entities=[(4, 17, "url")],
+            text="look",
+        )
+        event = chat.decrypt_event(
+            DecryptEventParams(
+                payload.event_b64,
+                {"7": conv_key},
+                signing_keys=[self._signing_key("1001", "1")],
+            )
+        )
+        self.assertTrue(event["verified"])
+        content = event["content"]
+        self.assertEqual(content["text"], "look")
+        self.assertEqual(content["forwarded_message"]["message_text"], "see https://x.com")
+        self.assertEqual(len(content["forwarded_message"]["entities"]), 1)
+        self.assertEqual(content["sent_from"], "MESSAGE_FORWARD_SHEET")
+
+        with self.assertRaises(InvalidInputError) as ctx:
+            forward("")
+        self.assertIn("nothing to forward", str(ctx.exception))
+        with self.assertRaises(InvalidInputError):
+            forward("hi", forwarded_entities=[(0, 9, "url")])
+
     def test_event_b64_decrypts_as_the_sent_message(self):
         from chat_xdk import DecryptEventParams, EncryptMessageParams
 
@@ -795,6 +846,40 @@ class TestApiShapes(unittest.TestCase):
             self.assertTrue(payload.encoded_message_create_event)
             self.assertTrue(payload.signature)
             self.assertTrue(payload.encoded_message_event_signature)
+
+    def test_attachment_targets_need_the_raw_event(self):
+        from chat_xdk import EncryptReactionParams, EncryptReplyParams
+
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        reaction = EncryptReactionParams(
+            None, "\U0001F44D",
+            conversation_id="conv-1",
+            target_message_sequence_id="seq-99",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+            target_attachment_id="att-1",
+        )
+        self.assertEqual(reaction.target_attachment_id, "att-1")
+        for encrypt in (chat.encrypt_add_reaction, chat.encrypt_remove_reaction):
+            with self.assertRaisesRegex(ValueError, "target_attachment_id needs target_event"):
+                encrypt(reaction)
+
+        reply = EncryptReplyParams(
+            "conv-1", "this is my reply", None,
+            reply_to_sequence_id="seq-42",
+            reply_to_attachment_id="att-1",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+        )
+        self.assertEqual(reply.reply_to_attachment_id, "att-1")
+        with self.assertRaisesRegex(ValueError, "reply_to_attachment_id needs reply_to_event"):
+            chat.encrypt_reply(reply)
 
     def test_encrypt_edit_shape(self):
         from chat_xdk import EncryptEditParams
@@ -1488,6 +1573,63 @@ class TestApiShapes(unittest.TestCase):
 
         self.assertTrue(_signs(chat, sig, f"MessageDeleteEvent,{sig['message_id']},111,g999,1,seq-1"))
 
+    def test_prepare_conversation_mute_signs_for_the_self_conversation(self):
+        from chat_xdk import ConversationMuteParams
+
+        chat, v = self._unlocked_chat()
+
+        # The event belongs to the signer's own 111:111 conversation and names
+        # the muted one: a 1:1 id in canonical colon form, a group id as it is.
+        for conversation, muted_id in (("222-111", "111:222"), ("g999", "g999")):
+            for muted, event in ((True, "MuteConversation"), (False, "UnmuteConversation")):
+                sig = _only_action(
+                    chat.prepare_conversation_mute(
+                        ConversationMuteParams(
+                            conversation, muted, sender_id="111", signing_key_version="1"
+                        )
+                    )
+                )
+                self.assertTrue(sig["message_id"])
+                self.assertTrue(sig["encoded_message_event_detail"])
+                self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+                self.assertEqual(
+                    sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"]
+                )
+                self.assertTrue(
+                    _signs(
+                        chat,
+                        sig,
+                        f"ConversationMetadataChangeEvent.{event},{sig['message_id']},111,111:111,{muted_id}",
+                    )
+                )
+
+    def test_prepare_conversation_mute_defaults_to_the_session_identity(self):
+        from chat_xdk import ConversationMuteParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        chat.set_identity(SetIdentityParams("111", "7"))
+
+        sig = _only_action(chat.prepare_conversation_mute(ConversationMuteParams("g999", True)))
+
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
+        self.assertTrue(
+            _signs(
+                chat,
+                sig,
+                f"ConversationMetadataChangeEvent.MuteConversation,{sig['message_id']},111,111:111,g999",
+            )
+        )
+
+    def test_prepare_conversation_mute_rejects_an_empty_conversation_id(self):
+        from chat_xdk import ConversationMuteParams
+
+        chat, v = self._unlocked_chat()
+
+        with self.assertRaisesRegex(ValueError, "conversation_id is empty"):
+            chat.prepare_conversation_mute(
+                ConversationMuteParams("", True, sender_id="111", signing_key_version="1")
+            )
+
     def test_prepare_mark_conversation_read_shape(self):
         from chat_xdk import MarkConversationReadParams
 
@@ -1556,6 +1698,63 @@ class TestApiShapes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "seen_until_sequence_id is empty"):
             chat.prepare_mark_conversation_read(
                 MarkConversationReadParams("g999", "", sender_id="111", signing_key_version="1")
+            )
+
+    def test_prepare_conversation_archive_signs_archive_and_unarchive(self):
+        from chat_xdk import ConversationArchiveParams
+
+        chat, v = self._unlocked_chat()
+
+        # A 1:1 id is signed in its canonical colon form, a group id as it is;
+        # the payload ends at the conversation id.
+        for conversation, signed in (("222-111", "111:222"), ("g999", "g999")):
+            for archived, event in ((True, "ArchiveConversation"), (False, "UnarchiveConversation")):
+                sig = _only_action(
+                    chat.prepare_conversation_archive(
+                        ConversationArchiveParams(
+                            conversation, archived, sender_id="111", signing_key_version="1"
+                        )
+                    )
+                )
+                self.assertTrue(sig["message_id"])
+                self.assertTrue(sig["encoded_message_event_detail"])
+                self.assertEqual(sig["message_event_signature"]["public_key_version"], "1")
+                self.assertEqual(
+                    sig["message_event_signature"]["signing_public_key"], v["signing_public_b64"]
+                )
+                self.assertTrue(
+                    _signs(
+                        chat,
+                        sig,
+                        f"ConversationMetadataChangeEvent.{event},{sig['message_id']},111,{signed}",
+                    )
+                )
+
+    def test_prepare_conversation_archive_defaults_to_the_session_identity(self):
+        from chat_xdk import ConversationArchiveParams, SetIdentityParams
+
+        chat, v = self._unlocked_chat()
+        chat.set_identity(SetIdentityParams("111", "7"))
+
+        sig = _only_action(chat.prepare_conversation_archive(ConversationArchiveParams("g999", True)))
+
+        self.assertEqual(sig["message_event_signature"]["public_key_version"], "7")
+        self.assertTrue(
+            _signs(
+                chat,
+                sig,
+                f"ConversationMetadataChangeEvent.ArchiveConversation,{sig['message_id']},111,g999",
+            )
+        )
+
+    def test_prepare_conversation_archive_rejects_an_empty_conversation_id(self):
+        from chat_xdk import ConversationArchiveParams
+
+        chat, v = self._unlocked_chat()
+
+        with self.assertRaisesRegex(ValueError, "conversation_id is empty"):
+            chat.prepare_conversation_archive(
+                ConversationArchiveParams("", True, sender_id="111", signing_key_version="1")
             )
 
     def test_prepare_conversation_key_change_derives_one_to_one_id(self):

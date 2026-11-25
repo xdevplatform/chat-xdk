@@ -196,6 +196,10 @@ type ReplyOptions struct {
 	// ReplyToCkces are raw base64 key-change events needed to decrypt the
 	// original when it used a different key version than this reply.
 	ReplyToCkces []string
+	// ReplyToAttachmentID is the attachment_id of the one attachment of
+	// ReplyToEvent to reply to, such as one photo of an album; the preview
+	// quotes only that attachment. Empty replies to the whole message.
+	ReplyToAttachmentID string
 	// Entities are (start, end, type) byte ranges within the text.
 	Entities []chatxdk.EntityTuple
 	// Attachments are attachment descriptors. Each file names the media
@@ -229,7 +233,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	}
 	var payload *chatxdk.SendPayload
 	var err error
-	if opts.ReplyToEvent == "" {
+	if opts.ReplyToEvent == "" && opts.ReplyToAttachmentID == "" {
 		payload, err = c.chat.EncryptMessage(chatxdk.EncryptMessageParams{
 			ConversationID:         conversationID,
 			Text:                   text,
@@ -246,6 +250,7 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 			Text:                   text,
 			ReplyToEvent:           opts.ReplyToEvent,
 			ReplyToCkces:           opts.ReplyToCkces,
+			ReplyToAttachmentID:    opts.ReplyToAttachmentID,
 			ConversationKey:        opts.ConversationKey,
 			ConversationKeyVersion: opts.ConversationKeyVersion,
 			Entities:               opts.Entities,
@@ -267,25 +272,90 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	}, nil
 }
 
+// ForwardOptions are the optional parameters for EncryptForward.
+type ForwardOptions struct {
+	// ForwardedEntities are the (start, end, type) byte ranges of the
+	// forwarded message's text.
+	ForwardedEntities []chatxdk.EntityTuple
+	// Text is a comment sent with the forward; Entities are its byte ranges.
+	Text     string
+	Entities []chatxdk.EntityTuple
+	// Attachments are the original's attachments, each file uploaded again
+	// to this conversation; encrypt the files afterwards with EncryptMedia
+	// and the returned body's EventB64.
+	Attachments []chatxdk.AttachmentDescriptor
+	// ConversationKey/ConversationKeyVersion override the SDK's cached key.
+	ConversationKey        []byte
+	ConversationKeyVersion string
+}
+
+// EncryptForward encrypts + signs a forward of an existing message under the
+// session identity, as the X apps' forward sheet sends it. forwardedText is
+// the full text of the message being forwarded, empty for one with only
+// attachments. The original travels as the message's forwarded_message, the
+// comment as its text, and the message is marked as sent from the forward
+// sheet. opts may be nil.
+func (c *ChatCore) EncryptForward(conversationID, forwardedText string, opts *ForwardOptions) (*SendBody, error) {
+	if opts == nil {
+		opts = &ForwardOptions{}
+	}
+	payload, err := c.chat.EncryptForward(chatxdk.EncryptForwardParams{
+		ConversationID:         conversationID,
+		ForwardedText:          forwardedText,
+		ForwardedEntities:      opts.ForwardedEntities,
+		Text:                   opts.Text,
+		Entities:               opts.Entities,
+		Attachments:            opts.Attachments,
+		ConversationKey:        opts.ConversationKey,
+		ConversationKeyVersion: opts.ConversationKeyVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SendBody{
+		// The SDK generates the message id and returns it in the payload.
+		MessageID:                    payload.MessageID,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
+		XdkVersion:                   payload.XdkVersion,
+		EventB64:                     payload.EventB64,
+	}, nil
+}
+
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
-	return c.encryptReaction(true, targetEventB64, emoji, conversationKey, conversationKeyVersion)
+	return c.encryptReaction(true, targetEventB64, "", emoji, conversationKey, conversationKeyVersion)
 }
 
 // EncryptRemoveReaction encrypts + signs a reaction remove targeting a raw
 // event. conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptRemoveReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
-	return c.encryptReaction(false, targetEventB64, emoji, conversationKey, conversationKeyVersion)
+	return c.encryptReaction(false, targetEventB64, "", emoji, conversationKey, conversationKeyVersion)
 }
 
-func (c *ChatCore) encryptReaction(add bool, targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+// EncryptAddReactionToAttachment is EncryptAddReaction for one attachment of
+// the target: targetAttachmentID is the attachment_id of an attachment the
+// raw event carries, such as one photo of an album. The SDK decrypts the
+// event to check the attachment is in it.
+func (c *ChatCore) EncryptAddReactionToAttachment(targetEventB64, targetAttachmentID, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+	return c.encryptReaction(true, targetEventB64, targetAttachmentID, emoji, conversationKey, conversationKeyVersion)
+}
+
+// EncryptRemoveReactionToAttachment removes a reaction that
+// EncryptAddReactionToAttachment added, with the same targetAttachmentID.
+func (c *ChatCore) EncryptRemoveReactionToAttachment(targetEventB64, targetAttachmentID, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
+	return c.encryptReaction(false, targetEventB64, targetAttachmentID, emoji, conversationKey, conversationKeyVersion)
+}
+
+func (c *ChatCore) encryptReaction(add bool, targetEventB64, targetAttachmentID, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {
 	// The conversation id and target sequence id derive from the raw event.
 	params := chatxdk.EncryptReactionParams{
 		TargetEvent:            targetEventB64,
 		Emoji:                  emoji,
 		ConversationKey:        conversationKey,
 		ConversationKeyVersion: conversationKeyVersion,
+		TargetAttachmentID:     targetAttachmentID,
 	}
 	encrypt := c.chat.EncryptAddReaction
 	if !add {
@@ -453,6 +523,34 @@ func (c *ChatCore) PrepareGroupTitleChange(conversationID, title string, convers
 // conversation.
 func (c *ChatCore) Decrypt(ciphertextB64 string, conversationKey []byte) (string, error) {
 	return c.chat.Decrypt(ciphertextB64, conversationKey)
+}
+
+// -- Conversation archive ---------------------------------------------------------
+
+// PrepareConversationArchive signs archiving (archived true) or unarchiving
+// (false) a conversation, group or one-to-one. Send ActionSignatures on
+// POST /2/chat/conversations/{id}/archive to archive, or on DELETE of the
+// same path to unarchive. Signed with the SetIdentity session identity.
+func (c *ChatCore) PrepareConversationArchive(conversationID string, archived bool) (*chatxdk.PreparedAction, error) {
+	return c.chat.PrepareConversationArchive(chatxdk.ConversationArchiveParams{
+		ConversationID: conversationID,
+		Archived:       archived,
+	})
+}
+
+// -- Conversation mute ------------------------------------------------------------
+
+// PrepareConversationMute signs muting (muted true) or unmuting (false) a
+// conversation, group or one-to-one, for this bot alone. The event is signed
+// in the bot's own "{userID}:{userID}" conversation and names conversationID
+// in canonical colon form; send ActionSignatures with a mute or unmute
+// request that names the conversation in that same form. Signed with the
+// SetIdentity session identity.
+func (c *ChatCore) PrepareConversationMute(conversationID string, muted bool) (*chatxdk.PreparedAction, error) {
+	return c.chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+		ConversationID: conversationID,
+		Muted:          muted,
+	})
 }
 
 // MessageText returns the plain text of a decrypted Message event, or "".

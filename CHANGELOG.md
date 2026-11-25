@@ -6,6 +6,61 @@
 
 - .NET: build and bundle the `linux-musl-x64` native library in the NuGet package, enabling deployment on Alpine Linux and other musl-based .NET runtimes (#21).
 
+## [0.7.7] - 2026-11-24
+
+### Added
+
+- `prepare_conversation_archive` (`prepareConversationArchive`,
+  `PrepareConversationArchive`) signs archiving or unarchiving a conversation,
+  group or one-to-one, so API clients can pass `action_signatures` to
+  `POST` / `DELETE /2/chat/conversations/{id}/archive`. It takes a
+  `ConversationArchiveParams` (`conversation_id`, `archived`, and the usual
+  optional `sender_id` / `signing_key_version`) in every binding, and returns a
+  `PreparedAction` with one signature, signed as X clients sign an archive: a
+  `ConversationMetadataChangeEvent` with an `ArchiveConversation` or
+  `UnarchiveConversation` change and no ids. The C ABI gains
+  `chat_xdk_prepare_conversation_archive`.
+  [API.md](docs/API.md#prepare_conversation_archive) shows the call in every
+  binding, and each example's crypto core wraps it with an offline test.
+- `decrypt_events` and `decrypt_event` verify archive and unarchive events and
+  return them as a `SettingsChange` of `archived` or `unarchived`, where they
+  came back as `unknown` and, on the default policy, failed verification.
+- `prepare_conversation_mute` (`prepareConversationMute`,
+  `PrepareConversationMute`) signs muting or unmuting a conversation, group or
+  one-to-one, for the signer alone, so API clients can pass
+  `action_signatures` with a mute or unmute request. It takes a
+  `ConversationMuteParams` (`conversation_id`, `muted`, and the usual optional
+  `sender_id` / `signing_key_version`) in every binding, and returns a
+  `PreparedAction` with one signature, signed as X clients sign a mute: a
+  `ConversationMetadataChangeEvent` with a `MuteConversation` or
+  `UnmuteConversation` change naming the conversation, in canonical colon form
+  for a one-to-one, sent in the signer's own `{sender_id}:{sender_id}`
+  conversation. The request has to name the conversation in that same form.
+  The C ABI gains `chat_xdk_prepare_conversation_mute`.
+  [API.md](docs/API.md#prepare_conversation_mute) shows the call in every
+  binding.
+- Replies and reactions can target one attachment of a message, such as one
+  photo of an album: `reply_to_attachment_id` on `EncryptReplyParams` and
+  `target_attachment_id` on `EncryptReactionParams`, in every binding
+  (`replyToAttachmentId` / `targetAttachmentId` in JS and the JVM,
+  `ReplyToAttachmentID` / `TargetAttachmentID` in Go, `ReplyToAttachmentId` /
+  `TargetAttachmentId` in .NET). Each needs the raw event, which the SDK
+  decrypts to check the attachment is in it; an id it does not carry fails
+  with an invalid-input error that lists the ids it does. A reply to one
+  attachment quotes only that attachment, and recipients mark its preview
+  invalid when the original doesn't carry it. Decrypted reactions and
+  reaction removals carry `target_attachment_id`, and reply previews
+  `replying_to_attachment_id`, when set.
+- `encrypt_forward` (`encryptForward` in JS and the JVM, `EncryptForward` in
+  Go and .NET) sends an existing message on as a new message, as the X apps'
+  forward sheet does. `EncryptForwardParams` takes the conversation to
+  forward to and the original's full text, plus its entities, an optional
+  comment with its own entities, and the original's attachments uploaded
+  again to this conversation. The original travels as the message's
+  `forwarded_message` and the message is marked as sent from the forward
+  sheet. A forward with no text and no attachments fails with
+  `InvalidInput`.
+
 ## [0.7.6] - 2026-11-19
 
 ### Added
@@ -1263,7 +1318,8 @@ juicebox-sdk.
   Any other data signs to the same signature bytes, and the SDK signs events
   on its own path, which this does not touch.
 
-[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.6...HEAD
+[Unreleased]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.7...HEAD
+[0.7.7]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/xdevplatform/chat-xdk/compare/v0.7.3...v0.7.4
