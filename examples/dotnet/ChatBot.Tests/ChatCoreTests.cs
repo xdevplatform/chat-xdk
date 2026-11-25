@@ -374,6 +374,30 @@ public class ChatCoreTests
             core.DecryptOne("not-valid-base64!!!", new Dictionary<string, byte[]>()));
     }
 
+    [Theory]
+    [InlineData(true, "Archived")]
+    [InlineData(false, "Unarchived")]
+    public async Task PrepareConversationArchive_Signs_Archive_And_Unarchive(bool archived, string setting)
+    {
+        // The signed action is sendable as it is, and a recipient verifies it
+        // as the setting it signs.
+        using var user = new Party("5001");
+        var prepared = user.Core.PrepareConversationArchive("g123", archived);
+        var sig = Assert.Single(prepared.ActionSignatures);
+        Assert.False(string.IsNullOrEmpty(sig.MessageId));
+        Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+        Assert.False(string.IsNullOrEmpty(sig.MessageEventSignature.Signature));
+
+        user.Core.FetchPublicKeysWith(PublicKeysOf(new List<string>(), user));
+        var result = await user.Core.DecryptBatchAsync(
+            new[] { DeliveredAction(sig, user.UserId, "g123", "2100000000000000000") });
+        Assert.Empty(result.Errors);
+        var evt = Assert.Single(result.Events).Event;
+        Assert.Equal("SettingsChange", evt.GetProperty("type").GetString());
+        Assert.True(evt.GetProperty("verified").GetBoolean());
+        Assert.Equal(setting, evt.GetProperty("change").GetProperty("setting").GetString());
+    }
+
     [Fact]
     public async Task PrepToRequest_Maps_The_Rest_Shape()
     {

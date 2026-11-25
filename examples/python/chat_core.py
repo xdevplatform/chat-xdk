@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 from chat_xdk import (
     Chat,
+    ConversationArchiveParams,
     ConversationKeyChangeParams,
     DecryptEventParams,
     DecryptEventsParams,
@@ -561,6 +562,21 @@ class ChatCore:
     def decrypt(self, ciphertext_b64: str, conversation_key: bytes) -> str:
         """Decrypt a group title or description the X API returns."""
         return self.chat.decrypt(ciphertext_b64, conversation_key)
+
+    # -- Conversation archive -------------------------------------------------
+
+    def prepare_conversation_archive(self, conversation_id: str, archived: bool) -> dict[str, Any]:
+        """Sign archiving (``archived=True``) or unarchiving (``False``) a
+        conversation, group or one-to-one.
+
+        Send the result's ``action_signatures`` on
+        ``POST /2/chat/conversations/{id}/archive`` to archive, or on
+        ``DELETE`` of the same path to unarchive. Signed with the
+        ``set_identity`` session identity.
+        """
+        return self.chat.prepare_conversation_archive(
+            ConversationArchiveParams(conversation_id, archived)
+        )
 
     def close(self) -> None:
         """Clear the keys from memory, when the chat's user signs out. The
