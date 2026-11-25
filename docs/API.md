@@ -1970,6 +1970,88 @@ same `target_attachment_id`. On decrypt, a reaction or reaction removal
 carries it as `target_attachment_id` (`targetAttachmentId` in JS) and a reply
 preview as `replying_to_attachment_id`, omitted when unset.
 
+The ids come from the decrypted original's `attachments`, each entry's
+`attachment_id` (`attachmentId` in JS). v1 sends, this SDK's included, give
+every attachment one; v0 sends carry none, so their attachments can't be
+targeted.
+
+```rust
+// Rust
+let reply = chat.encrypt_reply(
+    &EncryptReplyParams::new(conversation_id, "this one", original_event_b64)
+        .with_reply_to_attachment_id(attachment_id),
+)?;
+let params = EncryptReactionParams::new(original_event_b64, "👍").with_target_attachment_id(attachment_id);
+let reaction = chat.encrypt_add_reaction(&params)?;
+let removal = chat.encrypt_remove_reaction(&params)?; // the same attachment
+```
+
+```typescript
+// JS — decrypted: content.replyingToPreview.replyingToAttachmentId, content.targetAttachmentId
+const reply = chat.encryptReply({
+  conversationId,
+  text: "this one",
+  replyToEvent: originalEventB64,
+  replyToAttachmentId: attachmentId,
+});
+const reaction = chat.encryptAddReaction({
+  emoji: "👍",
+  targetEvent: originalEventB64,
+  targetAttachmentId: attachmentId,
+});
+```
+
+```python
+# Python — decrypted: content["replying_to_preview"]["replying_to_attachment_id"],
+# content["target_attachment_id"]
+reply = chat.encrypt_reply(
+    EncryptReplyParams(
+        conversation_id, "this one", original_event_b64, reply_to_attachment_id=attachment_id
+    )
+)
+reaction = chat.encrypt_add_reaction(
+    EncryptReactionParams(original_event_b64, "👍", target_attachment_id=attachment_id)
+)
+```
+
+```go
+// Go — decrypted: Content.ReactionContent.TargetAttachmentID; the reply's
+// TextContent.ReplyingToPreview JSON carries replying_to_attachment_id
+reply, err := chat.EncryptReply(chatxdk.EncryptReplyParams{
+    ConversationID:      conversationID,
+    Text:                "this one",
+    ReplyToEvent:        originalEventB64,
+    ReplyToAttachmentID: attachmentID,
+})
+reaction, err := chat.EncryptAddReaction(chatxdk.EncryptReactionParams{
+    TargetEvent:        originalEventB64,
+    Emoji:              "👍",
+    TargetAttachmentID: attachmentID,
+})
+```
+
+```java
+// JVM
+EncryptReplyParams replyParams = new EncryptReplyParams(conversationId, "this one", originalEventB64);
+replyParams.replyToAttachmentId = attachmentId;
+SendPayload reply = chat.encryptReply(replyParams);
+EncryptReactionParams reactionParams = new EncryptReactionParams(originalEventB64, "👍");
+reactionParams.targetAttachmentId = attachmentId;
+SendPayload reaction = chat.encryptAddReaction(reactionParams);
+```
+
+```csharp
+// .NET
+var reply = chat.EncryptReply(new EncryptReplyParams(conversationId, "this one", originalEventB64)
+{
+    ReplyToAttachmentId = attachmentId,
+});
+var reaction = chat.EncryptAddReaction(new EncryptReactionParams(originalEventB64, "👍")
+{
+    TargetAttachmentId = attachmentId,
+});
+```
+
 **Reactions are event-based too.** `EncryptReactionParams` (shared by add and
 remove — the same params value can add and later remove the same reaction)
 requires `emoji` plus a target: pass `target_event`, the base64 raw event
