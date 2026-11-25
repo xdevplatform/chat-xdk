@@ -2,21 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- `prepare_conversation_mute` (`prepareConversationMute`,
-  `PrepareConversationMute`) signs muting or unmuting a conversation, group or
-  one-to-one, for the signer alone, so API clients can pass
-  `action_signatures` with a mute or unmute request. It takes a
-  `ConversationMuteParams` (`conversation_id`, `muted`, and the usual optional
-  `sender_id` / `signing_key_version`) in every binding, and returns a
-  `PreparedAction` with one signature, signed as X clients sign a mute: a
-  `ConversationMetadataChangeEvent` with a `MuteConversation` or
-  `UnmuteConversation` change naming the conversation, in canonical colon form
-  for a one-to-one, sent in the signer's own `{sender_id}:{sender_id}`
-  conversation. The request has to name the conversation in that same form.
-  The C ABI gains `chat_xdk_prepare_conversation_mute`.
-
 ## [0.7.6] - 2026-11-19
 
 ### Added
