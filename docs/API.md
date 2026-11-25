@@ -952,6 +952,56 @@ ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sende
 ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{conversation_id}
 ```
 
+```rust
+// Rust
+let mute = chat.prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, true))?;
+let unmute = chat.prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, false))?;
+// mute.action_signatures / unmute.action_signatures: one entry each
+```
+
+```typescript
+// JS
+const mute = chat.prepareConversationMute({ conversationId, muted: true });
+const unmute = chat.prepareConversationMute({ conversationId, muted: false });
+// mute.actionSignatures / unmute.actionSignatures: one entry each
+```
+
+```python
+# Python
+from chat_xdk import ConversationMuteParams
+
+mute = chat.prepare_conversation_mute(ConversationMuteParams(conversation_id, True))
+unmute = chat.prepare_conversation_mute(ConversationMuteParams(conversation_id, False))
+# mute["action_signatures"] / unmute["action_signatures"]: one entry each
+```
+
+```go
+// Go — Muted false, the zero value, signs an unmute
+mute, err := chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+    ConversationID: conversationID,
+    Muted:          true,
+})
+unmute, err := chat.PrepareConversationMute(chatxdk.ConversationMuteParams{
+    ConversationID: conversationID,
+    Muted:          false,
+})
+// mute.ActionSignatures / unmute.ActionSignatures: one entry each
+```
+
+```java
+// JVM
+PreparedAction mute = chat.prepareConversationMute(new ConversationMuteParams(conversationId, true));
+PreparedAction unmute = chat.prepareConversationMute(new ConversationMuteParams(conversationId, false));
+// mute.actionSignatures / unmute.actionSignatures: one entry each
+```
+
+```csharp
+// .NET
+PreparedAction mute = chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted: true));
+PreparedAction unmute = chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted: false));
+// mute.ActionSignatures / unmute.ActionSignatures: one entry each
+```
+
 `decrypt_events` and `decrypt_event` verify the event, delivered in the self
 conversation, and return it as a `SettingsChange` of `muted` or `unmuted`.
 

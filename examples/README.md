@@ -17,7 +17,8 @@ reply (a simple echo), encrypts the reply, and sends it back.
 The bots deliberately stop at that messaging core. The rest of the SDK surface
 — group management (`prepareGroupCreate` / `prepareGroupMembersChange` /
 `prepareGroupMembersRemove`),
-reactions (`encryptAddReaction` / `encryptRemoveReaction`), media files
+reactions (`encryptAddReaction` / `encryptRemoveReaction`), muting and
+unmuting a conversation (`prepareConversationMute`), media files
 (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`), and files
 under a key such as group avatars (`encryptFileWithKey` / `decryptFileWithKey`)
 — is documented in

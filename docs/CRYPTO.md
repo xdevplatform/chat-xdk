@@ -644,6 +644,7 @@ canonical id as the one field after it:
 
 ```
 "ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+"ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
 ```
 
 #### Verifying newer versions
