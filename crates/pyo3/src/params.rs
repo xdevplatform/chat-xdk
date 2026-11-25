@@ -110,6 +110,104 @@ impl EncryptMessageParams {
     }
 }
 
+/// Parameters for ``Chat.encrypt_forward``.
+///
+/// A forward is a new message carrying another message: its full text and
+/// entities as ``forwarded_text`` and ``forwarded_entities``, and its
+/// attachments, each file uploaded again to this conversation, as
+/// ``attachments``. ``text`` is an optional comment. Identity and key fields
+/// resolve like ``EncryptMessageParams``.
+#[pyclass(get_all, set_all)]
+pub struct EncryptForwardParams {
+    /// ID of the conversation the message is forwarded to.
+    pub(crate) conversation_id: String,
+    /// The full text of the message being forwarded; ``""`` when it has none.
+    pub(crate) forwarded_text: String,
+    /// ``(start, end, entity_type)`` tuples of the forwarded message, as
+    /// UTF-8 byte offsets into ``forwarded_text``.
+    pub(crate) forwarded_entities: Option<Py<PyAny>>,
+    /// Optional comment sent with the forward.
+    pub(crate) text: Option<String>,
+    /// ``(start, end, entity_type)`` tuples of the comment, as UTF-8 byte
+    /// offsets into ``text``.
+    pub(crate) entities: Option<Py<PyAny>>,
+    /// The forwarded message's attachment dicts, as for
+    /// ``EncryptMessageParams.attachments``, each file uploaded again to
+    /// this conversation.
+    pub(crate) attachments: Option<Py<PyAny>>,
+    /// Your user ID; defaults to the ``set_identity`` value.
+    pub(crate) sender_id: Option<String>,
+    /// Your registered signing public key version; defaults to the
+    /// ``set_identity`` value.
+    pub(crate) signing_key_version: Option<String>,
+    /// Raw 32-byte conversation key (``bytes``); set it together with
+    /// ``conversation_key_version``.
+    pub(crate) conversation_key: Option<Vec<u8>>,
+    /// Version of the conversation key, as its key-change event carries it.
+    pub(crate) conversation_key_version: Option<String>,
+    /// Whether to send a push notification (default ``True``).
+    pub(crate) should_notify: Option<bool>,
+    /// TTL in milliseconds for disappearing messages.
+    pub(crate) ttl_msec: Option<i64>,
+}
+
+#[pymethods]
+impl EncryptForwardParams {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (conversation_id, forwarded_text, *, forwarded_entities=None, text=None, entities=None, attachments=None, sender_id=None, signing_key_version=None, conversation_key=None, conversation_key_version=None, should_notify=None, ttl_msec=None))]
+    pub(crate) fn new(
+        conversation_id: String,
+        forwarded_text: String,
+        forwarded_entities: Option<Py<PyAny>>,
+        text: Option<String>,
+        entities: Option<Py<PyAny>>,
+        attachments: Option<Py<PyAny>>,
+        sender_id: Option<String>,
+        signing_key_version: Option<String>,
+        conversation_key: Option<Vec<u8>>,
+        conversation_key_version: Option<String>,
+        should_notify: Option<bool>,
+        ttl_msec: Option<i64>,
+    ) -> Self {
+        Self {
+            conversation_id,
+            forwarded_text,
+            forwarded_entities,
+            text,
+            entities,
+            attachments,
+            sender_id,
+            signing_key_version,
+            conversation_key,
+            conversation_key_version,
+            should_notify,
+            ttl_msec,
+        }
+    }
+}
+
+impl EncryptForwardParams {
+    pub(crate) fn to_core(&self, py: Python<'_>) -> PyResult<chat_xdk_core::EncryptForwardParams> {
+        let mut params = chat_xdk_core::EncryptForwardParams::new(
+            self.conversation_id.as_str(),
+            self.forwarded_text.as_str(),
+        );
+        params.forwarded_entities =
+            entities_field(py, &self.forwarded_entities, "forwarded_entities")?;
+        params.text = self.text.clone().filter(|t| !t.is_empty());
+        params.entities = entities_field(py, &self.entities, "entities")?;
+        params.attachments = attachments_field(py, &self.attachments, "attachments")?;
+        params.sender_id = self.sender_id.clone();
+        params.signing_key_version = self.signing_key_version.clone();
+        params.conversation_key = self.conversation_key.clone();
+        params.conversation_key_version = self.conversation_key_version.clone();
+        params.should_notify = self.should_notify;
+        params.ttl_msec = self.ttl_msec;
+        Ok(params)
+    }
+}
+
 /// Parameters for ``Chat.encrypt_reply``.
 ///
 /// The preferred form passes ``reply_to_event`` — the base64 raw signed event

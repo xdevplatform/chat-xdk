@@ -272,6 +272,47 @@ export class ChatCore {
   }
 
   /**
+   * Encrypt + sign a forward of an existing message, as the X apps' forward
+   * sheet sends it. `forwardedText` is the full text of the message being
+   * forwarded (empty for one with only attachments) and `forwardedEntities`
+   * its entities; `text` is an optional comment with its own `entities`;
+   * `attachments` are the original's attachments, each file uploaded again to
+   * this conversation. The original travels as the message's
+   * `forwardedMessage`, the comment as its text, and the message is marked as
+   * sent from the forward sheet. The conversation key pair is optional once
+   * the cache is enabled.
+   */
+  encryptForward({
+    conversationId,
+    forwardedText,
+    forwardedEntities,
+    text,
+    entities,
+    attachments,
+    conversationKey,
+    conversationKeyVersion,
+  }) {
+    const payload = this.#chat.encryptForward({
+      conversationId,
+      forwardedText,
+      forwardedEntities,
+      text,
+      entities,
+      attachments,
+      conversationKey,
+      conversationKeyVersion,
+    });
+    return {
+      // The SDK generates the message id and returns it in the payload.
+      message_id: payload.messageId,
+      encoded_message_create_event: payload.encodedMessageCreateEvent,
+      encoded_message_event_signature: payload.encodedMessageEventSignature,
+      xdk_version: payload.xdkVersion,
+      event_b64: payload.eventB64,
+    };
+  }
+
+  /**
    * Encrypt + sign a reaction add/remove. `targetEvent` is the base64 raw
    * event being reacted to; the conversation id and target sequence id are
    * derived from it. `targetAttachmentId` reacts to one attachment of

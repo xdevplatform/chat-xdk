@@ -16,9 +16,9 @@ use crate::keys::keypair_manager::KeypairManager;
 use crate::params::{
     ConversationKeyChangeParams, DecryptEventParams, DecryptEventsParams, DecryptFileParams,
     DecryptFileWithKeyParams, EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams,
-    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
-    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, ImportKeysParams,
-    MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
+    EncryptForwardParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
+    FileDecryptorParams, FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams,
+    ImportKeysParams, MarkConversationReadParams, MessageDeleteParams, SetIdentityParams,
 };
 use crate::protocol::serialization::{base64_decode, base64_encode};
 use crate::thrift::event::{MessageEvent, MessageEventDetail};

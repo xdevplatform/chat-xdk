@@ -391,6 +391,36 @@ class EncryptMessageParams:
         ttl_msec: Optional[int] = None,
     ) -> None: ...
 
+class EncryptForwardParams:
+    conversation_id: str
+    forwarded_text: str
+    forwarded_entities: Optional[list[tuple[int, int, str]]]
+    text: Optional[str]
+    entities: Optional[list[tuple[int, int, str]]]
+    attachments: Optional[list[dict]]
+    sender_id: Optional[str]
+    signing_key_version: Optional[str]
+    conversation_key: Optional[bytes]
+    conversation_key_version: Optional[str]
+    should_notify: Optional[bool]
+    ttl_msec: Optional[int]
+    def __init__(
+        self,
+        conversation_id: str,
+        forwarded_text: str,
+        *,
+        forwarded_entities: Optional[list[tuple[int, int, str]]] = None,
+        text: Optional[str] = None,
+        entities: Optional[list[tuple[int, int, str]]] = None,
+        attachments: Optional[list[dict]] = None,
+        sender_id: Optional[str] = None,
+        signing_key_version: Optional[str] = None,
+        conversation_key: Optional[bytes] = None,
+        conversation_key_version: Optional[str] = None,
+        should_notify: Optional[bool] = None,
+        ttl_msec: Optional[int] = None,
+    ) -> None: ...
+
 class EncryptReplyParams:
     conversation_id: str
     text: str
@@ -1079,6 +1109,7 @@ class Chat:
 
     # Message Encryption
     def encrypt_message(self, params: EncryptMessageParams) -> SendPayload: ...
+    def encrypt_forward(self, params: EncryptForwardParams) -> SendPayload: ...
     def encrypt_reply(self, params: EncryptReplyParams) -> SendPayload: ...
     def encrypt_add_reaction(self, params: EncryptReactionParams) -> SendPayload: ...
     def encrypt_remove_reaction(self, params: EncryptReactionParams) -> SendPayload: ...

@@ -951,6 +951,27 @@ func (c *Chat) EncryptMessage(params EncryptMessageParams) (*SendPayload, error)
 	return &payload, nil
 }
 
+// EncryptForward encrypts a forward of an existing message for the X API:
+// a new message carrying the original's full text and entities, an
+// optional comment, and the original's attachments uploaded again to this
+// conversation. Its id and files work as in EncryptMessage.
+func (c *Chat) EncryptForward(params EncryptForwardParams) (*SendPayload, error) {
+	defer runtime.KeepAlive(c)
+	j, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ffiEncryptForward(c.h, string(j))
+	if err != nil {
+		return nil, err
+	}
+	var payload SendPayload
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
 // EncryptReply encrypts a reply message for the X API. The reply's id and
 // files work as in EncryptMessage.
 func (c *Chat) EncryptReply(params EncryptReplyParams) (*SendPayload, error) {

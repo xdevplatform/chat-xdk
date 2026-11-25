@@ -979,3 +979,156 @@ fn every_send_rejects_a_file_without_a_name_or_a_size() {
         }
     }
 }
+
+// Forwards
+
+fn forward_test_core() -> (ChatCore, XChatConversationKey, Vec<SigningKeyEntry>) {
+    let core = ChatCore::new();
+    let reg = core.generate_keypairs().unwrap();
+    let ckey = core.generate_conversation_key().unwrap();
+    (core, ckey, vec![signing_key_entry_for(&reg, "4001")])
+}
+
+fn decrypt_forward(
+    core: &ChatCore,
+    ckey: &XChatConversationKey,
+    payload: &SendPayload,
+    signing_keys: &[SigningKeyEntry],
+) -> Message {
+    let b64 = wrap_signed_payload(payload, &payload.message_id, "4001", "conv-2");
+    let conv_keys = [("9001".to_string(), ckey.clone())].into_iter().collect();
+    match core
+        .decrypt_event_with(&b64, &conv_keys, signing_keys)
+        .unwrap()
+    {
+        Event::Message(msg) => *msg,
+        other => panic!("expected Message, got {:?}", other),
+    }
+}
+
+#[test]
+fn encrypt_forward_carries_the_original_and_the_comment() {
+    let (core, ckey, signing_keys) = forward_test_core();
+    let payload = core
+        .encrypt_forward(
+            &crate::EncryptForwardParams::new("conv-2", "see https://x.com")
+                .with_forwarded_entities(vec![crate::EntityDescriptor::new(4, 17, "url")])
+                .with_text("look at this #one")
+                .with_entities(vec![crate::EntityDescriptor::new(13, 17, "hashtag")])
+                .with_identity("4001", "61")
+                .with_conversation_key(ckey.to_bytes(), "9001"),
+        )
+        .unwrap();
+
+    let msg = decrypt_forward(&core, &ckey, &payload, &signing_keys);
+    assert!(msg.verified, "a self-signed forward must verify");
+    match &msg.content {
+        MessageContent::Text {
+            text,
+            entities,
+            forwarded_message: Some(forwarded),
+            sent_from,
+            ..
+        } => {
+            assert_eq!(text, "look at this #one");
+            assert_eq!(entities.as_ref().map(Vec::len), Some(1));
+            assert_eq!(forwarded.message_text.as_deref(), Some("see https://x.com"));
+            assert_eq!(forwarded.entities.as_ref().map(Vec::len), Some(1));
+            assert!(
+                matches!(
+                    sent_from,
+                    Some(crate::types::SentFromSurface::Known(
+                        crate::types::SentFromSurfaceKnown::MessageForwardSheet
+                    ))
+                ),
+                "{sent_from:?}"
+            );
+        }
+        other => panic!("expected Text with a forwarded message, got {:?}", other),
+    }
+}
+
+#[test]
+fn encrypt_forward_without_a_comment_or_text() {
+    let (core, ckey, signing_keys) = forward_test_core();
+    let without_comment = core
+        .encrypt_forward(
+            &crate::EncryptForwardParams::new("conv-2", "just this")
+                .with_identity("4001", "61")
+                .with_conversation_key(ckey.to_bytes(), "9001"),
+        )
+        .unwrap();
+    let msg = decrypt_forward(&core, &ckey, &without_comment, &signing_keys);
+    match &msg.content {
+        MessageContent::Text {
+            text,
+            forwarded_message: Some(forwarded),
+            ..
+        } => {
+            assert_eq!(text, "");
+            assert_eq!(forwarded.message_text.as_deref(), Some("just this"));
+        }
+        other => panic!("expected Text with a forwarded message, got {:?}", other),
+    }
+
+    // A message with only an attachment forwards with its attachment.
+    let attachment_only = core
+        .encrypt_forward(
+            &crate::EncryptForwardParams::new("conv-2", "")
+                .with_attachments(vec![crate::AttachmentDescriptor::Post {
+                    rest_id: Some("123".into()),
+                    post_url: None,
+                }])
+                .with_identity("4001", "61")
+                .with_conversation_key(ckey.to_bytes(), "9001"),
+        )
+        .unwrap();
+    let msg = decrypt_forward(&core, &ckey, &attachment_only, &signing_keys);
+    match &msg.content {
+        MessageContent::Text {
+            attachments: Some(attachments),
+            forwarded_message: Some(_),
+            ..
+        } => assert_eq!(attachments.len(), 1),
+        other => panic!("expected Text with an attachment, got {:?}", other),
+    }
+}
+
+#[test]
+fn encrypt_forward_rejects_bad_input() {
+    let (core, ckey, _) = forward_test_core();
+    let invalid = |params: crate::EncryptForwardParams| -> String {
+        match core.encrypt_forward(&params.with_identity("4001", "61")) {
+            Err(e @ SdkError::InvalidInput(_)) => e.to_string(),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    };
+    let base = |forwarded_text: &str| {
+        crate::EncryptForwardParams::new("conv-2", forwarded_text)
+            .with_conversation_key(ckey.to_bytes(), "9001")
+    };
+
+    let err = invalid(base(""));
+    assert!(err.contains("nothing to forward"), "{err}");
+    let err = invalid(base("hi").with_entities(vec![crate::EntityDescriptor::new(0, 2, "url")]));
+    assert!(err.contains("entities is set but text is empty"), "{err}");
+    let err = invalid(
+        base("hi").with_forwarded_entities(vec![crate::EntityDescriptor::new(0, 9, "url")]),
+    );
+    assert!(err.contains("9"), "{err}");
+    let err = invalid(
+        base("hi")
+            .with_text("ok")
+            .with_entities(vec![crate::EntityDescriptor::new(0, 9, "url")]),
+    );
+    assert!(err.contains("9"), "{err}");
+}
+
+#[test]
+fn encrypt_forward_params_debug_redacts_the_key() {
+    let params =
+        crate::EncryptForwardParams::new("conv-2", "hi").with_conversation_key(vec![7; 32], "9001");
+    let debug = format!("{params:?}");
+    assert!(debug.contains("[REDACTED]"), "{debug}");
+    assert!(!debug.contains("7, 7"), "{debug}");
+}

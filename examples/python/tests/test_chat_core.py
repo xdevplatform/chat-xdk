@@ -637,6 +637,34 @@ class TestPreparedChanges(unittest.TestCase):
             self.assertTrue(event["verified"])
             self.assertEqual(event["change"]["setting"], setting)
 
+    def test_encrypt_forward_round_trips_the_original_and_the_comment(self):
+        core, _ = self._core_and_keys()
+        conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
+        body = core.encrypt_forward(
+            conversation_id="1000:2000",
+            forwarded_text="the original message",
+            text="look at this",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+        )
+        sent = core.decrypt_one(
+            _delivered(body["event_b64"], "2100000000000000001"),
+            {"1": conv_key},
+            [
+                {
+                    "user_id": "1000",
+                    "public_key_version": "1",
+                    "public_key": self.vectors["signing_public_b64"],
+                    "identity_public_key": self.vectors["identity_public_b64"],
+                    "identity_public_key_signature": self.vectors["identity_public_key_signature_b64"],
+                }
+            ],
+        )
+        content = sent["content"]
+        self.assertEqual(content["text"], "look at this")
+        self.assertEqual(content["forwarded_message"]["message_text"], "the original message")
+        self.assertEqual(content["sent_from"], "MESSAGE_FORWARD_SHEET")
+
     def test_media_encrypt_decrypt_roundtrip(self):
         # The message-first media flow: the message names the file by the
         # media hash key its upload started with, the file is encrypted from

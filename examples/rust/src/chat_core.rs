@@ -24,11 +24,11 @@ use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
     AttachmentDescriptor, ChatCore as SdkCore, ConversationArchiveParams,
     ConversationKeyChangeParams, ConversationMuteParams, DecryptEventParams, DecryptEventsParams,
-    DecryptEventsResult, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-    EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams, GroupCreateParams,
-    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, PreparedAction,
-    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
+    DecryptEventsResult, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
+    EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
+    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
+    PreparedAction, PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput,
+    PublicKeyRecord, PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -63,6 +63,33 @@ pub struct ReplyOptions {
 }
 
 impl ReplyOptions {
+    /// Encrypt under `key` at `version` rather than the SDK's cached key.
+    pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
+        self.conversation_key = Some((key.clone(), version.to_string()));
+        self
+    }
+}
+
+/// Optional extras for [`ChatCore::encrypt_forward`].
+#[derive(Debug, Clone, Default)]
+pub struct ForwardOptions {
+    /// Rich-text entities of the message being forwarded, as byte ranges in
+    /// its text.
+    pub forwarded_entities: Option<Vec<EntityDescriptor>>,
+    /// A comment sent with the forward.
+    pub text: Option<String>,
+    /// Rich-text entities of the comment, as byte ranges in `text`.
+    pub entities: Option<Vec<EntityDescriptor>>,
+    /// The original's attachments, each file uploaded again to this
+    /// conversation and named by the media hash key that upload started
+    /// with; encrypt the files afterwards with [`ChatCore::encrypt_media`].
+    pub attachments: Option<Vec<AttachmentDescriptor>>,
+    /// The conversation key and its version to encrypt under, overriding
+    /// the SDK's cached key.
+    pub conversation_key: Option<(XChatConversationKey, String)>,
+}
+
+impl ForwardOptions {
     /// Encrypt under `key` at `version` rather than the SDK's cached key.
     pub fn with_conversation_key(mut self, key: &XChatConversationKey, version: &str) -> Self {
         self.conversation_key = Some((key.clone(), version.to_string()));
@@ -337,6 +364,38 @@ impl ChatCore {
                 params.ttl_msec = options.ttl_msec;
                 self.inner.encrypt_reply(&params)?
             };
+        Ok(SendBody {
+            // The SDK generates the message id and returns it in the payload.
+            message_id: payload.message_id,
+            encoded_message_create_event: payload.encoded_message_create_event,
+            encoded_message_event_signature: payload.encoded_message_event_signature,
+            xdk_version: payload.xdk_version,
+            conversation_token: None,
+            event_b64: payload.event_b64,
+        })
+    }
+
+    /// Encrypt + sign a forward of an existing message to `conversation_id`,
+    /// as the X apps' forward sheet sends it. `forwarded_text` is the full
+    /// text of the message being forwarded, empty for one with only
+    /// attachments. The original travels as the message's
+    /// `forwarded_message`, the comment in `options` as its text, and the
+    /// message is marked as sent from the forward sheet.
+    pub fn encrypt_forward(
+        &self,
+        conversation_id: &str,
+        forwarded_text: &str,
+        options: ForwardOptions,
+    ) -> Result<SendBody, SdkError> {
+        let mut params = EncryptForwardParams::new(conversation_id, forwarded_text);
+        if let Some((key, version)) = options.conversation_key {
+            params = params.with_conversation_key(key.to_bytes(), version);
+        }
+        params.forwarded_entities = options.forwarded_entities;
+        params.text = options.text;
+        params.entities = options.entities;
+        params.attachments = options.attachments;
+        let payload = self.inner.encrypt_forward(&params)?;
         Ok(SendBody {
             // The SDK generates the message id and returns it in the payload.
             message_id: payload.message_id,

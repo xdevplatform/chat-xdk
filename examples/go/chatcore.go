@@ -272,6 +272,56 @@ func (c *ChatCore) EncryptReply(conversationID, text string, opts *ReplyOptions)
 	}, nil
 }
 
+// ForwardOptions are the optional parameters for EncryptForward.
+type ForwardOptions struct {
+	// ForwardedEntities are the (start, end, type) byte ranges of the
+	// forwarded message's text.
+	ForwardedEntities []chatxdk.EntityTuple
+	// Text is a comment sent with the forward; Entities are its byte ranges.
+	Text     string
+	Entities []chatxdk.EntityTuple
+	// Attachments are the original's attachments, each file uploaded again
+	// to this conversation; encrypt the files afterwards with EncryptMedia
+	// and the returned body's EventB64.
+	Attachments []chatxdk.AttachmentDescriptor
+	// ConversationKey/ConversationKeyVersion override the SDK's cached key.
+	ConversationKey        []byte
+	ConversationKeyVersion string
+}
+
+// EncryptForward encrypts + signs a forward of an existing message under the
+// session identity, as the X apps' forward sheet sends it. forwardedText is
+// the full text of the message being forwarded, empty for one with only
+// attachments. The original travels as the message's forwarded_message, the
+// comment as its text, and the message is marked as sent from the forward
+// sheet. opts may be nil.
+func (c *ChatCore) EncryptForward(conversationID, forwardedText string, opts *ForwardOptions) (*SendBody, error) {
+	if opts == nil {
+		opts = &ForwardOptions{}
+	}
+	payload, err := c.chat.EncryptForward(chatxdk.EncryptForwardParams{
+		ConversationID:         conversationID,
+		ForwardedText:          forwardedText,
+		ForwardedEntities:      opts.ForwardedEntities,
+		Text:                   opts.Text,
+		Entities:               opts.Entities,
+		Attachments:            opts.Attachments,
+		ConversationKey:        opts.ConversationKey,
+		ConversationKeyVersion: opts.ConversationKeyVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SendBody{
+		// The SDK generates the message id and returns it in the payload.
+		MessageID:                    payload.MessageID,
+		EncodedMessageCreateEvent:    payload.EncodedMessageCreateEvent,
+		EncodedMessageEventSignature: payload.EncodedMessageEventSignature,
+		XdkVersion:                   payload.XdkVersion,
+		EventB64:                     payload.EventB64,
+	}, nil
+}
+
 // EncryptAddReaction encrypts + signs a reaction add targeting a raw event.
 // conversationKey may be nil to use the SDK's cached key.
 func (c *ChatCore) EncryptAddReaction(targetEventB64, emoji string, conversationKey []byte, conversationKeyVersion string) (*SendBody, error) {

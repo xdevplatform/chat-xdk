@@ -1523,6 +1523,37 @@ class ChatTest {
     // Failure events are unsigned by protocol: the fixture failure decodes
     // with no conversation or signing keys, and the JSON carries the
     // PascalCase discriminator values.
+    // A forward carries the original's text and entities, the comment as its
+    // own text, and is marked as sent from the forward sheet.
+    @Test
+    void encryptForwardCarriesTheOriginalAndTheComment() throws Exception {
+        JsonNode v = loadVectors();
+        try (Chat chat = new Chat()) {
+            chat.importKeys(new ImportKeysParams(b64(v, "private_keys_concat_b64")));
+            chat.setIdentity(new SetIdentityParams(
+                    v.get("event_sender_id").asText(), v.get("event_signing_key_version").asText()));
+            byte[] key = b64(v, "conversation_key_b64");
+            String version = v.get("event_conversation_key_version").asText();
+
+            EncryptForwardParams forward = new EncryptForwardParams("conv-1", "see https://x.com");
+            forward.forwardedEntities = List.of(new EntityDescriptor(4, 17, "url"));
+            forward.text = "look";
+            forward.conversationKey = key;
+            forward.conversationKeyVersion = version;
+            JsonNode content = decryptedContent(chat, v, chat.encryptForward(forward).eventB64);
+            assertEquals("look", content.path("text").asText());
+            assertEquals("see https://x.com", content.path("forwarded_message").path("message_text").asText());
+            assertEquals(1, content.path("forwarded_message").path("entities").size());
+            assertEquals("MESSAGE_FORWARD_SHEET", content.path("sent_from").asText());
+
+            EncryptForwardParams empty = new EncryptForwardParams("conv-1", "");
+            empty.conversationKey = key;
+            empty.conversationKeyVersion = version;
+            ChatXdkException ex = assertThrows(ChatXdkException.class, () -> chat.encryptForward(empty));
+            assertTrue(ex.getMessage().contains("nothing to forward"), ex.getMessage());
+        }
+    }
+
     // Reactions and edits name their target by its sequence id; a v0 edit
     // carries no target message id.
     @Test

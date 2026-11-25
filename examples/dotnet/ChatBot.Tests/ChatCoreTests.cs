@@ -540,6 +540,34 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public async Task EncryptForward_Round_Trips_The_Original_And_The_Comment()
+    {
+        // A user rotates a group's key and forwards a message under it, then
+        // reads the page back: the key change, then the forward.
+        using var user = new Party("5001");
+        var prepared = await user.Core.PrepareConversationKeyChangeAsync(new[] { user.PublicKey }, "g900");
+        var keyChange = DeliveredAction(prepared.ActionSignatures[0], user.UserId, "g900", "2100000000000000000");
+        var body = user.Core.EncryptForward(
+            "g900",
+            "the original message",
+            text: "look at this",
+            conversationKey: prepared.ConversationKey,
+            conversationKeyVersion: prepared.ConversationKeyVersion);
+        user.Core.FetchPublicKeysWith(PublicKeysOf(new List<string>(), user));
+
+        var result = await user.Core.DecryptBatchAsync(
+            new[] { keyChange, Delivered(body.EventB64, "2100000000000000001") });
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, result.Events.Count);
+        var content = result.Events[1].Event.GetProperty("content");
+        Assert.Equal("look at this", content.GetProperty("text").GetString());
+        Assert.Equal(
+            "the original message",
+            content.GetProperty("forwarded_message").GetProperty("message_text").GetString());
+        Assert.Equal("MESSAGE_FORWARD_SHEET", content.GetProperty("sent_from").GetString());
+    }
+
+    [Fact]
     public void Media_Encrypt_Decrypt_Roundtrip()
     {
         // The message-first media flow: the message names the file by the media

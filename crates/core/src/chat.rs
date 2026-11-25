@@ -84,14 +84,14 @@ use crate::keys::juicebox::{JuiceboxApi, JuiceboxClient, JuiceboxConfig, Registe
 use crate::params::{
     ConversationArchiveParams, ConversationKeyChangeParams, ConversationMuteParams,
     DecryptEventParams, DecryptEventsParams, DecryptFileParams, DecryptFileWithKeyParams,
-    EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, FileDecryptorParams, FileEncryptorParams,
-    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
-    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
-    SetIdentityParams,
+    EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams, EncryptForwardParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
+    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 #[cfg(feature = "juicebox")]
 use crate::types::*;
@@ -398,6 +398,11 @@ impl Chat {
     /// Encrypt a text message.
     pub fn encrypt_message(&self, params: &EncryptMessageParams) -> Result<SendPayload, SdkError> {
         self.inner.encrypt_message(params)
+    }
+    /// Encrypt a forward of an existing message; see
+    /// [`crate::ChatCore::encrypt_forward`].
+    pub fn encrypt_forward(&self, params: &EncryptForwardParams) -> Result<SendPayload, SdkError> {
+        self.inner.encrypt_forward(params)
     }
     /// Encrypt a reply.
     pub fn encrypt_reply(&self, params: &EncryptReplyParams) -> Result<SendPayload, SdkError> {

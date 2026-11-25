@@ -18,6 +18,7 @@ The bots deliberately stop at that messaging core. The rest of the SDK surface
 — group management (`prepareGroupCreate` / `prepareGroupMembersChange` /
 `prepareGroupMembersRemove`), archiving and unarchiving a conversation
 (`prepareConversationArchive`),
+forwards (`encryptForward`),
 reactions (`encryptAddReaction` / `encryptRemoveReaction`), muting and
 unmuting a conversation (`prepareConversationMute`), media files
 (`encryptFile` / `fileEncryptor` / `decryptFile` / `fileDecryptor`), and files

@@ -343,6 +343,45 @@ public final class ChatCore implements AutoCloseable {
                 payload.eventB64);
     }
 
+    /**
+     * Encrypt + sign a forward of an existing message, as the X apps' forward sheet
+     * sends it. {@code forwardedText} is the full text of the message being forwarded
+     * (empty for one with only attachments) and {@code forwardedEntities} its entities;
+     * {@code text} is an optional comment with its own {@code entities};
+     * {@code attachments} are the original's attachments, each file uploaded again to
+     * this conversation. The original travels as the message's
+     * {@code forwarded_message}, the comment as its text, and the message is marked as
+     * sent from the forward sheet. With {@code conversationKey} and
+     * {@code conversationKeyVersion} null, the conversation key comes from the SDK's
+     * cache.
+     */
+    public SendBody encryptForward(
+            String conversationId,
+            String forwardedText,
+            List<EntityDescriptor> forwardedEntities,
+            String text,
+            List<EntityDescriptor> entities,
+            List<AttachmentDescriptor> attachments,
+            byte[] conversationKey,
+            String conversationKeyVersion)
+            throws Exception {
+        EncryptForwardParams params = new EncryptForwardParams(conversationId, forwardedText);
+        params.forwardedEntities = forwardedEntities;
+        params.text = text;
+        params.entities = entities;
+        params.attachments = attachments;
+        params.conversationKey = conversationKey;
+        params.conversationKeyVersion = conversationKeyVersion;
+        SendPayload payload = chat.encryptForward(params);
+        // The SDK generates the message id and returns it in the payload.
+        return new SendBody(
+                payload.messageId,
+                payload.encodedMessageCreateEvent,
+                payload.encodedMessageEventSignature,
+                payload.xdkVersion,
+                payload.eventB64);
+    }
+
     /** Encrypt + sign a reaction add/remove targeting a raw event
      * (the conversation id and target sequence id are derived from it). */
     public SendBody encryptReaction(

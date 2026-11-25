@@ -539,6 +539,29 @@ class ChatCoreTest {
     }
 
     @Test
+    void encryptForwardRoundTripsTheOriginalAndTheComment() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            ChatCore.SendBody body = core.encryptForward(
+                    "1000:2000", "the original message", null, "look at this", null, null, key, "1");
+            SigningKeyEntry signingKey = new SigningKeyEntry(
+                    "1000",
+                    "1",
+                    v.get("signing_public_b64").asText(),
+                    v.get("identity_public_b64").asText(),
+                    v.get("identity_public_key_signature_b64").asText());
+            JsonNode content = core.decryptOne(
+                            delivered(body.eventB64(), "2100000000000000001"), Map.of("1", key), List.of(signingKey))
+                    .path("content");
+            assertEquals("look at this", content.path("text").asText());
+            assertEquals("the original message", content.path("forwarded_message").path("message_text").asText());
+            assertEquals("MESSAGE_FORWARD_SHEET", content.path("sent_from").asText());
+        }
+    }
+
+    @Test
     void threadedReplyWithEntitiesAndTtl() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

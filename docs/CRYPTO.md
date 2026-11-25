@@ -993,6 +993,28 @@ events were embedded remain readable. The media such a preview shows still
 opens, under a key found from the preview's own fields, and is as
 unvalidated as the preview (see [Media Keys](#media-keys)).
 
+### Forwarded messages
+
+`encrypt_forward` builds a forward as the X apps' forward sheet does: a new
+message in the target conversation, encrypted and signed by the forwarder
+like any other (same key resolution, message id and v0/v1 format as
+`encrypt_message`). Its `MessageContents` carry:
+
+- `forwarded_message`: the original's full text (`message_text`) and its
+  entities, as the caller passes them in `forwarded_text` and
+  `forwarded_entities`.
+- `text` and `entities`: the forwarder's optional comment, unset when there
+  is none.
+- `attachments`: the original's attachments, each file uploaded again to
+  the target conversation and encrypted under this message, as for
+  `encrypt_message` (see [Media Keys](#media-keys)).
+- `sent_from = MESSAGE_FORWARD_SHEET`.
+
+Unlike a reply preview, a forward embeds no raw event of the original, so
+nothing ties `forwarded_message` to the message or the author it came from:
+recipients verify the forwarder's signature over the whole forward, and the
+forwarded content is only what the forwarder claims it is.
+
 ---
 
 ## 11. Security Properties

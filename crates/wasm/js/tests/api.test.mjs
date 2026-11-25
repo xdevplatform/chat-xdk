@@ -605,6 +605,30 @@ async function main() {
     return event.content;
   };
 
+  // 4b1. A forward carries the original's text and entities, the comment as
+  // its own text, and is marked as sent from the forward sheet.
+  const forwardParams = {
+    senderId: "111",
+    signingKeyVersion: "1",
+    conversationId: "conv-1",
+    conversationKey: convKey,
+    conversationKeyVersion: "1",
+  };
+  const forwarded = decryptOwn(chat.encryptForward({
+    ...forwardParams,
+    forwardedText: "see https://x.com",
+    forwardedEntities: [[4, 17, "url"]],
+    text: "look",
+  }));
+  assert.equal(forwarded.text, "look");
+  assert.equal(forwarded.forwardedMessage.messageText, "see https://x.com");
+  assert.equal(forwarded.forwardedMessage.entities.length, 1);
+  assert.equal(forwarded.sentFrom, "messageForwardSheet");
+  assert.throws(
+    () => chat.encryptForward({ ...forwardParams, forwardedText: "" }),
+    /nothing to forward/,
+  );
+
   // 4b2. replyToSenderId precision: a snowflake-sized id passed as a string
   // must land in the reply payload exactly. The id is above 2^53, where JS
   // numbers stop being exact.

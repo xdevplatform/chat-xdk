@@ -472,6 +472,29 @@ type EncryptMessageParams struct {
 	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
 }
 
+// EncryptForwardParams are the parameters for EncryptForward.
+//
+// A forward is a new message carrying another message: its full text and
+// entities as ForwardedText and ForwardedEntities, and its attachments, each
+// file uploaded again to this conversation, as Attachments. Text is an
+// optional comment, with Entities as offsets into it. A forward with an
+// empty ForwardedText needs Attachments. The identity and key fields resolve
+// as in EncryptMessageParams.
+type EncryptForwardParams struct {
+	ConversationID         string                 `json:"conversation_id"`
+	ForwardedText          string                 `json:"forwarded_text"`
+	ForwardedEntities      []EntityTuple          `json:"forwarded_entities,omitempty"`
+	Text                   string                 `json:"text,omitempty"`
+	Entities               []EntityTuple          `json:"entities,omitempty"`
+	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
+	SenderID               string                 `json:"sender_id,omitempty"`                // empty = session identity
+	SigningKeyVersion      string                 `json:"signing_key_version,omitempty"`      // empty = session identity
+	ConversationKey        []byte                 `json:"conversation_key,omitempty"`         // raw 32-byte key; nil = key cache
+	ConversationKeyVersion string                 `json:"conversation_key_version,omitempty"` // empty = key cache
+	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
+	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
+}
+
 // EntityTuple represents a text entity: [start, end, type]. start and end
 // are byte offsets into the text, as Go string indices are, start inclusive
 // and end exclusive, so 0 <= start <= end <= len(text); other offsets fail

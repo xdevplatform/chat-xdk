@@ -203,14 +203,14 @@ pub use features::{
 pub use params::{
     ConversationArchiveParams, ConversationKeyChangeParams, ConversationMuteParams,
     DecryptEventParams, DecryptEventsParams, DecryptFileParams, DecryptFileWithKeyParams,
-    EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams, EncryptMessageParams,
-    EncryptReactionParams, EncryptReplyParams, FileDecryptorParams, FileEncryptorParams,
-    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-    GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams, MarkConversationReadParams,
-    MessageDeleteParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
-    SetIdentityParams,
+    EncryptEditParams, EncryptFileParams, EncryptFileWithKeyParams, EncryptForwardParams,
+    EncryptMessageParams, EncryptReactionParams, EncryptReplyParams, FileDecryptorParams,
+    FileEncryptorParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+    GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
+    MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
 };
 pub use types::*;
 
@@ -289,12 +289,12 @@ pub mod prelude {
 
     pub use crate::params::{
         ConversationArchiveParams, ConversationKeyChangeParams, ConversationMuteParams,
-        EncryptEditParams, EncryptMessageParams, EncryptReactionParams, EncryptReplyParams,
-        GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams, GroupCreateParams,
-        GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-        GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersChangeParams,
-        GroupMembersRemoveParams, GroupTitleChangeParams, ImportKeysParams,
-        MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
+        EncryptEditParams, EncryptForwardParams, EncryptMessageParams, EncryptReactionParams,
+        EncryptReplyParams, GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
+        GroupCreateParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+        GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+        GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
+        ImportKeysParams, MarkConversationReadParams, MessageDeleteParams, MessageTtlChangeParams,
         MessageTtlRemoveParams, ScreenCaptureParams, SetIdentityParams,
     };
 

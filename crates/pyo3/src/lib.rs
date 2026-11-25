@@ -539,6 +539,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
 
     // Params
     m.add_class::<EncryptMessageParams>()?;
+    m.add_class::<EncryptForwardParams>()?;
     m.add_class::<EncryptReplyParams>()?;
     m.add_class::<EncryptReactionParams>()?;
     m.add_class::<EncryptEditParams>()?;

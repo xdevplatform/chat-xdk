@@ -508,6 +508,25 @@ test("threaded reply by raw event with entities and TTL encrypts", async () => {
   assert.ok(body.encoded_message_create_event);
 });
 
+test("encryptForward round-trips the original and the comment", async () => {
+  const core = await loadedCore();
+  const body = core.encryptForward({
+    conversationId: vectors.event_conversation_id,
+    forwardedText: "the original message",
+    text: "look at this",
+    conversationKey: convKey(),
+    conversationKeyVersion: vectors.event_conversation_key_version,
+  });
+  const event = core.decryptOne(
+    delivered(body.event_b64, "2100000000000000001"),
+    { [vectors.event_conversation_key_version]: convKey() },
+    fixtureSigningKeys(),
+  );
+  assert.equal(event.content.text, "look at this");
+  assert.equal(event.content.forwardedMessage.messageText, "the original message");
+  assert.equal(event.content.sentFrom, "messageForwardSheet");
+});
+
 test("media encrypt -> decrypt round-trip and truncation", async () => {
   // The message-first media flow: the message names the file by the media
   // hash key its upload started with, the file is encrypted from the

@@ -649,6 +649,60 @@ func TestReplyAndReactionTargetOneAttachment(t *testing.T) {
 	}
 }
 
+func TestEncryptForwardRoundTripsTheOriginalAndTheComment(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	core.FetchPublicKeysWith(func(userID string) ([]chatxdk.PublicKeyRecord, error) {
+		if userID != v.EventSenderID {
+			return nil, errors.New("no public keys for user " + userID)
+		}
+		return []chatxdk.PublicKeyRecord{{
+			PublicKeyVersion:           v.EventSigningKeyVersion,
+			PublicKey:                  v.IdentityPublicB64,
+			SigningPublicKey:           v.SigningPublicB64,
+			IdentityPublicKeySignature: v.IdentityPublicKeySignatureB64,
+		}}, nil
+	})
+	body, err := core.EncryptForward(v.EventConversationID, "the original message", &ForwardOptions{
+		Text:                   "look at this",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+	})
+	if err != nil {
+		t.Fatalf("EncryptForward: %v", err)
+	}
+
+	// The key change gives the SDK the key the forward opens with.
+	result, err := core.DecryptBatch([]string{v.EventKeyChangeB64, deliveredEvent(t, body.EventB64, "2100000000000000001")})
+	if err != nil {
+		t.Fatalf("DecryptBatch: %v", err)
+	}
+	if len(result.Errors) != 0 || len(result.Events) != 2 {
+		t.Fatalf("unexpected result: errors %v, %d events", result.Errors, len(result.Events))
+	}
+	msg := result.Events[1].Event.AsMessage()
+	if msg == nil || msg.Content.TextContent == nil {
+		t.Fatalf("expected a text message, got %+v", result.Events[1].Event)
+	}
+	content := msg.Content.TextContent
+	if content.Text != "look at this" {
+		t.Errorf("comment %q, want %q", content.Text, "look at this")
+	}
+	var original struct {
+		MessageText string `json:"message_text"`
+	}
+	if err := json.Unmarshal(content.ForwardedMessage, &original); err != nil {
+		t.Fatalf("forwarded_message: %v", err)
+	}
+	if original.MessageText != "the original message" {
+		t.Errorf("forwarded_message.message_text %q, want %q", original.MessageText, "the original message")
+	}
+	var sentFrom string
+	if err := json.Unmarshal(content.SentFrom, &sentFrom); err != nil || sentFrom != "MESSAGE_FORWARD_SHEET" {
+		t.Errorf("sent_from %s, want \"MESSAGE_FORWARD_SHEET\" (%v)", content.SentFrom, err)
+	}
+}
+
 // TestCachedKeyReplyFlow is the bot's send path end to end, offline: the SDK
 // fetches the fixture sender's public keys, they verify the fixture key
 // change, the batch decrypt adopts its key into the SDK cache, and the

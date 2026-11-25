@@ -31,6 +31,7 @@ from chat_xdk import (
     ConversationMuteParams,
     DecryptEventParams,
     DecryptEventsParams,
+    EncryptForwardParams,
     EncryptMessageParams,
     EncryptReactionParams,
     EncryptReplyParams,
@@ -361,6 +362,52 @@ class ChatCore:
                     ttl_msec=ttl_msec,
                 )
             )
+        return {
+            # The SDK generates the message id and returns it in the payload.
+            "message_id": payload.message_id,
+            "encoded_message_create_event": payload.encoded_message_create_event,
+            "encoded_message_event_signature": payload.encoded_message_event_signature,
+            "xdk_version": payload.xdk_version,
+            "event_b64": payload.event_b64,
+        }
+
+    def encrypt_forward(
+        self,
+        *,
+        conversation_id: str,
+        forwarded_text: str,
+        forwarded_entities: list[tuple[int, int, str]] | None = None,
+        text: str | None = None,
+        entities: list[tuple[int, int, str]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        conversation_key: bytes | None = None,
+        conversation_key_version: str | None = None,
+    ) -> dict[str, str]:
+        """Encrypt + sign a forward of an existing message, as the X apps'
+        forward sheet sends it.
+
+        ``forwarded_text`` is the full text of the message being forwarded
+        (empty for one with only attachments) and ``forwarded_entities`` its
+        entities; ``text`` is an optional comment with its own ``entities``;
+        ``attachments`` are the original's attachments, each file uploaded
+        again to this conversation. The original travels as the message's
+        ``forwarded_message``, the comment as its text, and the message is
+        marked as sent from the forward sheet. Omit the conversation key pair
+        to resolve it from the SDK's key cache. Signed with the
+        ``set_identity`` session identity.
+        """
+        payload = self.chat.encrypt_forward(
+            EncryptForwardParams(
+                conversation_id,
+                forwarded_text,
+                forwarded_entities=forwarded_entities,
+                text=text,
+                entities=entities,
+                attachments=attachments,
+                conversation_key=conversation_key,
+                conversation_key_version=conversation_key_version,
+            )
+        )
         return {
             # The SDK generates the message id and returns it in the payload.
             "message_id": payload.message_id,

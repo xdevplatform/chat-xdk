@@ -242,6 +242,47 @@ public sealed class ChatCore : IDisposable
             payload.EventB64);
     }
 
+    /// <summary>
+    /// Encrypt + sign a forward of an existing message, as the X apps' forward
+    /// sheet sends it. <paramref name="forwardedText"/> is the full text of the
+    /// message being forwarded (empty for one with only attachments) and
+    /// <paramref name="forwardedEntities"/> its entities; <paramref name="text"/>
+    /// is an optional comment with its own <paramref name="entities"/>;
+    /// <paramref name="attachments"/> are the original's attachments, each file
+    /// uploaded again to this conversation. The original travels as the
+    /// message's <c>forwarded_message</c>, the comment as its text, and the
+    /// message is marked as sent from the forward sheet. The conversation key
+    /// comes from the SDK's cache unless <paramref name="conversationKey"/> and
+    /// <paramref name="conversationKeyVersion"/> are passed.
+    /// </summary>
+    public SendBody EncryptForward(
+        string conversationId,
+        string forwardedText,
+        string? text = null,
+        IReadOnlyList<EntityDescriptor>? forwardedEntities = null,
+        IReadOnlyList<EntityDescriptor>? entities = null,
+        IReadOnlyList<AttachmentDescriptor>? attachments = null,
+        byte[]? conversationKey = null,
+        string? conversationKeyVersion = null)
+    {
+        var payload = _chat.EncryptForward(new EncryptForwardParams(conversationId, forwardedText)
+        {
+            ForwardedEntities = forwardedEntities,
+            Text = text,
+            Entities = entities,
+            Attachments = attachments,
+            ConversationKey = conversationKey,
+            ConversationKeyVersion = conversationKeyVersion,
+        });
+        // The SDK generates the message id and returns it in the payload.
+        return new SendBody(
+            payload.MessageId,
+            payload.EncodedMessageCreateEvent,
+            payload.EncodedMessageEventSignature,
+            payload.XdkVersion,
+            payload.EventB64);
+    }
+
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
     /// (the conversation id and target sequence id are derived from it).
     /// <paramref name="targetAttachmentId"/> reacts to one attachment of the
