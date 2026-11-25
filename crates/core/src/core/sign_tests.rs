@@ -7,17 +7,19 @@ use super::test_support::{
 };
 use super::*;
 use crate::params::{
-    GroupAdminsAddParams, GroupAdminsRemoveParams, GroupAvatarChangeParams,
-    GroupDescriptionChangeParams, GroupInviteDisableParams, GroupInviteEnableParams,
-    GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams, GroupMembersRemoveParams,
-    GroupTitleChangeParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
+    ConversationArchiveParams, GroupAdminsAddParams, GroupAdminsRemoveParams,
+    GroupAvatarChangeParams, GroupDescriptionChangeParams, GroupInviteDisableParams,
+    GroupInviteEnableParams, GroupJoinRejectParams, GroupJoinRequestParams, GroupLeaveParams,
+    GroupMembersRemoveParams, GroupTitleChangeParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams,
 };
 use crate::signatures::{MAX_SIGNATURE_VERSION, MIN_SIGNATURE_VERSION};
 use crate::thrift::event::{
-    ConversationKeyChangeEvent as ThriftKeyChange, ConversationMetadataChange,
+    ArchiveConversation, ConversationKeyChangeEvent as ThriftKeyChange, ConversationMetadataChange,
     ConversationMetadataChangeEvent, ConversationParticipantKey as ThriftParticipantKey,
     MarkConversationUnreadEvent, MessageEvent as ThriftEvent, MessageEventDetail as Detail,
-    MessageEventSignature as ThriftSignature, MuteConversation, UnmuteConversation,
+    MessageEventSignature as ThriftSignature, MuteConversation, UnarchiveConversation,
+    UnmuteConversation,
 };
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::EncodePublicKey;
@@ -172,6 +174,15 @@ fn sign_refuses_every_action_payload_the_sdk_signs() {
         );
     }
 
+    for archived in [true, false] {
+        let params = ConversationArchiveParams::new("g1", archived);
+        actions.extend(
+            core.prepare_conversation_archive(&params)
+                .unwrap()
+                .action_signatures,
+        );
+    }
+
     // Key-change payloads embed the key and are withheld from
     // `signature_payload`; the next test covers them.
     let payloads: Vec<&str> = actions
@@ -179,7 +190,7 @@ fn sign_refuses_every_action_payload_the_sdk_signs() {
         .map(|action| action.signature_payload.as_str())
         .filter(|payload| !payload.is_empty())
         .collect();
-    assert_eq!(payloads.len(), 25);
+    assert_eq!(payloads.len(), 27);
     for payload in payloads {
         assert!(refused(&core, payload.as_bytes()), "signed {payload}");
     }
@@ -226,6 +237,12 @@ fn sign_refuses_every_other_signed_event_payload() {
         )),
         metadata(ConversationMetadataChange::UnmuteConversation(
             UnmuteConversation::new(vec!["c1".to_string()]),
+        )),
+        metadata(ConversationMetadataChange::ArchiveConversation(
+            ArchiveConversation::new(vec!["c1".to_string()]),
+        )),
+        metadata(ConversationMetadataChange::UnarchiveConversation(
+            UnarchiveConversation::new(vec!["c1".to_string()]),
         )),
     ];
     for detail in &details {
@@ -414,5 +431,25 @@ fn sign_cannot_forge_a_key_change() {
             !accepted(&bob, key_change_to(&bob, signature)),
             "accepted {variant:?}"
         );
+    }
+}
+
+#[test]
+fn sign_refuses_the_conversation_mute_payloads() {
+    let core = signer("111");
+    for muted in [true, false] {
+        let params = crate::params::ConversationMuteParams::new("g1", muted);
+        for action in core
+            .prepare_conversation_mute(&params)
+            .unwrap()
+            .action_signatures
+        {
+            assert!(!action.signature_payload.is_empty());
+            assert!(
+                refused(&core, action.signature_payload.as_bytes()),
+                "signed {}",
+                action.signature_payload
+            );
+        }
     }
 }

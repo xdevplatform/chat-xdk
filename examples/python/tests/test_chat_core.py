@@ -12,9 +12,13 @@ Run from this directory:
 from __future__ import annotations
 
 import base64
+import contextlib
+import http.server
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,6 +77,38 @@ def _delivered_action(action: dict, sender_id: str, conversation_id: str, sequen
         + b"\x00"
     )
     return base64.b64encode(event).decode("ascii")
+
+
+@contextlib.contextmanager
+def _v1_feature_switches():
+    """While open, chats created or given an identity read their feature
+    switches from a local server that turns ``v1_send`` on."""
+
+    class Features(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"features":{"v1_send":true}}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Features)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    previous = os.environ.get("CHAT_XDK_API_BASE_URL")
+    os.environ["CHAT_XDK_API_BASE_URL"] = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ["CHAT_XDK_API_BASE_URL"]
+        else:
+            os.environ["CHAT_XDK_API_BASE_URL"] = previous
+        server.shutdown()
+        server.server_close()
 
 
 class _Party:
@@ -418,6 +454,18 @@ class TestPreparedChanges(unittest.TestCase):
         encrypted_title = prep["encrypted_title"]
         self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
+    def test_prepare_conversation_mute_signs_mute_and_unmute(self):
+        core, _ = self._core_and_keys()
+        for muted in (True, False):
+            prepared = core.prepare_conversation_mute("g123", muted)
+            (sig,) = prepared["action_signatures"]
+            self.assertTrue(sig["message_id"], muted)
+            self.assertTrue(sig["encoded_message_event_detail"], muted)
+            self.assertTrue(sig["message_event_signature"]["signature"], muted)
+            self.assertEqual(
+                sig["message_event_signature"]["signing_public_key"], core.public_keys()["signing"]
+            )
+
     def test_encrypt_reaction_produces_sendable_payload(self):
         core, _ = self._core_and_keys()
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])
@@ -434,10 +482,101 @@ class TestPreparedChanges(unittest.TestCase):
             [
                 "encoded_message_create_event",
                 "encoded_message_event_signature",
+                "event_b64",
                 "message_id",
                 "xdk_version",
             ],
         )
+
+    def test_reply_and_reaction_target_one_attachment(self):
+        # Attachments carry ids in v1 sends. The chat reads its feature
+        # switches from CHAT_XDK_API_BASE_URL, here a local server that turns
+        # v1 on as the X API would.
+        from chat_core import ChatCore
+
+        v = self.vectors
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        version = v["event_conversation_key_version"]
+        conv_keys = {version: conv_key}
+        signing_keys = [
+            {
+                "user_id": v["event_sender_id"],
+                "public_key_version": v["event_signing_key_version"],
+                "public_key": v["signing_public_b64"],
+                "identity_public_key": v["identity_public_b64"],
+                "identity_public_key_signature": v["identity_public_key_signature_b64"],
+            }
+        ]
+
+        def photo(media_hash_key):
+            return {
+                "attachment_type": "media",
+                "media_hash_key": media_hash_key,
+                "width": 4,
+                "height": 3,
+                "filesize_bytes": 1024,
+                "filename": f"{media_hash_key}.jpg",
+                "media_type": 1,
+            }
+
+        with _v1_feature_switches():
+            core = ChatCore()
+            core.load_keys(v["private_keys_concat_b64"], signing_key_version="1")
+            core.set_identity(v["event_sender_id"])
+            # The switches arrive in the background: send until the album is v1.
+            deadline = time.monotonic() + 10
+            while True:
+                body = core.encrypt_reply(
+                    conversation_id=v["event_conversation_id"],
+                    text="two photos",
+                    conversation_key=conv_key,
+                    conversation_key_version=version,
+                    attachments=[photo("photo-1"), photo("photo-2")],
+                )
+                album = _delivered(body["event_b64"], "2100000000000000001")
+                attachment_ids = [
+                    attachment["attachment_id"]
+                    for attachment in core.decrypt_one(album, conv_keys, signing_keys)["attachments"]
+                ]
+                if all(attachment_ids):
+                    break
+                self.assertLess(time.monotonic(), deadline, "the chat never turned v1 on")
+                time.sleep(0.05)
+        self.assertEqual(len(attachment_ids), 2)
+        second = attachment_ids[1]
+
+        reply = core.encrypt_reply(
+            conversation_id=v["event_conversation_id"],
+            text="the second one",
+            conversation_key=conv_key,
+            conversation_key_version=version,
+            reply_to_event=album,
+            reply_to_attachment_id=second,
+        )
+        decrypted = core.decrypt_one(
+            _delivered(reply["event_b64"], "2100000000000000002"), conv_keys, signing_keys
+        )
+        self.assertEqual(
+            decrypted["content"]["replying_to_preview"]["replying_to_attachment_id"], second
+        )
+
+        for add, content_type, sequence_id in (
+            (True, "Reaction", "2100000000000000003"),
+            (False, "ReactionRemoved", "2100000000000000004"),
+        ):
+            reaction = core.encrypt_reaction(
+                add=add,
+                emoji="\U0001f44d",
+                conversation_key=conv_key,
+                conversation_key_version=version,
+                target_event=album,
+                target_attachment_id=second,
+            )
+            content = core.decrypt_one(
+                _delivered(reaction["event_b64"], sequence_id), conv_keys, signing_keys
+            )["content"]
+            self.assertEqual(content["content_type"], content_type)
+            self.assertEqual(content["target_attachment_id"], second)
 
     def test_threaded_reply_with_entities_and_ttl(self):
         core, _ = self._core_and_keys()
@@ -470,6 +609,33 @@ class TestPreparedChanges(unittest.TestCase):
         preview = sent["content"]["replying_to_preview"]
         self.assertEqual(preview["replying_to_message_sequence_id"], "42")
         self.assertEqual(preview["replying_to_message_id"], "6f1c0a4e-6a4b-4f8e-9c3d-2b7a5e9d1c0f")
+
+    def test_prepare_conversation_archive_signs_archive_and_unarchive(self):
+        # Each signed action is sendable as it is, and a recipient verifies it
+        # as the setting it signs.
+        core, _ = self._core_and_keys()
+        signing_keys = [
+            {
+                "user_id": "1000",
+                "public_key_version": "1",
+                "public_key": self.vectors["signing_public_b64"],
+                "identity_public_key": self.vectors["identity_public_b64"],
+                "identity_public_key_signature": self.vectors["identity_public_key_signature_b64"],
+            }
+        ]
+        for archived, setting in ((True, "Archived"), (False, "Unarchived")):
+            prep = core.prepare_conversation_archive("g123", archived)
+            (sig,) = prep["action_signatures"]
+            self.assertTrue(sig["message_id"])
+            self.assertTrue(sig["encoded_message_event_detail"])
+            self.assertTrue(sig["message_event_signature"]["signature"])
+
+            event = core.decrypt_one(
+                _delivered_action(sig, "1000", "g123", "2100000000000000000"), {}, signing_keys
+            )
+            self.assertEqual(event["type"], "SettingsChange")
+            self.assertTrue(event["verified"])
+            self.assertEqual(event["change"]["setting"], setting)
 
     def test_encrypt_forward_round_trips_the_original_and_the_comment(self):
         core, _ = self._core_and_keys()

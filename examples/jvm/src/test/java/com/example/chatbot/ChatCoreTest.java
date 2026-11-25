@@ -11,6 +11,7 @@ import com.x.chatxdk.Types.DecryptEventsResult;
 import com.x.chatxdk.Types.DecryptedEvent;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.MessageEventSignature;
+import com.x.chatxdk.Types.PreparedAction;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
@@ -436,6 +437,55 @@ class ChatCoreTest {
     }
 
     @Test
+    void prepareConversationArchiveSignsArchiveAndUnarchive() throws Exception {
+        // Each signed action is sendable as it is, and a recipient verifies it as
+        // the setting it signs.
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            List<SigningKeyEntry> signingKeys = List.of(new SigningKeyEntry(
+                    "1000",
+                    "1",
+                    v.get("signing_public_b64").asText(),
+                    v.get("identity_public_b64").asText(),
+                    v.get("identity_public_key_signature_b64").asText()));
+            for (boolean archived : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationArchive("g123", archived);
+                assertEquals(1, prepared.actionSignatures.size());
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty());
+                assertFalse(sig.encodedMessageEventDetail.isEmpty());
+                assertFalse(sig.messageEventSignature.signature.isEmpty());
+
+                JsonNode event = core.decryptOne(
+                        deliveredAction(sig, "1000", "g123", "2100000000000000000"), Map.of(), signingKeys);
+                assertEquals("SettingsChange", event.path("type").asText());
+                assertTrue(event.path("verified").asBoolean());
+                assertEquals(
+                        archived ? "Archived" : "Unarchived",
+                        event.path("change").path("setting").asText());
+            }
+        }
+    }
+
+    @Test
+    void prepareConversationMuteSignsMuteAndUnmute() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            for (boolean muted : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationMute("g123", muted);
+                assertEquals(1, prepared.actionSignatures.size(), "muted=" + muted);
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty(), "muted=" + muted);
+                assertFalse(sig.encodedMessageEventDetail.isEmpty(), "muted=" + muted);
+                assertFalse(sig.messageEventSignature.signature.isEmpty(), "muted=" + muted);
+                assertEquals(core.publicKeys().signing, sig.messageEventSignature.signingPublicKey);
+            }
+        }
+    }
+
+    @Test
     void encryptReactionProducesSendablePayload() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {
@@ -453,6 +503,38 @@ class ChatCoreTest {
             assertFalse(body.encodedMessageCreateEvent().isEmpty());
             assertFalse(body.encodedMessageEventSignature().isEmpty());
             assertFalse(body.xdkVersion().isEmpty());
+        }
+    }
+
+    @Test
+    void attachmentTargetsReachTheCore() throws Exception {
+        // A reply or reaction to one attachment names an attachment_id the raw event
+        // carries; the SDK decrypts the event to check it. The fixture message
+        // carries no attachment, so the SDK rejects the id, naming it.
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            byte[] key = Base64.getDecoder().decode(v.get("conversation_key_b64").asText());
+            String version = v.get("event_conversation_key_version").asText();
+            String original = v.get("event_message_b64").asText();
+            for (boolean add : new boolean[] {true, false}) {
+                ChatXdkException e = assertThrows(
+                        ChatXdkException.class,
+                        () -> core.encryptReactionToAttachment(add, original, "att-1", "\uD83D\uDC4D", key, version));
+                assertTrue(e.getMessage().contains("target_attachment_id 'att-1' not found"), e.getMessage());
+            }
+            ChatXdkException e = assertThrows(
+                    ChatXdkException.class,
+                    () -> core.encryptReplyToAttachment(
+                            v.get("event_conversation_id").asText(), "the first one", key, version, original, "att-1"));
+            assertTrue(e.getMessage().contains("reply_to_attachment_id 'att-1' not found"), e.getMessage());
+
+            // Without an attachment id the same calls target the whole message.
+            assertFalse(core.encryptReactionToAttachment(true, original, null, "\uD83D\uDC4D", key, version)
+                    .messageId().isEmpty());
+            assertFalse(core.encryptReplyToAttachment(
+                            v.get("event_conversation_id").asText(), "the message", key, version, original, null)
+                    .messageId().isEmpty());
         }
     }
 

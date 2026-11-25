@@ -190,8 +190,11 @@ public sealed class ChatCore : IDisposable
     /// afterwards with <see cref="EncryptMedia"/> and the returned body's
     /// <c>EventB64</c>); <paramref name="quickReply"/> offers selectable
     /// options or answers them; <paramref name="ttlMsec"/> makes the message
-    /// disappear after the given lifetime. The conversation key comes from
-    /// the SDK's cache unless <paramref name="conversationKey"/> and
+    /// disappear after the given lifetime. <paramref name="replyToAttachmentId"/>
+    /// replies to one attachment of <paramref name="replyToEvent"/>, such as one
+    /// photo of an album: its <c>attachment_id</c>, which the preview quotes
+    /// alone. The conversation key comes from the SDK's cache unless
+    /// <paramref name="conversationKey"/> and
     /// <paramref name="conversationKeyVersion"/> are passed.
     /// </summary>
     public SendBody EncryptReply(
@@ -204,9 +207,10 @@ public sealed class ChatCore : IDisposable
         IReadOnlyList<AttachmentDescriptor>? attachments = null,
         long? ttlMsec = null,
         IReadOnlyList<string>? replyToCkces = null,
-        QuickReply? quickReply = null)
+        QuickReply? quickReply = null,
+        string? replyToAttachmentId = null)
     {
-        var payload = replyToEvent is null
+        var payload = replyToEvent is null && replyToAttachmentId is null
             ? _chat.EncryptMessage(new EncryptMessageParams(conversationId, text)
             {
                 ConversationKey = conversationKey,
@@ -223,6 +227,7 @@ public sealed class ChatCore : IDisposable
                 // Key-change events for the original's key version, when it
                 // differs from this reply's version.
                 ReplyToCkces = replyToCkces,
+                ReplyToAttachmentId = replyToAttachmentId,
                 Entities = entities,
                 Attachments = attachments,
                 QuickReply = quickReply,
@@ -279,18 +284,24 @@ public sealed class ChatCore : IDisposable
     }
 
     /// <summary>Encrypt + sign a reaction add/remove targeting a raw event
-    /// (the conversation id and target sequence id are derived from it).</summary>
+    /// (the conversation id and target sequence id are derived from it).
+    /// <paramref name="targetAttachmentId"/> reacts to one attachment of the
+    /// event, such as one photo of an album: its <c>attachment_id</c>, which
+    /// the SDK checks against the decrypted event. Remove the reaction with
+    /// the same <paramref name="targetAttachmentId"/>.</summary>
     public SendBody EncryptReaction(
         bool add,
         string targetEventB64,
         string emoji,
         byte[] conversationKey,
-        string conversationKeyVersion)
+        string conversationKeyVersion,
+        string? targetAttachmentId = null)
     {
         var parameters = new EncryptReactionParams(targetEventB64, emoji)
         {
             ConversationKey = conversationKey,
             ConversationKeyVersion = conversationKeyVersion,
+            TargetAttachmentId = targetAttachmentId,
         };
         var payload = add ? _chat.EncryptAddReaction(parameters) : _chat.EncryptRemoveReaction(parameters);
         // The SDK generates the message id and returns it in the payload.
@@ -443,6 +454,30 @@ public sealed class ChatCore : IDisposable
 
     /// <summary>Decrypt a group title or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
+
+    // -- Conversation archive -------------------------------------------------
+
+    /// <summary>
+    /// Sign archiving (<paramref name="archived"/> true) or unarchiving (false) a
+    /// conversation, group or one-to-one. Send <c>ActionSignatures</c> on
+    /// <c>POST /2/chat/conversations/{id}/archive</c> to archive, or on <c>DELETE</c> of
+    /// the same path to unarchive. Signed with the session identity.
+    /// </summary>
+    public PreparedAction PrepareConversationArchive(string conversationId, bool archived)
+        => _chat.PrepareConversationArchive(new ConversationArchiveParams(conversationId, archived));
+
+    // -- Conversation mute ----------------------------------------------------
+
+    /// <summary>
+    /// Sign muting (<paramref name="muted"/> true) or unmuting (false) a
+    /// conversation, group or one-to-one, for this bot alone. The event is
+    /// signed in the bot's own <c>{userId}:{userId}</c> conversation and names
+    /// <paramref name="conversationId"/> in canonical colon form; send
+    /// <c>ActionSignatures</c> with a mute or unmute request that names the
+    /// conversation in that same form. Signed with the session identity.
+    /// </summary>
+    public PreparedAction PrepareConversationMute(string conversationId, bool muted)
+        => _chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted));
 
     public void Dispose() => _chat.Dispose();
 }

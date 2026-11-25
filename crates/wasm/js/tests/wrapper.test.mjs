@@ -561,12 +561,20 @@ async function delegationTests() {
       () => chat.prepareGroupJoinRequest({ ...group, requestingUserId: "910012" })],
     ["GroupChangeEvent.GroupJoinReject", ",111,g100,910010",
       () => chat.prepareGroupJoinReject({ ...group, userIds: ["910010"] })],
+    ["ConversationMetadataChangeEvent.MuteConversation", ",111,111:111,g100",
+      () => chat.prepareConversationMute({ ...group, muted: true })],
+    ["ConversationMetadataChangeEvent.UnmuteConversation", ",111,111:111,g100",
+      () => chat.prepareConversationMute({ ...group, muted: false })],
     ["ConversationMetadataChangeEvent.MessageDurationChange", ",111,g100,86400000",
       () => chat.prepareMessageTtlChange({ ...group, ttlMsec: 86400000 })],
     ["ConversationMetadataChangeEvent.MessageDurationRemove", ",111,g100",
       () => chat.prepareMessageTtlRemove({ ...group })],
     ["ConversationMetadataChangeEvent.EnableScreenCaptureBlocking", ",111,g100",
       () => chat.prepareScreenCapture({ ...group, change: "blockingEnabled" })],
+    ["ConversationMetadataChangeEvent.ArchiveConversation", ",111,g100",
+      () => chat.prepareConversationArchive({ ...group, archived: true })],
+    ["ConversationMetadataChangeEvent.UnarchiveConversation", ",111,g100",
+      () => chat.prepareConversationArchive({ ...group, archived: false })],
   ];
   for (const [event, fields, prepare] of actions) {
     const result = prepare();

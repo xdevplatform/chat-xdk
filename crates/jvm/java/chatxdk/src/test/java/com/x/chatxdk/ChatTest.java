@@ -679,6 +679,35 @@ class ChatTest {
     }
 
     @Test
+    void attachmentTargetsNeedTheRawEvent() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            byte[] ckey = newConvKey(chat);
+            EncryptReactionParams reaction = new EncryptReactionParams(null, "👍");
+            reaction.conversationId = "conv-1";
+            reaction.targetMessageSequenceId = "seq-99";
+            reaction.senderId = "1001";
+            reaction.signingKeyVersion = "66";
+            reaction.conversationKey = ckey;
+            reaction.conversationKeyVersion = "1";
+            reaction.targetAttachmentId = "att-1";
+            ChatXdkException e = assertThrows(ChatXdkException.class, () -> chat.encryptAddReaction(reaction));
+            assertTrue(e.getMessage().contains("target_attachment_id needs target_event"), e.getMessage());
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptRemoveReaction(reaction));
+            assertTrue(e.getMessage().contains("target_attachment_id needs target_event"), e.getMessage());
+
+            EncryptReplyParams reply = new EncryptReplyParams("conv-1", "reply", null);
+            reply.senderId = "1001";
+            reply.signingKeyVersion = "66";
+            reply.conversationKey = ckey;
+            reply.conversationKeyVersion = "1";
+            reply.replyToSequenceId = "seq-42";
+            reply.replyToAttachmentId = "att-1";
+            e = assertThrows(ChatXdkException.class, () -> chat.encryptReply(reply));
+            assertTrue(e.getMessage().contains("reply_to_attachment_id needs reply_to_event"), e.getMessage());
+        }
+    }
+
+    @Test
     void encryptEditReturnsValidPayload() throws Exception {
         try (Chat chat = createUnlocked()) {
             byte[] ckey = newConvKey(chat);
@@ -949,6 +978,54 @@ class ChatTest {
     }
 
     @Test
+    void prepareConversationArchiveSignsArchiveAndUnarchive() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // A 1:1 id is signed in its canonical colon form, a group id as it is; the payload
+            // ends at the conversation id.
+            String[][] conversations = {{"222-111", "111:222"}, {"g999", "g999"}};
+            for (String[] conversation : conversations) {
+                for (boolean archived : new boolean[] {true, false}) {
+                    ConversationArchiveParams p = new ConversationArchiveParams(conversation[0], archived);
+                    p.senderId = "111";
+                    p.signingKeyVersion = "1";
+                    ActionSignature sig = onlyAction(chat.prepareConversationArchive(p));
+                    assertFalse(sig.messageId.isEmpty());
+                    assertFalse(sig.encodedMessageEventDetail.isEmpty());
+                    assertEquals("1", sig.messageEventSignature.publicKeyVersion);
+                    assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
+                    String event = archived ? "ArchiveConversation" : "UnarchiveConversation";
+                    assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent." + event + ","
+                            + sig.messageId + ",111," + conversation[1]));
+                }
+            }
+        }
+    }
+
+    @Test
+    void prepareConversationArchiveDefaultsToSessionIdentity() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "7"));
+            ActionSignature sig =
+                    onlyAction(chat.prepareConversationArchive(new ConversationArchiveParams("g999", true)));
+            assertEquals("7", sig.messageEventSignature.publicKeyVersion);
+            assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent.ArchiveConversation,"
+                    + sig.messageId + ",111,g999"));
+        }
+    }
+
+    @Test
+    void prepareConversationArchiveRejectsEmptyConversationId() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationArchiveParams p = new ConversationArchiveParams("", true);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareConversationArchive(p));
+            assertTrue(e.getMessage().contains("conversation_id is empty"), e.getMessage());
+        }
+    }
+
+    @Test
     void prepareMarkConversationReadSignsCanonicalPayload() throws Exception {
         try (Chat chat = createUnlocked()) {
             // A 1:1 id is signed in its canonical colon form, followed by the
@@ -1054,6 +1131,54 @@ class ChatTest {
         assertNotNull(dims);
         assertEquals(100L, dims.width);
         assertEquals(200L, dims.height);
+    }
+
+    @Test
+    void prepareConversationMuteSignsForTheSelfConversation() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            // The event belongs to the signer's own 111:111 conversation and names the muted
+            // one: a 1:1 id in canonical colon form, a group id as it is.
+            String[][] conversations = {{"222-111", "111:222"}, {"g999", "g999"}};
+            for (String[] conversation : conversations) {
+                for (boolean muted : new boolean[] {true, false}) {
+                    ConversationMuteParams p = new ConversationMuteParams(conversation[0], muted);
+                    p.senderId = "111";
+                    p.signingKeyVersion = "1";
+                    ActionSignature sig = onlyAction(chat.prepareConversationMute(p));
+                    assertFalse(sig.messageId.isEmpty());
+                    assertFalse(sig.encodedMessageEventDetail.isEmpty());
+                    assertEquals("1", sig.messageEventSignature.publicKeyVersion);
+                    assertEquals(chat.getPublicKeys().signing, sig.messageEventSignature.signingPublicKey);
+                    String event = muted ? "MuteConversation" : "UnmuteConversation";
+                    assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent." + event + ","
+                            + sig.messageId + ",111,111:111," + conversation[1]));
+                }
+            }
+        }
+    }
+
+    @Test
+    void prepareConversationMuteDefaultsToSessionIdentity() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            chat.setIdentity(new SetIdentityParams("111", "7"));
+            ActionSignature sig =
+                    onlyAction(chat.prepareConversationMute(new ConversationMuteParams("g999", true)));
+            assertEquals("7", sig.messageEventSignature.publicKeyVersion);
+            assertTrue(signs(chat, sig, "ConversationMetadataChangeEvent.MuteConversation,"
+                    + sig.messageId + ",111,111:111,g999"));
+        }
+    }
+
+    @Test
+    void prepareConversationMuteRejectsEmptyConversationId() throws Exception {
+        try (Chat chat = createUnlocked()) {
+            ConversationMuteParams p = new ConversationMuteParams("", true);
+            p.senderId = "111";
+            p.signingKeyVersion = "1";
+            ChatXdkException e =
+                    assertThrows(ChatXdkException.class, () -> chat.prepareConversationMute(p));
+            assertTrue(e.getMessage().contains("conversation_id is empty"), e.getMessage());
+        }
     }
 
     @Test

@@ -644,9 +644,14 @@ type EncryptReplyParams struct {
 	Attachments            []AttachmentDescriptor `json:"attachments,omitempty"`
 	ReplyToEntities        []EntityTuple          `json:"reply_to_entities,omitempty"`
 	ReplyToAttachments     []AttachmentDescriptor `json:"reply_to_attachments,omitempty"`
-	QuickReply             *QuickReply            `json:"quick_reply,omitempty"`
-	ShouldNotify           *bool                  `json:"should_notify,omitempty"`
-	TTLMsec                *int64                 `json:"ttl_msec,omitempty"`
+	// ReplyToAttachmentID is the attachment_id of the one attachment of the
+	// original being replied to; empty replies to the whole message. It
+	// needs ReplyToEvent, and ReplyToAttachments must stay nil: the preview
+	// quotes only that attachment.
+	ReplyToAttachmentID string      `json:"reply_to_attachment_id,omitempty"`
+	QuickReply          *QuickReply `json:"quick_reply,omitempty"`
+	ShouldNotify        *bool       `json:"should_notify,omitempty"`
+	TTLMsec             *int64      `json:"ttl_msec,omitempty"`
 }
 
 // EncryptReactionParams are the parameters for EncryptAddReaction/EncryptRemoveReaction.
@@ -669,6 +674,11 @@ type EncryptReactionParams struct {
 	SigningKeyVersion       string `json:"signing_key_version,omitempty"`        // empty = session identity
 	ConversationKey         []byte `json:"conversation_key,omitempty"`           // raw 32-byte key; nil = key cache
 	ConversationKeyVersion  string `json:"conversation_key_version,omitempty"`   // empty = key cache
+	// TargetAttachmentID is the attachment_id of the attachment of the
+	// target the reaction is for; empty reacts to the whole message. It
+	// needs TargetEvent, which the SDK decrypts to check the attachment
+	// belongs to it.
+	TargetAttachmentID string `json:"target_attachment_id,omitempty"`
 }
 
 // EncryptEditParams are the parameters for EncryptEdit.
@@ -865,12 +875,36 @@ type MessageTtlRemoveParams struct {
 	SigningKeyVersion string `json:"signing_key_version,omitempty"`
 }
 
+// ConversationMuteParams are the parameters for PrepareConversationMute.
+// ConversationID is a group id or a one-to-one id, in either "A:B" or "A-B"
+// form. Muted true signs a mute, false an unmute. SenderID and
+// SigningKeyVersion are optional overrides: empty resolves from the session
+// identity set via SetIdentity.
+type ConversationMuteParams struct {
+	ConversationID    string `json:"conversation_id"`
+	Muted             bool   `json:"muted"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
+}
+
 // ScreenCaptureParams are the parameters for PrepareScreenCapture.
 type ScreenCaptureParams struct {
 	ConversationID    string              `json:"conversation_id"`
 	Change            ScreenCaptureChange `json:"change"`
 	SenderID          string              `json:"sender_id,omitempty"`
 	SigningKeyVersion string              `json:"signing_key_version,omitempty"`
+}
+
+// ConversationArchiveParams are the parameters for
+// PrepareConversationArchive. ConversationID is a group id or a one-to-one id,
+// in either "A:B" or "A-B" form. Archived true signs an archive, false an
+// unarchive. SenderID and SigningKeyVersion are optional overrides: empty
+// resolves from the session identity set via SetIdentity.
+type ConversationArchiveParams struct {
+	ConversationID    string `json:"conversation_id"`
+	Archived          bool   `json:"archived"`
+	SenderID          string `json:"sender_id,omitempty"`           // empty = session identity
+	SigningKeyVersion string `json:"signing_key_version,omitempty"` // empty = session identity
 }
 
 // MessageDeleteParams are the parameters for PrepareMessageDelete.
@@ -1225,6 +1259,9 @@ type ReactionContent struct {
 	Emoji string `json:"emoji"`
 	// TargetMessageSequenceID is the sequence_id of the message reacted to.
 	TargetMessageSequenceID string `json:"target_message_sequence_id"`
+	// TargetAttachmentID is the attachment_id of the attachment of the
+	// target the reaction is for; empty when it is for the whole message.
+	TargetAttachmentID string `json:"target_attachment_id,omitempty"`
 }
 
 // MediaHashReference is a reference to a media hash key found in attachments.
