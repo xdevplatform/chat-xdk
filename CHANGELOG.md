@@ -2,24 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- `prepare_conversation_archive` (`prepareConversationArchive`,
-  `PrepareConversationArchive`) signs archiving or unarchiving a conversation,
-  group or one-to-one, so API clients can pass `action_signatures` to
-  `POST` / `DELETE /2/chat/conversations/{id}/archive`. It takes a
-  `ConversationArchiveParams` (`conversation_id`, `archived`, and the usual
-  optional `sender_id` / `signing_key_version`) in every binding, and returns a
-  `PreparedAction` with one signature, signed as X clients sign an archive: a
-  `ConversationMetadataChangeEvent` with an `ArchiveConversation` or
-  `UnarchiveConversation` change and no ids. The C ABI gains
-  `chat_xdk_prepare_conversation_archive`.
-  [API.md](docs/API.md#prepare_conversation_archive) shows the call in every
-  binding, and each example's crypto core wraps it with an offline test.
-- `decrypt_events` and `decrypt_event` verify archive and unarchive events and
-  return them as a `SettingsChange` of `archived` or `unarchived`, where they
-  came back as `unknown` and, on the default policy, failed verification.
-
 ## [0.7.6] - 2026-11-19
 
 ### Added
