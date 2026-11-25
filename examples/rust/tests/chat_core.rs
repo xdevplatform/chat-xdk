@@ -323,6 +323,30 @@ fn prepare_conversation_archive_signs_archive_and_unarchive() {
 }
 
 #[test]
+fn prepare_conversation_mute_signs_mute_and_unmute() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let signing = core.public_keys().expect("public_keys").signing;
+    for muted in [true, false] {
+        let prepared = core
+            .prepare_conversation_mute("g123", muted)
+            .expect("prepare_conversation_mute");
+        assert_eq!(prepared.action_signatures.len(), 1, "muted={muted}");
+        let sig = &prepared.action_signatures[0];
+        assert!(!sig.message_id.is_empty(), "muted={muted}");
+        assert!(
+            !sig.encoded_message_event_detail.is_empty(),
+            "muted={muted}"
+        );
+        assert!(
+            !sig.message_event_signature.signature.is_empty(),
+            "muted={muted}"
+        );
+        assert_eq!(sig.message_event_signature.signing_public_key, signing);
+    }
+}
+
+#[test]
 fn encrypt_reaction_produces_sendable_payload() {
     let v = load_vectors();
     let core = loaded_core(&v);

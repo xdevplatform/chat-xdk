@@ -479,6 +479,23 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void PrepareConversationMute_Signs_Mute_And_Unmute()
+    {
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        foreach (var muted in new[] { true, false })
+        {
+            var prepared = core.PrepareConversationMute("g123", muted);
+            var sig = Assert.Single(prepared.ActionSignatures);
+            Assert.False(string.IsNullOrEmpty(sig.MessageId));
+            Assert.False(string.IsNullOrEmpty(sig.EncodedMessageEventDetail));
+            Assert.False(string.IsNullOrEmpty(sig.MessageEventSignature.Signature));
+            Assert.Equal(core.PublicKeys().Signing, sig.MessageEventSignature.SigningPublicKey);
+        }
+    }
+
+    [Fact]
     public void EncryptReaction_Produces_Sendable_Payload()
     {
         var v = LoadVectors();

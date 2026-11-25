@@ -373,6 +373,27 @@ func TestEncryptReactionProducesSendablePayload(t *testing.T) {
 	}
 }
 
+func TestPrepareConversationMuteSignsMuteAndUnmute(t *testing.T) {
+	core, v := loadedCore(t)
+	defer core.Close()
+	for _, muted := range []bool{true, false} {
+		prepared, err := core.PrepareConversationMute("g123", muted)
+		if err != nil {
+			t.Fatalf("PrepareConversationMute(muted=%v): %v", muted, err)
+		}
+		if len(prepared.ActionSignatures) != 1 {
+			t.Fatalf("muted=%v: expected 1 action signature, got %d", muted, len(prepared.ActionSignatures))
+		}
+		sig := prepared.ActionSignatures[0]
+		if sig.MessageID == "" || sig.EncodedMessageEventDetail == "" || sig.MessageEventSignature.Signature == "" {
+			t.Errorf("muted=%v: incomplete action signature: %+v", muted, sig)
+		}
+		if sig.MessageEventSignature.SigningPublicKey != v.SigningPublicB64 {
+			t.Errorf("muted=%v: signed with %q, want %q", muted, sig.MessageEventSignature.SigningPublicKey, v.SigningPublicB64)
+		}
+	}
+}
+
 func TestMediaEncryptDecryptRoundtrip(t *testing.T) {
 	// The message-first media flow: the message names the file by the media
 	// hash key its upload started with, the file is encrypted from the

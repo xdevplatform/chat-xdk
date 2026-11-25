@@ -285,6 +285,16 @@ pub(crate) struct FfiMessageTtlRemoveParams {
 }
 
 #[derive(serde::Deserialize)]
+pub(crate) struct FfiConversationMuteParams {
+    pub(crate) conversation_id: String,
+    pub(crate) muted: bool,
+    #[serde(default)]
+    pub(crate) sender_id: Option<String>,
+    #[serde(default)]
+    pub(crate) signing_key_version: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 pub(crate) struct FfiScreenCaptureParams {
     pub(crate) conversation_id: String,
     pub(crate) change: String,

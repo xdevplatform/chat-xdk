@@ -469,6 +469,23 @@ class ChatCoreTest {
     }
 
     @Test
+    void prepareConversationMuteSignsMuteAndUnmute() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            for (boolean muted : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationMute("g123", muted);
+                assertEquals(1, prepared.actionSignatures.size(), "muted=" + muted);
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty(), "muted=" + muted);
+                assertFalse(sig.encodedMessageEventDetail.isEmpty(), "muted=" + muted);
+                assertFalse(sig.messageEventSignature.signature.isEmpty(), "muted=" + muted);
+                assertEquals(core.publicKeys().signing, sig.messageEventSignature.signingPublicKey);
+            }
+        }
+    }
+
+    @Test
     void encryptReactionProducesSendablePayload() throws Exception {
         JsonNode v = vectors();
         try (ChatCore core = loadedCore(v)) {

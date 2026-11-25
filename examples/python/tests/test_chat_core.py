@@ -418,6 +418,18 @@ class TestPreparedChanges(unittest.TestCase):
         encrypted_title = prep["encrypted_title"]
         self.assertEqual(core.decrypt(encrypted_title, bytes(prep["conversation_key"])), title)
 
+    def test_prepare_conversation_mute_signs_mute_and_unmute(self):
+        core, _ = self._core_and_keys()
+        for muted in (True, False):
+            prepared = core.prepare_conversation_mute("g123", muted)
+            (sig,) = prepared["action_signatures"]
+            self.assertTrue(sig["message_id"], muted)
+            self.assertTrue(sig["encoded_message_event_detail"], muted)
+            self.assertTrue(sig["message_event_signature"]["signature"], muted)
+            self.assertEqual(
+                sig["message_event_signature"]["signing_public_key"], core.public_keys()["signing"]
+            )
+
     def test_encrypt_reaction_produces_sendable_payload(self):
         core, _ = self._core_and_keys()
         conv_key = base64.b64decode(self.vectors["conversation_key_b64"])

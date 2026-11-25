@@ -1,16 +1,17 @@
-//! Conversation settings: the message TTL, screen-capture protection, and
-//! archiving.
+//! Conversation settings: the message TTL, mute state, screen-capture
+//! protection, and archiving.
 
 use crate::core::ChatCore;
 use crate::error::SdkError;
 use crate::params::{
-    ConversationArchiveParams, MessageTtlChangeParams, MessageTtlRemoveParams, ScreenCaptureParams,
+    ConversationArchiveParams, ConversationMuteParams, MessageTtlChangeParams,
+    MessageTtlRemoveParams, ScreenCaptureParams,
 };
 use crate::thrift::event::{
     ArchiveConversation, ConversationMetadataChange, ConversationMetadataChangeEvent,
     DisableScreenCaptureBlocking, DisableScreenCaptureDetection, EnableScreenCaptureBlocking,
     EnableScreenCaptureDetection, MessageDurationChange, MessageDurationRemove, MessageEventDetail,
-    UnarchiveConversation,
+    MuteConversation, UnarchiveConversation, UnmuteConversation,
 };
 use crate::types::PreparedAction;
 
@@ -65,6 +66,46 @@ impl ChatCore {
         Ok(one_action(signature))
     }
 
+    /// Sign muting or unmuting a conversation, group or one-to-one, for the
+    /// signer alone.
+    ///
+    /// Mute state is the signer's own, so the event is sent in the signer's
+    /// self conversation (`{sender_id}:{sender_id}`) and names the muted
+    /// conversation as its one id, in canonical form. The mute request must
+    /// name the conversation in that same form: the event the backend builds
+    /// from the request's ids has to equal the signed one.
+    pub fn prepare_conversation_mute(
+        &self,
+        params: &ConversationMuteParams,
+    ) -> Result<PreparedAction, SdkError> {
+        if params.conversation_id.is_empty() {
+            return Err(SdkError::InvalidInput(
+                "conversation_id is empty: pass the conversation this action belongs to".into(),
+            ));
+        }
+        let sender_id = self.resolve_sender_id(params.sender_id.as_deref())?;
+        let target =
+            crate::pipeline::canonical_conversation_id(&params.conversation_id, &sender_id)
+                .into_owned();
+        let ctx = self.action_ctx(
+            &format!("{sender_id}:{sender_id}"),
+            Some(&sender_id),
+            params.signing_key_version.as_deref(),
+        )?;
+        let change = if params.muted {
+            ConversationMetadataChange::MuteConversation(MuteConversation {
+                muted_conversation_ids: Some(vec![target]),
+            })
+        } else {
+            ConversationMetadataChange::UnmuteConversation(UnmuteConversation {
+                unmuted_conversation_ids: Some(vec![target]),
+            })
+        };
+        let signature = sign_change(&ctx, metadata_detail(change))?;
+        Ok(one_action(signature))
+    }
+
+    /// Sign one screen-capture setting change.
     /// Sign one screen-capture setting change.
     ///
     /// Blocking and detection each have an enable and a disable event. The

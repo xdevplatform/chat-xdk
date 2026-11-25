@@ -433,3 +433,23 @@ fn sign_cannot_forge_a_key_change() {
         );
     }
 }
+
+#[test]
+fn sign_refuses_the_conversation_mute_payloads() {
+    let core = signer("111");
+    for muted in [true, false] {
+        let params = crate::params::ConversationMuteParams::new("g1", muted);
+        for action in core
+            .prepare_conversation_mute(&params)
+            .unwrap()
+            .action_signatures
+        {
+            assert!(!action.signature_payload.is_empty());
+            assert!(
+                refused(&core, action.signature_payload.as_bytes()),
+                "signed {}",
+                action.signature_payload
+            );
+        }
+    }
+}

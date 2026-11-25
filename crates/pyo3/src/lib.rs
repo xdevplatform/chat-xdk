@@ -560,6 +560,7 @@ fn _native(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<GroupJoinRejectParams>()?;
     m.add_class::<MessageTtlChangeParams>()?;
     m.add_class::<MessageTtlRemoveParams>()?;
+    m.add_class::<ConversationMuteParams>()?;
     m.add_class::<ScreenCaptureParams>()?;
     m.add_class::<SetIdentityParams>()?;
     m.add_class::<ImportKeysParams>()?;

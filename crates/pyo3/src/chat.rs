@@ -1271,6 +1271,34 @@ impl Chat {
         prepared_action_to_pydict(py, &prepared)
     }
 
+    /// Sign muting or unmuting a conversation, group or one-to-one, for the
+    /// signer alone.
+    ///
+    /// The event is signed for the signer's own ``{sender_id}:{sender_id}``
+    /// conversation and names the muted conversation, in canonical colon
+    /// form for a one-to-one. Send the result's ``action_signatures`` with a
+    /// mute or unmute request that names the conversation in that same form.
+    /// The SDK generates the action's message id; read it back from the
+    /// entry.
+    ///
+    /// Args:
+    ///     params: A ``ConversationMuteParams``.
+    ///
+    /// Returns:
+    ///     A dict with ``action_signatures``, shaped as
+    ///     ``prepare_message_delete`` returns it.
+    pub(crate) fn prepare_conversation_mute(
+        &self,
+        py: Python<'_>,
+        params: PyRef<'_, ConversationMuteParams>,
+    ) -> PyResult<Py<PyAny>> {
+        let prepared = self
+            .inner
+            .prepare_conversation_mute(&params.to_core())
+            .map_err(to_py_err)?;
+        prepared_action_to_pydict(py, &prepared)
+    }
+
     /// Sign one screen-capture setting change.
     pub(crate) fn prepare_screen_capture(
         &self,

@@ -482,6 +482,7 @@ export class ChatWithJuicebox {
   prepareGroupJoinReject(params) { return this.#inner.prepareGroupJoinReject(params); }
   prepareMessageTtlChange(params) { return this.#inner.prepareMessageTtlChange(params); }
   prepareMessageTtlRemove(params) { return this.#inner.prepareMessageTtlRemove(params); }
+  prepareConversationMute(params) { return this.#inner.prepareConversationMute(params); }
   prepareScreenCapture(params) { return this.#inner.prepareScreenCapture(params); }
   prepareConversationArchive(params) { return this.#inner.prepareConversationArchive(params); }
 

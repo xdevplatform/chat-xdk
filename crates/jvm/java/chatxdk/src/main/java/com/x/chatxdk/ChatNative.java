@@ -104,6 +104,8 @@ public interface ChatNative extends Library {
 
     FfiResult.ByValue chat_xdk_prepare_message_ttl_remove(Pointer handle, Pointer paramsJson);
 
+    FfiResult.ByValue chat_xdk_prepare_conversation_mute(Pointer handle, Pointer paramsJson);
+
     FfiResult.ByValue chat_xdk_prepare_screen_capture(Pointer handle, Pointer paramsJson);
 
     FfiResult.ByValue chat_xdk_prepare_conversation_archive(Pointer handle, Pointer paramsJson);

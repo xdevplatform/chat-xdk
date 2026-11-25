@@ -28,6 +28,7 @@ from chat_xdk import (
     Chat,
     ConversationArchiveParams,
     ConversationKeyChangeParams,
+    ConversationMuteParams,
     DecryptEventParams,
     DecryptEventsParams,
     EncryptMessageParams,
@@ -577,6 +578,20 @@ class ChatCore:
         return self.chat.prepare_conversation_archive(
             ConversationArchiveParams(conversation_id, archived)
         )
+
+    # -- Conversation mute ----------------------------------------------------
+
+    def prepare_conversation_mute(self, conversation_id: str, muted: bool) -> dict[str, Any]:
+        """Sign muting (``muted`` True) or unmuting (False) a conversation,
+        group or one-to-one, for this bot alone.
+
+        The event is signed in the bot's own ``{user_id}:{user_id}``
+        conversation and names ``conversation_id`` in canonical colon form;
+        send ``action_signatures`` with a mute or unmute request that names
+        the conversation in that same form. Signed with the ``set_identity``
+        session identity.
+        """
+        return self.chat.prepare_conversation_mute(ConversationMuteParams(conversation_id, muted))
 
     def close(self) -> None:
         """Clear the keys from memory, when the chat's user signs out. The

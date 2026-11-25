@@ -972,6 +972,20 @@ export interface MessageTtlRemoveParams {
   signingKeyVersion?: string | null;
 }
 
+/**
+ * Parameters for prepareConversationMute.
+ */
+export interface ConversationMuteParams {
+  /** ID of the conversation: a group id or a one-to-one id, in either `A:B` or `A-B` form. */
+  conversationId: string;
+  /** `true` signs a mute, `false` an unmute. */
+  muted: boolean;
+  /** User ID of the sender signing the action; resolves from the session identity (setIdentity) when omitted. */
+  senderId?: string | null;
+  /** Version of the signing key used to sign the action; resolves from the session identity when omitted. */
+  signingKeyVersion?: string | null;
+}
+
 /** Parameters for prepareScreenCapture. */
 export interface ScreenCaptureParams {
   conversationId: string;
@@ -2002,6 +2016,13 @@ interface ChatCrypto {
   /** Sign clearing a conversation's message TTL. */
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
 
+  /**
+   * Sign muting or unmuting a conversation, group or one-to-one, for the
+   * signer alone: signed for the signer's own `{senderId}:{senderId}`
+   * conversation, naming the muted conversation in canonical form.
+   */
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
+
   /** Sign one screen-capture setting change. */
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
 
@@ -2065,6 +2086,7 @@ declare class Chat implements ChatCrypto {
   prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
   prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
   prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 }
@@ -2223,6 +2245,7 @@ export declare class ChatWithJuicebox implements ChatCrypto {
   prepareGroupJoinReject(params: GroupJoinRejectParams): PreparedAction;
   prepareMessageTtlChange(params: MessageTtlChangeParams): PreparedAction;
   prepareMessageTtlRemove(params: MessageTtlRemoveParams): PreparedAction;
+  prepareConversationMute(params: ConversationMuteParams): PreparedAction;
   prepareScreenCapture(params: ScreenCaptureParams): PreparedAction;
   prepareConversationArchive(params: ConversationArchiveParams): PreparedAction;
 

@@ -642,6 +642,16 @@ further fields, and archive or unarchive
 can carry is left unset, as X clients sign it, and a verifier signs the ids
 after the conversation id when it is set.
 
+`prepare_conversation_mute` signs a `MuteConversation` or
+`UnmuteConversation` change as X clients do: in the signer's own
+`{sender_id}:{sender_id}` conversation, with the muted conversation's
+canonical id as the one field after it:
+
+```
+"ConversationMetadataChangeEvent.MuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+"ConversationMetadataChangeEvent.UnmuteConversation,{message_id},{sender_id},{sender_id}:{sender_id},{muted_conversation_id}"
+```
+
 #### Verifying newer versions
 
 The action layouts above are the ones the SDK signs at v7, while the chat

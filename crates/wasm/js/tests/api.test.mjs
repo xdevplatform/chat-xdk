@@ -957,6 +957,12 @@ async function main() {
       ["GroupChangeEvent.GroupJoinRequest", () => ",g100,111", () => chat.prepareGroupJoinRequest({ ...ident })],
       ["GroupChangeEvent.GroupJoinReject", () => ",g100,910010",
         () => chat.prepareGroupJoinReject({ ...ident, userIds: ["910010"] })],
+      // A mute is the signer's own: it is signed in the 111:111 self
+      // conversation and names the muted one, a 1:1 in canonical form.
+      ["ConversationMetadataChangeEvent.MuteConversation", () => ",111:111,g100",
+        () => chat.prepareConversationMute({ ...ident, muted: true })],
+      ["ConversationMetadataChangeEvent.UnmuteConversation", () => ",111:111,111:222",
+        () => chat.prepareConversationMute({ ...ident, conversationId: "222-111", muted: false })],
       ["ConversationMetadataChangeEvent.MessageDurationChange", () => ",g100,86400000",
         () => chat.prepareMessageTtlChange({ ...ident, ttlMsec: 86400000 })],
       ["ConversationMetadataChangeEvent.MessageDurationRemove", () => ",g100",
@@ -972,6 +978,14 @@ async function main() {
       const payload = `${event},${action.messageId},111${signedFields(result)}`;
       assert.ok(signs(chat, action, payload), payload);
     }
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident }),
+      /prepareConversationMute params.*muted/,
+    );
+    assert.throws(
+      () => chat.prepareConversationMute({ ...ident, conversationId: "", muted: true }),
+      /conversation_id is empty/,
+    );
   }
 
   // 4c3c. prepareConversationArchive signs an archive or an unarchive with

@@ -1050,3 +1050,159 @@ fn prepare_group_members_change_normalizes_absent_value_encodings() {
         "normalized title/avatar/ttl must sign as the null sentinel"
     );
 }
+
+#[test]
+fn conversation_mute_signs_for_the_self_conversation_and_decrypts_verified() {
+    // Every form of a 1:1 id is named in canonical colon form; a group id as
+    // it is. The event itself belongs to the signer's self conversation.
+    for (given, muted_id) in [("222-111", "111:222"), ("222", "111:222"), ("g999", "g999")] {
+        for muted in [true, false] {
+            let core = ChatCore::new();
+            let reg = core.generate_keypairs().unwrap();
+            core.set_identity(&SetIdentityParams::new("111", "61"))
+                .unwrap();
+
+            let sig = only_action(
+                core.prepare_conversation_mute(&crate::ConversationMuteParams::new(given, muted))
+                    .unwrap(),
+            );
+
+            let event_name = if muted {
+                "MuteConversation"
+            } else {
+                "UnmuteConversation"
+            };
+            assert_eq!(sig.message_event_signature.public_key_version, "61");
+            assert_eq!(
+                sig.signature_payload,
+                format!(
+                    "ConversationMetadataChangeEvent.{event_name},{},111,111:111,{muted_id}",
+                    sig.message_id
+                )
+            );
+            assert_action_signature_round_trips(&core, &sig, "111", "111:111", None);
+
+            let MessageEventDetail::ConversationMetadataChangeEvent(detail) =
+                decode_detail(&sig.encoded_message_event_detail)
+            else {
+                panic!("expected a ConversationMetadataChangeEvent");
+            };
+            let ids =
+                match detail.conversation_metadata_change {
+                    Some(crate::thrift::event::ConversationMetadataChange::MuteConversation(c))
+                        if muted =>
+                    {
+                        c.muted_conversation_ids
+                    }
+                    Some(crate::thrift::event::ConversationMetadataChange::UnmuteConversation(
+                        c,
+                    )) if !muted => c.unmuted_conversation_ids,
+                    other => panic!("unexpected change {other:?}"),
+                };
+            assert_eq!(ids, Some(vec![muted_id.to_string()]));
+
+            // Delivered in the self conversation, a recipient verifies it.
+            let signed = &sig.message_event_signature;
+            let event = MessageEvent::new(
+                Some("2011626338877079560".to_string()),
+                Some(sig.message_id.clone()),
+                Some("111".to_string()),
+                Some("111:111".to_string()),
+                None::<String>,
+                Some("1700000000123".to_string()),
+                Some(decode_detail(&sig.encoded_message_event_detail)),
+                None::<crate::thrift::event::MessageEventRelaySource>,
+                Some(crate::thrift::event::MessageEventSignature::new(
+                    Some(signed.signature.clone()),
+                    Some(signed.public_key_version.clone()),
+                    Some(signed.signature_version.clone()),
+                    None::<String>,
+                    None::<Vec<crate::thrift::event::MessageSigningKeyInfo>>,
+                )),
+                None::<String>,
+                None::<bool>,
+                None::<String>,
+            );
+            let event_b64 = base64_encode(&serialize_thrift(&event).unwrap());
+            match ChatCore::new()
+                .decrypt_event(
+                    &DecryptEventParams::new(event_b64, Default::default())
+                        .with_signing_keys(vec![signing_key_entry_for(&reg, "111")]),
+                )
+                .unwrap()
+            {
+                Event::SettingsChange(settings) => {
+                    assert!(settings.verified);
+                    assert!(match settings.change {
+                        SettingsChange::Muted => muted,
+                        SettingsChange::Unmuted => !muted,
+                        _ => false,
+                    });
+                }
+                other => panic!("expected Event::SettingsChange, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn conversation_mute_signature_does_not_verify_in_the_muted_conversation() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+    core.set_identity(&SetIdentityParams::new("111", "61"))
+        .unwrap();
+    let sig = only_action(
+        core.prepare_conversation_mute(&crate::ConversationMuteParams::new("g999", true))
+            .unwrap(),
+    );
+    let detail = decode_detail(&sig.encoded_message_event_detail);
+    let event = |conversation_id: &str| MessageEvent {
+        message_id: Some(sig.message_id.clone()),
+        sender_id: Some("111".to_string()),
+        conversation_id: Some(conversation_id.to_string()),
+        message_event_signature: Some(crate::thrift::event::MessageEventSignature {
+            signature_version: Some(sig.message_event_signature.signature_version.clone()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let signing_pubkey = core.get_public_keys().unwrap().signing;
+    let sig_bytes = base64_decode(&sig.message_event_signature.signature).unwrap();
+    let verifies_in = |conversation_id: &str| {
+        let payload =
+            build_event_signature_payload(&event(conversation_id), &detail, None).expect("payload");
+        core.verify(&signing_pubkey, &sig_bytes, &payload).unwrap()
+    };
+    assert!(verifies_in("111:111"));
+    assert!(!verifies_in("g999"));
+}
+
+#[test]
+fn prepare_conversation_mute_rejects_bad_input() {
+    let core = ChatCore::new();
+    core.generate_keypairs().unwrap();
+
+    let empty = crate::ConversationMuteParams::new("", true).with_identity("111", "1");
+    let err = core.prepare_conversation_mute(&empty).unwrap_err();
+    assert!(
+        err.to_string().contains("conversation_id is empty"),
+        "unexpected error: {err}"
+    );
+
+    // A comma would split the signed payload's fields.
+    let comma = crate::ConversationMuteParams::new("g1,g2", true).with_identity("111", "1");
+    assert!(core.prepare_conversation_mute(&comma).is_err());
+
+    // The self conversation is built from the sender id, so it must be one.
+    let not_a_user = crate::ConversationMuteParams::new("g1", true).with_identity("alice", "1");
+    assert!(core.prepare_conversation_mute(&not_a_user).is_err());
+
+    // Without keys there is nothing to sign with.
+    let unkeyed = ChatCore::new();
+    let err = unkeyed
+        .prepare_conversation_mute(
+            &crate::ConversationMuteParams::new("g1", true).with_identity("111", "1"),
+        )
+        .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
