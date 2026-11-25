@@ -14,12 +14,13 @@ use std::sync::{Arc, Mutex};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::{
-    AttachmentDescriptor, EntityDescriptor, MissingSigningKey, PreparedConversationChange,
-    PublicKeyInput, PublicKeyRecord,
+    AttachmentDescriptor, EntityDescriptor, Event, MessageContent, MissingSigningKey,
+    PreparedConversationChange, PublicKeyInput, PublicKeyRecord, SentFromSurface,
+    SentFromSurfaceKnown,
 };
 use chatbot_rs::bot::Bot;
 use chatbot_rs::chat_core::{
-    prep_to_request, removal_to_request, ChatCore, ReplyOptions, SendBody,
+    prep_to_request, removal_to_request, ChatCore, ForwardOptions, ReplyOptions, SendBody,
 };
 use chatbot_rs::x_api::{ChatApi, EventItem};
 use common::{delivered, key_change_and_message, party, public_keys_of, texts};
@@ -305,6 +306,75 @@ fn encrypt_reaction_produces_sendable_payload() {
             "xdk_version"
         ]
     );
+}
+
+#[test]
+fn encrypt_forward_round_trips_the_original_and_the_comment() {
+    let v = load_vectors();
+    let core = loaded_core(&v);
+    let sender = v["event_sender_id"].as_str().unwrap().to_string();
+    let record = PublicKeyRecord::new(
+        v["event_signing_key_version"].as_str().unwrap(),
+        v["identity_public_b64"].as_str().unwrap(),
+        v["signing_public_b64"].as_str().unwrap(),
+        v["identity_public_key_signature_b64"].as_str().unwrap(),
+    );
+    core.fetch_public_keys_with(move |user_id| {
+        if user_id == sender {
+            Ok(vec![record.clone()])
+        } else {
+            Err(format!("no public keys for user {user_id}"))
+        }
+    });
+    let key = conversation_key(&v);
+    let body = core
+        .encrypt_forward(
+            v["event_conversation_id"].as_str().unwrap(),
+            "the original message",
+            ForwardOptions {
+                text: Some("look at this".to_string()),
+                ..Default::default()
+            }
+            .with_conversation_key(&key, v["event_conversation_key_version"].as_str().unwrap()),
+        )
+        .expect("encrypt_forward");
+
+    // The key change gives the SDK the key the forward opens with.
+    let forward = delivered(&body.event_b64, "2100000000000000001");
+    let page = core.decrypt_batch(&[
+        v["event_key_change_b64"].as_str().unwrap(),
+        forward.as_str(),
+    ]);
+    assert!(page.errors.is_empty(), "{:?}", page.errors);
+    match &page.events[1].event {
+        Event::Message(msg) => match &msg.content {
+            MessageContent::Text {
+                text,
+                forwarded_message,
+                sent_from,
+                ..
+            } => {
+                assert_eq!(text, "look at this");
+                assert_eq!(
+                    forwarded_message
+                        .as_ref()
+                        .and_then(|original| original.message_text.as_deref()),
+                    Some("the original message")
+                );
+                assert!(
+                    matches!(
+                        sent_from,
+                        Some(SentFromSurface::Known(
+                            SentFromSurfaceKnown::MessageForwardSheet
+                        ))
+                    ),
+                    "{sent_from:?}"
+                );
+            }
+            other => panic!("expected a text message, got {other:?}"),
+        },
+        other => panic!("expected a message, got {other:?}"),
+    }
 }
 
 #[test]
