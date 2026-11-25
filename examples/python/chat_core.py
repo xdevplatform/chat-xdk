@@ -299,6 +299,7 @@ class ChatCore:
         reply_to_ckces: list[str] | None = None,
         reply_to_sequence_id: str | None = None,
         reply_to_message_id: str | None = None,
+        reply_to_attachment_id: str | None = None,
         entities: list[tuple[int, int, str]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         quick_reply: QuickReply | None = None,
@@ -314,8 +315,11 @@ class ChatCore:
         events that open an original sent under an older key version. A
         reply by ``reply_to_sequence_id`` also needs ``reply_to_message_id``,
         the quoted message's ``id``: recipients treat a v1 reply that names no
-        original as invalid. Omit the conversation key pair to resolve it from
-        the SDK's verified-key cache (``set_cache_keys``).
+        original as invalid. ``reply_to_attachment_id`` replies to one
+        attachment of ``reply_to_event``, such as one photo of an album: its
+        ``attachment_id``, which the preview quotes alone. Omit the
+        conversation key pair to resolve it from the SDK's verified-key cache
+        (``set_cache_keys``).
         ``entities`` are ``(start, end, type)`` byte ranges; ``attachments``
         are attachment descriptors, each file naming the media hash key its
         upload started with; ``quick_reply`` offers selectable options or
@@ -326,7 +330,7 @@ class ChatCore:
         event: it is not sent, but ``encrypt_media`` takes it to encrypt the
         message's files.
         """
-        if reply_to_event is None and reply_to_sequence_id is None:
+        if reply_to_event is None and reply_to_sequence_id is None and reply_to_attachment_id is None:
             payload = self.chat.encrypt_message(
                 EncryptMessageParams(
                     conversation_id,
@@ -348,6 +352,7 @@ class ChatCore:
                     reply_to_ckces=reply_to_ckces,
                     reply_to_sequence_id=reply_to_sequence_id,
                     reply_to_message_id=reply_to_message_id,
+                    reply_to_attachment_id=reply_to_attachment_id,
                     conversation_key=conversation_key,
                     conversation_key_version=conversation_key_version,
                     entities=entities,
@@ -369,25 +374,36 @@ class ChatCore:
         self,
         *,
         add: bool,
-        conversation_id: str,
-        target_message_sequence_id: str,
         emoji: str,
         conversation_key: bytes,
         conversation_key_version: str,
+        conversation_id: str | None = None,
+        target_message_sequence_id: str | None = None,
+        target_event: str | None = None,
+        target_attachment_id: str | None = None,
     ) -> dict[str, str]:
-        """Encrypt + sign a reaction add/remove targeting a message sequence id.
+        """Encrypt + sign a reaction add/remove.
 
-        Signed with the ``set_identity`` session identity.
+        The target is ``conversation_id`` and ``target_message_sequence_id``,
+        or ``target_event``, the raw event being reacted to, from which the
+        SDK derives both. ``target_attachment_id`` reacts to one attachment
+        of ``target_event``, such as one photo of an album: its
+        ``attachment_id``, which the SDK checks against the decrypted event.
+        Remove the reaction with the same ``target_attachment_id``. Signed
+        with the ``set_identity`` session identity.
+
+        The result also carries ``event_b64``, the reaction as an event.
         """
         method = self.chat.encrypt_add_reaction if add else self.chat.encrypt_remove_reaction
         payload = method(
             EncryptReactionParams(
-                None,
+                target_event,
                 emoji,
                 conversation_id=conversation_id,
                 target_message_sequence_id=target_message_sequence_id,
                 conversation_key=conversation_key,
                 conversation_key_version=conversation_key_version,
+                target_attachment_id=target_attachment_id,
             )
         )
         return {
@@ -396,6 +412,7 @@ class ChatCore:
             "encoded_message_create_event": payload.encoded_message_create_event,
             "encoded_message_event_signature": payload.encoded_message_event_signature,
             "xdk_version": payload.xdk_version,
+            "event_b64": payload.event_b64,
         }
 
     # -- Group management -----------------------------------------------------

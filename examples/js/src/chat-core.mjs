@@ -227,7 +227,9 @@ export class ChatCore {
    * byte ranges; `attachments` are attachment descriptors, each file naming
    * the media hash key its upload started with; `quickReply` offers
    * selectable options or answers them; `ttlMsec` makes the message
-   * disappear after the given lifetime.
+   * disappear after the given lifetime. `replyToAttachmentId` replies to one
+   * attachment of `replyToEvent`, such as one photo of an album: its
+   * `attachmentId`, which the preview quotes alone.
    *
    * The result also carries `event_b64`, the outgoing message as an event:
    * it is not sent, but `encryptMedia` takes it to encrypt the message's
@@ -239,6 +241,7 @@ export class ChatCore {
     conversationKey,
     conversationKeyVersion,
     replyToEvent,
+    replyToAttachmentId,
     entities,
     attachments,
     quickReply,
@@ -254,9 +257,10 @@ export class ChatCore {
       quickReply,
       ttlMsec,
     };
-    const payload = replyToEvent
-      ? this.#chat.encryptReply({ ...params, replyToEvent })
-      : this.#chat.encryptMessage(params);
+    const payload =
+      replyToEvent || replyToAttachmentId
+        ? this.#chat.encryptReply({ ...params, replyToEvent, replyToAttachmentId })
+        : this.#chat.encryptMessage(params);
     return {
       // The SDK generates the message id and returns it in the payload.
       message_id: payload.messageId,
@@ -270,10 +274,14 @@ export class ChatCore {
   /**
    * Encrypt + sign a reaction add/remove. `targetEvent` is the base64 raw
    * event being reacted to; the conversation id and target sequence id are
-   * derived from it.
+   * derived from it. `targetAttachmentId` reacts to one attachment of
+   * `targetEvent`, such as one photo of an album: its `attachmentId`, which
+   * the SDK checks against the decrypted event. Remove the reaction with the
+   * same `targetAttachmentId`. The result also carries `event_b64`, the
+   * reaction as an event.
    */
-  encryptReaction({ add, targetEvent, emoji, conversationKey, conversationKeyVersion }) {
-    const params = { emoji, targetEvent, conversationKey, conversationKeyVersion };
+  encryptReaction({ add, targetEvent, targetAttachmentId, emoji, conversationKey, conversationKeyVersion }) {
+    const params = { emoji, targetEvent, targetAttachmentId, conversationKey, conversationKeyVersion };
     const payload = add
       ? this.#chat.encryptAddReaction(params)
       : this.#chat.encryptRemoveReaction(params);
@@ -283,6 +291,7 @@ export class ChatCore {
       encoded_message_create_event: payload.encodedMessageCreateEvent,
       encoded_message_event_signature: payload.encodedMessageEventSignature,
       xdk_version: payload.xdkVersion,
+      event_b64: payload.eventB64,
     };
   }
 

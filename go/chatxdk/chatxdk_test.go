@@ -4848,6 +4848,78 @@ func quickReplyChat(t *testing.T, v sdkVectors) *Chat {
 	return chat
 }
 
+// TestAttachmentTargetsReachTheCore checks TargetAttachmentID and
+// ReplyToAttachmentID reach the core: each needs the raw event, which the
+// SDK decrypts to find the attachment, so an id the event does not carry is
+// rejected.
+func TestAttachmentTargetsReachTheCore(t *testing.T) {
+	v := loadVectors(t)
+
+	chat := New()
+	defer chat.Close()
+	if err := chat.ImportKeys(ImportKeysParams{Keys: v.privateKeys(t), SigningKeyVersion: v.EventRecipientKeyVersion}); err != nil {
+		t.Fatalf("ImportKeys with a signing-key version failed: %v", err)
+	}
+	if err := chat.SetIdentity(SetIdentityParams{UserID: v.EventSenderID, SigningKeyVersion: v.EventSigningKeyVersion}); err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	wantInvalid := func(what string, err error, want string) {
+		t.Helper()
+		var chatErr *Error
+		if !errors.As(err, &chatErr) || chatErr.Kind != ErrorKindInvalidInput ||
+			!strings.Contains(chatErr.Message, want) {
+			t.Errorf("%s: want an invalid-input error containing %q, got %v", what, want, err)
+		}
+	}
+
+	reaction := EncryptReactionParams{
+		TargetEvent:            v.EventMessageB64,
+		Emoji:                  "\U0001F44D",
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		TargetAttachmentID:     "att-1",
+	}
+	_, err := chat.EncryptAddReaction(reaction)
+	wantInvalid("reaction to an unknown attachment", err, "target_attachment_id 'att-1' not found")
+	reaction.TargetEvent = ""
+	reaction.ConversationID = v.EventConversationID
+	reaction.TargetMessageSequenceID = "1"
+	_, err = chat.EncryptRemoveReaction(reaction)
+	wantInvalid("reaction without the event", err, "target_attachment_id needs target_event")
+
+	_, err = chat.EncryptReply(EncryptReplyParams{
+		ConversationID:         v.EventConversationID,
+		Text:                   "replying to one attachment",
+		ReplyToEvent:           v.EventMessageB64,
+		ConversationKey:        v.conversationKey(t),
+		ConversationKeyVersion: v.EventConversationKeyVersion,
+		ReplyToAttachmentID:    "att-1",
+	})
+	wantInvalid("reply to an unknown attachment", err, "reply_to_attachment_id 'att-1' not found")
+}
+
+func TestMessageContentReactionToOneAttachment(t *testing.T) {
+	var event Event
+	err := json.Unmarshal([]byte(`{
+		"type": "Message",
+		"content": {
+			"content_type": "Reaction",
+			"emoji": "x",
+			"target_message_sequence_id": "seq-42",
+			"target_attachment_id": "att-1"
+		},
+		"verified": true
+	}`), &event)
+	if err != nil {
+		t.Fatalf("Event.UnmarshalJSON failed: %v", err)
+	}
+	msg := event.AsMessage()
+	if msg == nil || msg.Content.ReactionContent == nil ||
+		msg.Content.ReactionContent.TargetAttachmentID != "att-1" {
+		t.Fatalf("unexpected reaction: %+v", msg)
+	}
+}
+
 func TestEncryptMessageQuickReplyRoundTrip(t *testing.T) {
 	v := loadVectors(t)
 	chat := quickReplyChat(t, v)

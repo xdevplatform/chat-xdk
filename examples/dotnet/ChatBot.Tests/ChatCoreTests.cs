@@ -517,6 +517,29 @@ public class ChatCoreTests
     }
 
     [Fact]
+    public void Attachment_Targets_Reach_The_Core()
+    {
+        // A reply or reaction to one attachment names an attachment_id the raw
+        // event carries; the SDK decrypts the event to check it. The fixture
+        // message carries no attachment, so the SDK rejects the id, naming it.
+        var v = LoadVectors();
+        using var core = LoadedCore(v);
+        core.SetIdentity("1000");
+        var convKey = Convert.FromBase64String(v.ConversationKeyB64);
+        foreach (var add in new[] { true, false })
+        {
+            var ex = Assert.Throws<ChatXdkException>(() => core.EncryptReaction(
+                add, v.EventMessageB64, "\U0001F44D", convKey, v.EventConversationKeyVersion,
+                targetAttachmentId: "att-1"));
+            Assert.Contains("target_attachment_id 'att-1' not found", ex.Message);
+        }
+        var replyEx = Assert.Throws<ChatXdkException>(() => core.EncryptReply(
+            v.EventConversationId, "the first one", convKey, v.EventConversationKeyVersion,
+            replyToEvent: v.EventMessageB64, replyToAttachmentId: "att-1"));
+        Assert.Contains("reply_to_attachment_id 'att-1' not found", replyEx.Message);
+    }
+
+    [Fact]
     public void Media_Encrypt_Decrypt_Roundtrip()
     {
         // The message-first media flow: the message names the file by the media

@@ -804,6 +804,40 @@ class TestApiShapes(unittest.TestCase):
             self.assertTrue(payload.signature)
             self.assertTrue(payload.encoded_message_event_signature)
 
+    def test_attachment_targets_need_the_raw_event(self):
+        from chat_xdk import EncryptReactionParams, EncryptReplyParams
+
+        chat, v = self._unlocked_chat()
+
+        conv_key = base64.b64decode(v["conversation_key_b64"])
+        reaction = EncryptReactionParams(
+            None, "\U0001F44D",
+            conversation_id="conv-1",
+            target_message_sequence_id="seq-99",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+            target_attachment_id="att-1",
+        )
+        self.assertEqual(reaction.target_attachment_id, "att-1")
+        for encrypt in (chat.encrypt_add_reaction, chat.encrypt_remove_reaction):
+            with self.assertRaisesRegex(ValueError, "target_attachment_id needs target_event"):
+                encrypt(reaction)
+
+        reply = EncryptReplyParams(
+            "conv-1", "this is my reply", None,
+            reply_to_sequence_id="seq-42",
+            reply_to_attachment_id="att-1",
+            sender_id="1001",
+            signing_key_version="1",
+            conversation_key=conv_key,
+            conversation_key_version="1",
+        )
+        self.assertEqual(reply.reply_to_attachment_id, "att-1")
+        with self.assertRaisesRegex(ValueError, "reply_to_attachment_id needs reply_to_event"):
+            chat.encrypt_reply(reply)
+
     def test_encrypt_edit_shape(self):
         from chat_xdk import EncryptEditParams
 

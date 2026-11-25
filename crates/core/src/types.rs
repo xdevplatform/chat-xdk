@@ -244,6 +244,10 @@ pub struct ReplyingToPreview {
     pub sender_display_name: Option<String>,
     pub replying_to_message_sequence_id: Option<String>,
     pub replying_to_message_id: Option<String>,
+    /// The `attachment_id` of the one attachment of the original the reply
+    /// is to; `None` when it is to the whole message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replying_to_attachment_id: Option<String>,
 }
 
 /// Metadata describing a forwarded message's original content.
@@ -662,6 +666,10 @@ pub enum MessageContent {
         emoji: String,
         /// The `sequence_id` of the message being reacted to.
         target_message_sequence_id: String,
+        /// The `attachment_id` of the attachment of the target message the
+        /// reaction is for; `None` when it is for the whole message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_attachment_id: Option<String>,
     },
 
     /// A reaction was removed.
@@ -671,6 +679,10 @@ pub enum MessageContent {
         emoji: String,
         /// The `sequence_id` of the message the reaction was on.
         target_message_sequence_id: String,
+        /// The `attachment_id` of the attachment the reaction was on; `None`
+        /// when it was on the whole message.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_attachment_id: Option<String>,
     },
 
     /// A message was edited.
@@ -2192,6 +2204,7 @@ mod tests {
             content: MessageContent::Reaction {
                 emoji: "👍".to_string(),
                 target_message_sequence_id: "seq-1".to_string(),
+                target_attachment_id: None,
             },
             conversation_key_version: None,
             verified: true,
@@ -2213,6 +2226,7 @@ mod tests {
             content: MessageContent::ReactionRemoved {
                 emoji: "👎".to_string(),
                 target_message_sequence_id: "seq-2".to_string(),
+                target_attachment_id: None,
             },
             conversation_key_version: None,
             verified: false,
@@ -2476,6 +2490,7 @@ mod tests {
                 sender_display_name: None,
                 replying_to_message_sequence_id: None,
                 replying_to_message_id: None,
+                replying_to_attachment_id: None,
             }),
             forwarded_message: None,
             sent_from: Some(SentFromSurface::Unknown(9)),
@@ -2498,9 +2513,11 @@ mod tests {
         let reaction = MessageContent::Reaction {
             emoji: "👍".to_string(),
             target_message_sequence_id: "seq-1".to_string(),
+            target_attachment_id: Some("att-1".to_string()),
         };
         let json = serde_json::to_value(JsMessageContent::from(reaction)).unwrap();
         assert_eq!(json["targetMessageSequenceId"], "seq-1");
+        assert_eq!(json["targetAttachmentId"], "att-1");
 
         let edit = MessageContent::Edit {
             target_message_sequence_id: "seq-1".to_string(),

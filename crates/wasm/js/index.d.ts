@@ -655,6 +655,12 @@ export interface EncryptReplyParams {
   replyToEntities?: EntityTuple[] | null;
   /** Attachments from the original message (for the reply preview); derived from replyToEvent when omitted. */
   replyToAttachments?: AttachmentDescriptor[] | null;
+  /**
+   * attachmentId of the one attachment of the original being replied to;
+   * omitted replies to the whole message. Needs replyToEvent, and
+   * replyToAttachments must stay omitted: the preview quotes only that attachment.
+   */
+  replyToAttachmentId?: string | null;
   /** Optional quick reply: a request offering options, or a response selecting one. */
   quickReply?: QuickReply | null;
   /** Whether to send a push notification. Omitted defaults to true. */
@@ -692,6 +698,12 @@ export interface EncryptReactionParams {
   conversationKey?: Uint8Array | null;
   /** Version of the conversation key used for encryption; resolves from the key cache when omitted. */
   conversationKeyVersion?: string | null;
+  /**
+   * attachmentId of the attachment of the target the reaction is for;
+   * omitted reacts to the whole message. Needs targetEvent, which the SDK
+   * decrypts to check the attachment belongs to it.
+   */
+  targetAttachmentId?: string | null;
 }
 
 /**
@@ -1436,6 +1448,11 @@ export interface MessageContent {
    * `sequenceId` of the target message.
    */
   targetMessageSequenceId?: string;
+  /**
+   * Present on 'reaction' and 'reactionRemoved' content for one attachment
+   * of the target: that attachment's attachmentId.
+   */
+  targetAttachmentId?: string;
   /** Present on 'edit' content sent as v1: the target message's signed message id. */
   targetMessageId?: string;
   /** Present on 'text' and 'edit' content: rich-text entities. */

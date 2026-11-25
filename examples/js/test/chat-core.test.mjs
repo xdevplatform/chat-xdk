@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import http from "node:http";
 import { test } from "node:test";
 
 import { delivered, deliveredAction } from "../../../crates/wasm/js/tests/frame.mjs";
@@ -397,9 +398,100 @@ test("encryptReaction targeting a raw event produces a sendable payload", async 
   assert.deepEqual(Object.keys(body).sort(), [
     "encoded_message_create_event",
     "encoded_message_event_signature",
+    "event_b64",
     "message_id",
     "xdk_version",
   ]);
+});
+
+/**
+ * Run `body` while chats created or given an identity read their feature
+ * switches from a local server that turns v1_send on, as the X API would.
+ */
+async function withV1FeatureSwitches(body) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end('{"features":{"v1_send":true}}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  process.env.CHAT_XDK_API_BASE_URL = `http://127.0.0.1:${server.address().port}/`;
+  try {
+    await body();
+  } finally {
+    delete process.env.CHAT_XDK_API_BASE_URL;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test("a reply and a reaction can target one attachment", async () => {
+  // Attachments carry ids in v1 sends.
+  await withV1FeatureSwitches(async () => {
+    const core = await loadedCore();
+    const keys = { [vectors.event_conversation_key_version]: convKey() };
+    const key = { conversationKey: convKey(), conversationKeyVersion: vectors.event_conversation_key_version };
+    const photo = (mediaHashKey) => ({
+      attachment_type: "media",
+      media_hash_key: mediaHashKey,
+      width: 4,
+      height: 3,
+      filesize_bytes: 1024,
+      filename: `${mediaHashKey}.jpg`,
+      media_type: 1,
+    });
+
+    // The switches arrive in the background: send until the album is v1.
+    let album;
+    let attachmentIds;
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const body = core.encryptReply({
+        conversationId: vectors.event_conversation_id,
+        text: "two photos",
+        ...key,
+        attachments: [photo("photo-1"), photo("photo-2")],
+      });
+      album = delivered(body.event_b64, "2100000000000000001");
+      attachmentIds = core
+        .decryptOne(album, keys, fixtureSigningKeys())
+        .attachments.map((attachment) => attachment.attachmentId);
+      if (attachmentIds.every(Boolean)) break;
+      assert.ok(Date.now() < deadline, "the chat never turned v1 on");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(attachmentIds.length, 2);
+    const second = attachmentIds[1];
+
+    const reply = core.encryptReply({
+      conversationId: vectors.event_conversation_id,
+      text: "the second one",
+      ...key,
+      replyToEvent: album,
+      replyToAttachmentId: second,
+    });
+    const decryptedReply = core.decryptOne(
+      delivered(reply.event_b64, "2100000000000000002"),
+      keys,
+      fixtureSigningKeys(),
+    );
+    assert.equal(decryptedReply.content.replyingToPreview.replyingToAttachmentId, second);
+
+    for (const [add, contentType, sequenceId] of [
+      [true, "reaction", "2100000000000000003"],
+      [false, "reactionRemoved", "2100000000000000004"],
+    ]) {
+      const reaction = core.encryptReaction({
+        add,
+        targetEvent: album,
+        targetAttachmentId: second,
+        emoji: "\u{1f44d}",
+        ...key,
+      });
+      const { content } = core.decryptOne(delivered(reaction.event_b64, sequenceId), keys, fixtureSigningKeys());
+      assert.equal(content.contentType, contentType);
+      assert.equal(content.targetAttachmentId, second);
+    }
+  });
 });
 
 test("threaded reply by raw event with entities and TTL encrypts", async () => {

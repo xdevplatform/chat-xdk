@@ -154,6 +154,8 @@ impl ChatCore {
     ///
     /// When `target_event` is set, the conversation id and target sequence id
     /// are derived from that raw event; explicit fields override them.
+    /// `target_attachment_id` narrows the reaction to one attachment of the
+    /// target and requires `target_event`.
     pub fn encrypt_add_reaction(
         &self,
         params: &EncryptReactionParams,
@@ -168,9 +170,19 @@ impl ChatCore {
             &conversation_id,
             &sender_id,
         )?;
+        let attachment_id = self.resolve_reaction_attachment(
+            params,
+            &conversation_id,
+            &target_sequence_id,
+            &ckey,
+            &conversation_key_version,
+        )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        let content_bytes =
-            crate::pipeline::build_reaction_add_content(&target_sequence_id, &params.emoji)?;
+        let content_bytes = crate::pipeline::build_reaction_add_content(
+            &target_sequence_id,
+            &params.emoji,
+            attachment_id.as_deref(),
+        )?;
         let message_id = Self::generate_message_id();
         let send_version = self.send_version();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
@@ -195,6 +207,7 @@ impl ChatCore {
     ///
     /// When `target_event` is set, the conversation id and target sequence id
     /// are derived from that raw event; explicit fields override them.
+    /// `target_attachment_id` must be the one the reaction was added with.
     pub fn encrypt_remove_reaction(
         &self,
         params: &EncryptReactionParams,
@@ -209,9 +222,19 @@ impl ChatCore {
             &conversation_id,
             &sender_id,
         )?;
+        let attachment_id = self.resolve_reaction_attachment(
+            params,
+            &conversation_id,
+            &target_sequence_id,
+            &ckey,
+            &conversation_key_version,
+        )?;
         let signing_kp = self.get_signing_keypair_arc()?;
-        let content_bytes =
-            crate::pipeline::build_reaction_remove_content(&target_sequence_id, &params.emoji)?;
+        let content_bytes = crate::pipeline::build_reaction_remove_content(
+            &target_sequence_id,
+            &params.emoji,
+            attachment_id.as_deref(),
+        )?;
         let message_id = Self::generate_message_id();
         let send_version = self.send_version();
         let mut api_params = crate::pipeline::EncryptAndSignParams::new(
@@ -406,6 +429,91 @@ impl ChatCore {
         Ok(PreparedAction {
             action_signatures: vec![signature],
         })
+    }
+
+    /// Check a reaction's `target_attachment_id` against the decrypted
+    /// `target_event` and return it, or `None` when the reaction targets the
+    /// whole message.
+    fn resolve_reaction_attachment(
+        &self,
+        params: &EncryptReactionParams,
+        conversation_id: &str,
+        target_sequence_id: &str,
+        ckey: &XChatConversationKey,
+        conversation_key_version: &str,
+    ) -> Result<Option<String>, SdkError> {
+        let Some(attachment_id) = params
+            .target_attachment_id
+            .as_deref()
+            .filter(|v| !v.is_empty())
+        else {
+            return Ok(None);
+        };
+        let raw_b64 = params
+            .target_event
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "target_attachment_id needs target_event: pass the raw event being \
+                     reacted to so the SDK can check the attachment belongs to it"
+                        .into(),
+                )
+            })?;
+        let raw = Self::parse_event_b64(raw_b64)?;
+        // Explicit ids override target_event, so they must name the same
+        // message or the check below would vouch for a different one.
+        if raw.conversation_id.as_deref() != Some(conversation_id) {
+            return Err(SdkError::InvalidInput(
+                "conversation_id does not match target_event: leave conversation_id unset \
+                 or pass the conversation target_event belongs to"
+                    .into(),
+            ));
+        }
+        if raw.sequence_id.as_deref() != Some(target_sequence_id) {
+            return Err(SdkError::InvalidInput(
+                "target_message_sequence_id does not match target_event: leave \
+                 target_message_sequence_id unset or pass target_event's sequence id"
+                    .into(),
+            ));
+        }
+        let key = self
+            .raw_event_contents_key(
+                &raw,
+                Some(ckey),
+                Some(conversation_key_version),
+                &[],
+                &HashMap::new(),
+            )
+            .map_err(|e| match e {
+                SdkError::Crypto(CryptoError::DecryptionFailed(_)) => {
+                    SdkError::Crypto(CryptoError::DecryptionFailed(
+                        "cannot decrypt target_event to check target_attachment_id: no known \
+                         conversation key opens it; decrypt the conversation's events with the \
+                         key cache on first, or leave target_attachment_id unset to react to \
+                         the whole message"
+                            .into(),
+                    ))
+                }
+                other => other,
+            })?;
+        let plaintext = Self::open_raw_event(&raw, key.as_ref())?;
+        let MessageEntryContents::Message(original) =
+            Self::parse_thrift_entry_contents(&plaintext)?
+        else {
+            return Err(SdkError::InvalidInput(
+                "target_event is not a message, so it has no attachments: leave \
+                 target_attachment_id unset"
+                    .into(),
+            ));
+        };
+        find_attachment(
+            original.attachments.as_deref(),
+            attachment_id,
+            "target_attachment_id",
+            "target_event",
+        )?;
+        Ok(Some(attachment_id.to_string()))
     }
 
     /// Resolve a reaction's conversation id and target sequence id from the
@@ -702,8 +810,26 @@ impl ChatCore {
             }
             None => None,
         };
+        let reply_attachment_id = params
+            .reply_to_attachment_id
+            .clone()
+            .filter(|v| !v.is_empty());
+        if reply_attachment_id.is_some() && params.reply_to_attachments.is_some() {
+            return Err(SdkError::InvalidInput(
+                "reply_to_attachment_id and reply_to_attachments cannot both be set: the SDK \
+                 quotes the chosen attachment itself, so leave reply_to_attachments unset"
+                    .into(),
+            ));
+        }
 
         let Some(raw_b64) = params.reply_to_event.as_deref().filter(|v| !v.is_empty()) else {
+            if reply_attachment_id.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "reply_to_attachment_id needs reply_to_event: pass the raw event being \
+                     replied to so the SDK can find the attachment and quote it"
+                        .into(),
+                ));
+            }
             let sequence_id = explicit_sequence_id.ok_or_else(|| {
                 SdkError::InvalidInput(
                     "reply target is not set: pass reply_to_event or reply_to_sequence_id".into(),
@@ -751,7 +877,8 @@ impl ChatCore {
         // overrides cover every derived field.
         let need_original = params.reply_to_text.is_none()
             || thrift_reply_entities.is_none()
-            || thrift_reply_attachments.is_none();
+            || thrift_reply_attachments.is_none()
+            || reply_attachment_id.is_some();
         // When the original was edited, the preview quotes what the message
         // says now, so text and entities derive from the edit's contents;
         // attachments stay with the original (edits do not carry them).
@@ -834,8 +961,20 @@ impl ChatCore {
                 .and_then(|m| m.entities.as_ref())
                 .map(|e| e.iter().map(|b| (**b).clone()).collect()),
         });
-        let attachments = thrift_reply_attachments
-            .or_else(|| original.as_ref().and_then(|m| m.attachments.clone()));
+        // A reply to one attachment quotes only that attachment.
+        let attachments = match reply_attachment_id.as_deref() {
+            Some(id) => Some(vec![Box::new(
+                find_attachment(
+                    original.as_ref().and_then(|m| m.attachments.as_deref()),
+                    id,
+                    "reply_to_attachment_id",
+                    "reply_to_event",
+                )?
+                .clone(),
+            )]),
+            None => thrift_reply_attachments
+                .or_else(|| original.as_ref().and_then(|m| m.attachments.clone())),
+        };
 
         let embedded_signers = std::iter::once(&raw)
             .chain(edit_event.as_ref())
@@ -863,7 +1002,7 @@ impl ChatCore {
             edit_event,
             None::<Vec<MessageEvent>>,
             None,
-            None,
+            reply_attachment_id,
             raw_event_message_key,
             raw_event_edit_message_key,
         );
@@ -1028,8 +1167,63 @@ impl ChatCore {
                 }
             }
         }
+        // A reply to one attachment must name one the original carries.
+        if let Some(claimed_id) = preview.replying_to_attachment_id.as_deref() {
+            if !original
+                .attachments
+                .iter()
+                .flatten()
+                .any(|a| thrift_attachment_id(a) == Some(claimed_id))
+            {
+                return ReplyPreviewValidation::Invalid;
+            }
+        }
         ReplyPreviewValidation::Valid
     }
+}
+
+/// An attachment's `attachment_id`; the kinds without one return `None`.
+fn thrift_attachment_id(attachment: &ThriftMessageAttachment) -> Option<&str> {
+    match attachment {
+        ThriftMessageAttachment::Media(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Post(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Url(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::UnifiedCard(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Jetfuel(a) => a.attachment_id.as_deref(),
+        ThriftMessageAttachment::Money(_)
+        | ThriftMessageAttachment::PaymentReceipt(_)
+        | ThriftMessageAttachment::BotMessage(_) => None,
+    }
+}
+
+/// The attachment of `attachments` whose `attachment_id` is `id` (named by
+/// `field`, looked up in `source`); the error lists the ids there are, so
+/// the caller can pick one.
+fn find_attachment<'a>(
+    attachments: Option<&'a [Box<ThriftMessageAttachment>]>,
+    id: &str,
+    field: &str,
+    source: &str,
+) -> Result<&'a ThriftMessageAttachment, SdkError> {
+    let attachments = attachments.unwrap_or_default();
+    if let Some(found) = attachments
+        .iter()
+        .find(|a| thrift_attachment_id(a) == Some(id))
+    {
+        return Ok(found);
+    }
+    let known: Vec<&str> = attachments
+        .iter()
+        .filter_map(|a| thrift_attachment_id(a))
+        .collect();
+    Err(SdkError::InvalidInput(if known.is_empty() {
+        format!("{field} '{id}' not found: {source} has no attachments with an attachment_id")
+    } else {
+        format!(
+            "{field} '{id}' not found in {source}: pass one of {}",
+            known.join(", ")
+        )
+    }))
 }
 
 /// The message id a reply or edit names: the one its `event_field` event

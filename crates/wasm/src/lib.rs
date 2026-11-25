@@ -847,6 +847,7 @@ impl Chat {
         core_params.attachments = p.attachments;
         core_params.reply_to_entities = p.reply_to_entities.map(entity_tuples_to_descs);
         core_params.reply_to_attachments = p.reply_to_attachments;
+        core_params.reply_to_attachment_id = p.reply_to_attachment_id;
         core_params.quick_reply = p.quick_reply.map(Into::into);
         core_params.should_notify = p.should_notify;
         core_params.ttl_msec = p.ttl_msec;
@@ -1815,6 +1816,7 @@ struct JsEncryptReplyParams {
     attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
     reply_to_entities: Option<Vec<(i32, i32, String)>>,
     reply_to_attachments: Option<Vec<chat_xdk_core::AttachmentDescriptor>>,
+    reply_to_attachment_id: Option<String>,
     quick_reply: Option<chat_xdk_core::js::JsQuickReply>,
     should_notify: Option<bool>,
     #[serde(default, deserialize_with = "optional_msec")]
@@ -1832,6 +1834,7 @@ struct JsEncryptReactionParams {
     signing_key_version: Option<String>,
     conversation_key: Option<Vec<u8>>,
     conversation_key_version: Option<String>,
+    target_attachment_id: Option<String>,
 }
 
 impl JsEncryptReactionParams {
@@ -1846,6 +1849,7 @@ impl JsEncryptReactionParams {
         params.signing_key_version = self.signing_key_version;
         params.conversation_key = self.conversation_key;
         params.conversation_key_version = self.conversation_key_version;
+        params.target_attachment_id = self.target_attachment_id;
         params
     }
 }

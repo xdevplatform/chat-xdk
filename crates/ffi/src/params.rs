@@ -71,6 +71,8 @@ pub(crate) struct FfiEncryptReplyParams {
     pub(crate) quick_reply: Option<serde_json::Value>,
     pub(crate) reply_to_entities: Option<Vec<(i32, i32, String)>>,
     pub(crate) reply_to_attachments: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) reply_to_attachment_id: Option<String>,
     pub(crate) should_notify: Option<bool>,
     pub(crate) ttl_msec: Option<i64>,
 }
@@ -92,6 +94,8 @@ pub(crate) struct FfiEncryptReactionParams {
     pub(crate) conversation_key: Option<String>,
     #[serde(default)]
     pub(crate) conversation_key_version: Option<String>,
+    #[serde(default)]
+    pub(crate) target_attachment_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
