@@ -22,12 +22,13 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chat_xdk_core::crypto::keys::XChatConversationKey;
 use chat_xdk_core::error::SdkError;
 use chat_xdk_core::{
-    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, DecryptEventParams,
-    DecryptEventsParams, DecryptEventsResult, EncryptMessageParams, EncryptReactionParams,
-    EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams, FileEncryptorParams,
-    GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams, GroupTitleChangeParams,
-    PreparedConversationChange, PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord,
-    PublicKeyRegistrationPayload, PublicKeys, QuickReply, ResolvePublicKeys,
+    AttachmentDescriptor, ChatCore as SdkCore, ConversationKeyChangeParams, ConversationMuteParams,
+    DecryptEventParams, DecryptEventsParams, DecryptEventsResult, EncryptMessageParams,
+    EncryptReactionParams, EncryptReplyParams, EntityDescriptor, Event, FileDecryptorParams,
+    FileEncryptorParams, GroupCreateParams, GroupMembersChangeParams, GroupMembersRemoveParams,
+    GroupTitleChangeParams, PreparedAction, PreparedConversationChange,
+    PreparedGroupMetadataChange, PublicKeyInput, PublicKeyRecord, PublicKeyRegistrationPayload,
+    PublicKeys, QuickReply, ResolvePublicKeys,
 };
 use chat_xdk_core::{ImportKeysParams, SetIdentityParams};
 use serde_json::{json, Value};
@@ -536,6 +537,23 @@ impl ChatCore {
         conversation_key: &XChatConversationKey,
     ) -> Result<String, SdkError> {
         self.inner.decrypt(ciphertext_b64, conversation_key)
+    }
+
+    // -- Conversation mute --------------------------------------------------
+
+    /// Sign muting (`muted` true) or unmuting (false) a conversation, group
+    /// or one-to-one, for this bot alone. The event is signed in the bot's
+    /// own `{user_id}:{user_id}` conversation and names `conversation_id` in
+    /// canonical colon form; send `action_signatures` with a mute or unmute
+    /// request that names the conversation in that same form. Signed with
+    /// the session identity.
+    pub fn prepare_conversation_mute(
+        &self,
+        conversation_id: &str,
+        muted: bool,
+    ) -> Result<PreparedAction, SdkError> {
+        self.inner
+            .prepare_conversation_mute(&ConversationMuteParams::new(conversation_id, muted))
     }
 }
 

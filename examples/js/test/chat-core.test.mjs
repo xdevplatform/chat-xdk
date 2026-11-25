@@ -349,6 +349,19 @@ test("prepareGroupCreateAsync yields the two required signatures", async () => {
   assert.equal(core.decrypt(prep.encryptedTitle, prep.conversationKey), "hello from the js example");
 });
 
+test("prepareConversationMute signs a mute and an unmute", async () => {
+  const core = await loadedCore();
+  for (const muted of [true, false]) {
+    const prepared = core.prepareConversationMute({ conversationId: "g123", muted });
+    assert.equal(prepared.actionSignatures.length, 1, `muted=${muted}`);
+    const [sig] = prepared.actionSignatures;
+    assert.ok(sig.messageId, `muted=${muted}`);
+    assert.ok(sig.encodedMessageEventDetail, `muted=${muted}`);
+    assert.ok(sig.messageEventSignature.signature, `muted=${muted}`);
+    assert.equal(sig.messageEventSignature.signingPublicKey, core.publicKeys().signing);
+  }
+});
+
 test("encryptReaction targeting a raw event produces a sendable payload", async () => {
   const core = await loadedCore();
   const body = core.encryptReaction({

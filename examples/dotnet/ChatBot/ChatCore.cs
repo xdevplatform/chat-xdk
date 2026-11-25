@@ -403,6 +403,19 @@ public sealed class ChatCore : IDisposable
     /// <summary>Decrypt a group title or description the X API returns.</summary>
     public string Decrypt(string ciphertextB64, byte[] conversationKey) => _chat.Decrypt(ciphertextB64, conversationKey);
 
+    // -- Conversation mute ----------------------------------------------------
+
+    /// <summary>
+    /// Sign muting (<paramref name="muted"/> true) or unmuting (false) a
+    /// conversation, group or one-to-one, for this bot alone. The event is
+    /// signed in the bot's own <c>{userId}:{userId}</c> conversation and names
+    /// <paramref name="conversationId"/> in canonical colon form; send
+    /// <c>ActionSignatures</c> with a mute or unmute request that names the
+    /// conversation in that same form. Signed with the session identity.
+    /// </summary>
+    public PreparedAction PrepareConversationMute(string conversationId, bool muted)
+        => _chat.PrepareConversationMute(new ConversationMuteParams(conversationId, muted));
+
     public void Dispose() => _chat.Dispose();
 }
 

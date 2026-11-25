@@ -11,6 +11,7 @@ import com.x.chatxdk.Types.DecryptEventsResult;
 import com.x.chatxdk.Types.DecryptedEvent;
 import com.x.chatxdk.Types.EntityDescriptor;
 import com.x.chatxdk.Types.MessageEventSignature;
+import com.x.chatxdk.Types.PreparedAction;
 import com.x.chatxdk.Types.PreparedConversationChange;
 import com.x.chatxdk.Types.PreparedGroupMetadataChange;
 import com.x.chatxdk.Types.PublicKeyInput;
@@ -432,6 +433,23 @@ class ChatCoreTest {
             // The title goes out encrypted under the new key: the group_name the
             // create request sends.
             assertEquals(title, core.decrypt(prep.encryptedTitle, prep.conversationKey));
+        }
+    }
+
+    @Test
+    void prepareConversationMuteSignsMuteAndUnmute() throws Exception {
+        JsonNode v = vectors();
+        try (ChatCore core = loadedCore(v)) {
+            core.setIdentity("1000");
+            for (boolean muted : new boolean[] {true, false}) {
+                PreparedAction prepared = core.prepareConversationMute("g123", muted);
+                assertEquals(1, prepared.actionSignatures.size(), "muted=" + muted);
+                ActionSignature sig = prepared.actionSignatures.get(0);
+                assertFalse(sig.messageId.isEmpty(), "muted=" + muted);
+                assertFalse(sig.encodedMessageEventDetail.isEmpty(), "muted=" + muted);
+                assertFalse(sig.messageEventSignature.signature.isEmpty(), "muted=" + muted);
+                assertEquals(core.publicKeys().signing, sig.messageEventSignature.signingPublicKey);
+            }
         }
     }
 

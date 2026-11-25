@@ -316,6 +316,17 @@ export class ChatCore {
     return this.#chat.prepareMessageDelete({ conversationId, sequenceIds, deleteForAll });
   }
 
+  /**
+   * Sign muting (`muted` true) or unmuting (false) a conversation, group or
+   * one-to-one, for this bot alone. The event is signed in the bot's own
+   * `{userId}:{userId}` conversation and names `conversationId` in canonical
+   * colon form; send the returned `PreparedAction`'s `actionSignatures` with
+   * a mute or unmute request that names the conversation in that same form.
+   */
+  prepareConversationMute({ conversationId, muted }) {
+    return this.#chat.prepareConversationMute({ conversationId, muted });
+  }
+
   // -- Group management ------------------------------------------------------
 
   /**
