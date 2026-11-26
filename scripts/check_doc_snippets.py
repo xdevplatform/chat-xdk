@@ -182,12 +182,10 @@ def check_rust(paths):
     crate = OUT / "rust"
     (crate / "src").mkdir(parents=True, exist_ok=True)
     (crate / "src" / "lib.rs").write_text(RUST_PRELUDE + "".join(fns))
-    thrift = re.search(r"^thrift = .*$", (ROOT / "Cargo.toml").read_text(), re.M).group(0)
     (crate / "Cargo.toml").write_text(
         '[package]\nname = "doc-snippets"\nversion = "0.0.0"\nedition = "2021"\npublish = false\n\n'
         "[workspace]\n\n[dependencies]\n"
-        f'chat-xdk-core = {{ path = "{ROOT / "crates" / "core"}" }}\nserde_json = "1"\n\n'
-        f"[patch.crates-io]\n{thrift}\n"
+        f'chat-xdk-core = {{ path = "{ROOT / "crates" / "core"}" }}\nserde_json = "1"\n'
     )
     lock = crate / "Cargo.lock"
     if not lock.exists():
