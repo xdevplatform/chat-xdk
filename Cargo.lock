@@ -1321,12 +1321,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "integer-encoding"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
-
-[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2572,15 +2566,16 @@ dependencies = [
 
 [[package]]
 name = "thrift"
-version = "0.24.0"
-source = "git+https://github.com/apache/thrift.git?rev=deb36fa409849de45973b04ffc3ce49d277ca90a#deb36fa409849de45973b04ffc3ce49d277ca90a"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f8cd99ff3e9130b04b10cd955d18d09aed0fb2f2fc2b4555ef49169fc519efe"
 dependencies = [
  "byteorder",
- "integer-encoding",
  "log",
  "ordered-float",
  "threadpool",
  "uuid",
+ "varint-rs",
 ]
 
 [[package]]
@@ -2846,6 +2841,12 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "varint-rs"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa6c38708f6257f1ec2ca7e5a11f9bbf58a27d7060078b6b333624968183d96"
 
 [[package]]
 name = "version_check"
