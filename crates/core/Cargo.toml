@@ -30,7 +30,7 @@ serde_json.workspace = true
 base64.workspace = true
 
 # Thrift runtime for generated types
-thrift = "0.24"
+thrift = "0.25"
 uuid = "1"
 
 # Error handling

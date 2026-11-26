@@ -266,11 +266,15 @@ Versions are from the repository `Cargo.lock` at generation time.
 
 ### Apache-2.0
 
-- `thrift@0.24.0`
+- `thrift@0.25.0`
 
 ### BSD-3-Clause
 
 - `subtle@2.6.1`
+
+### 0BSD
+
+- `varint-rs@2.2.1`
 
 ### (MIT OR Apache-2.0) AND Unicode-3.0
 
@@ -279,7 +283,6 @@ Versions are from the repository `Cargo.lock` at generation time.
 ### MIT
 
 - `generic-array@0.14.7`
-- `integer-encoding@3.0.4`
 - `ordered-float@3.9.2`
 - `zmij@1.0.21`
 
