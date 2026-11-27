@@ -112,35 +112,28 @@ lint:
 
 # Generate types from thrift schemas.
 #
-# Uses the thrift compiler built from the same apache/thrift checkout that
-# Cargo already cloned for the runtime library ([patch.crates-io] in Cargo.toml).
-# No separate clone required — Cargo's git checkout is reused.
+# Uses the thrift compiler built from the apache/thrift release tag that
+# matches the `thrift` runtime crate in crates/core/Cargo.toml. Keep
+# THRIFT_VERSION in step with that dependency.
 #
-# The built compiler is cached in .thrift-compiler/ and reused on
+# The source and built compiler are cached in .thrift-compiler/ and reused on
 # subsequent runs.  Delete that directory to force a rebuild.
 #
-# Prerequisites: cmake, bison >= 3 (brew install bison on macOS)
+# Prerequisites: git, cmake, bison >= 3 (brew install bison on macOS)
 
+THRIFT_VERSION := 0.25.0
 THRIFT_COMPILER_CACHE := $(CURDIR)/.thrift-compiler/thrift
-
-# Locate Cargo's git checkout of the patched thrift fork.
-# The manifest is at <checkout>/lib/rs/Cargo.toml; we want the repo root.
-THRIFT_CARGO_SRC := $(shell cargo metadata --format-version 1 2>/dev/null | \
-	python3 -c "import sys,json; \
-	pkgs=[p for p in json.load(sys.stdin)['packages'] \
-	      if p['name']=='thrift' and (p.get('source') or '').startswith('git+')]; \
-	print(pkgs[0]['manifest_path'].removesuffix('/lib/rs/Cargo.toml') if pkgs else '')" 2>/dev/null)
+THRIFT_SRC := $(CURDIR)/.thrift-compiler/src
 
 $(THRIFT_COMPILER_CACHE):
-	@[ -n "$(THRIFT_CARGO_SRC)" ] || { \
-		echo "Error: could not locate thrift git source via cargo metadata."; \
-		echo "Run 'cargo fetch' first."; exit 1; }
-	@echo "Building thrift compiler from Cargo source: $(THRIFT_CARGO_SRC)"
+	@[ -d "$(THRIFT_SRC)" ] || git clone --quiet --depth 1 --branch v$(THRIFT_VERSION) \
+		https://github.com/apache/thrift.git $(THRIFT_SRC)
+	@echo "Building thrift compiler $(THRIFT_VERSION) from $(THRIFT_SRC)"
 	@mkdir -p $(dir $@)
 	@BISON=$$(command -v bison 2>/dev/null); \
 	 BISON_OPT=$$(brew --prefix bison 2>/dev/null)/bin/bison; \
 	 [ -x "$$BISON_OPT" ] && BISON=$$BISON_OPT; \
-	 cmake -S $(THRIFT_CARGO_SRC)/compiler/cpp \
+	 cmake -S $(THRIFT_SRC)/compiler/cpp \
 	       -B $(CURDIR)/.thrift-compiler/cmake \
 	       -DCMAKE_BUILD_TYPE=Release \
 	       -DBUILD_TESTING=OFF \

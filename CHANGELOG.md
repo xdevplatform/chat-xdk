@@ -6,6 +6,15 @@
 
 - .NET: build and bundle the `linux-musl-x64` native library in the NuGet package, enabling deployment on Alpine Linux and other musl-based .NET runtimes (#21).
 
+### Changed
+
+- `chat-xdk-core` depends on `thrift` 0.25 from crates.io instead of a git pin
+  of an unreleased apache/thrift commit, so it resolves alongside other crates
+  that use the released `thrift`. thrift 0.25 contains every fix the pin
+  carried; its new dependency `varint-rs` is 0BSD, which `deny.toml` now
+  allows. `make codegen` builds the compiler from the apache/thrift `v0.25.0`
+  tag.
+
 ## [0.7.7] - 2026-11-24
 
 ### Added
