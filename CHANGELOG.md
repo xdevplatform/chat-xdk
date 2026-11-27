@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- .NET: build and bundle the `linux-musl-x64` native library in the NuGet package, enabling deployment on Alpine Linux and other musl-based .NET runtimes (#21).
+
 ### Changed
 
 - `chat-xdk-core` depends on `thrift` 0.25 from crates.io instead of a git pin
